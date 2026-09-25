@@ -22,6 +22,7 @@ from .core import InferenceConfig
 from .curation import write_selection_artifacts
 from .inference import write_predictions_csv
 from .models import load_detector
+from .reporting import write_report
 from .runs import run_resumable_inference
 
 
@@ -142,6 +143,12 @@ if typer is not None:
             predictions, calibration, features=features
         )
         artifacts = write_selection_artifacts(selected, calibration, config, output_dir)
+        typer.echo(json.dumps({name: str(path) for name, path in artifacts.items()}, indent=2))
+
+    @app.command()
+    def report(predictions_csv: Path, output_dir: Path):
+        """Write JSON and Markdown summaries for a prediction CSV."""
+        artifacts = write_report(predictions_csv, output_dir)
         typer.echo(json.dumps({name: str(path) for name, path in artifacts.items()}, indent=2))
 
     def _records_from_csv(path: Path) -> list[DetectionRecord]:

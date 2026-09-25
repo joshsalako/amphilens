@@ -137,3 +137,19 @@ def test_active_learn_command_writes_ppal_queue(tmp_path: Path):
     )
     assert result.exit_code == 0, result.stdout
     assert (tmp_path / "cycle" / "selection_queue.csv").is_file()
+
+
+def test_report_command_writes_summary_and_markdown(tmp_path: Path):
+    predictions = tmp_path / "predictions.csv"
+    write_predictions_csv(
+        [
+            DetectionRecord(
+                image_path="/pool/a.jpg", image_id="a.jpg", class_id=0, class_name="toad",
+                confidence=0.8, bbox_xyxy=[1, 1, 5, 5], image_width=10, image_height=10,
+                model_id="fixture", run_id="run-1",
+            )
+        ], predictions,
+    )
+    result = CliRunner().invoke(app, ["report", str(predictions), str(tmp_path / "report")])
+    assert result.exit_code == 0, result.stdout
+    assert (tmp_path / "report" / "report.md").is_file()

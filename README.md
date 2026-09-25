@@ -90,6 +90,12 @@ amphilens cvat export ./my-project/artifacts/predict-yolo/predictions.csv ./my-p
 amphilens cvat import ./my-project/annotations/cycle-0 ./my-project/artifacts/cycle-0-annotations.csv
 ```
 
+Create a human-readable report from predictions:
+
+```bash
+amphilens report ./my-project/artifacts/predict-yolo/predictions.csv ./my-project/artifacts/predict-yolo/report
+```
+
 The project directory contains a manifest, run records, annotations, artifacts, and checkpoints. Original image roots remain outside the project and are never copied unless an annotation exchange explicitly requires a review subset.
 
 ## Python API

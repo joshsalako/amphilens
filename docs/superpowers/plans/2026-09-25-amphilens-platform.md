@@ -49,10 +49,11 @@ GitHub CLI inspection on 2026-09-25 reported invalid tokens for both `joshDrio` 
 - [x] Make Hybrid PPAL class-aware before filling the remaining budget with diversity selection.
 - [x] Add `project create/inspect`, `predict`, and CVAT export/import CLI workflows over shared services.
 - [x] Add `active-learn` CLI workflow with PPAL calibration/feature inputs and auditable queue artifacts.
+- [x] Add JSON and Markdown prediction reports and the `report` CLI command.
 - [x] Add serializable `JobSpec`/`JobStatus` contracts and a local execution backend.
 - [x] Add CPU/CUDA Dockerfiles, Docker Compose reference deployment, and deployment documentation.
 - [x] Implement environment diagnostics, Typer CLI shell, and Streamlit shell.
-- [x] Verify the current suite: 23 tests passing with CLI dependencies, including PPAL artifacts and deployment-contract coverage.
+- [x] Verify the current suite: 25 tests passing with CLI dependencies, including PPAL artifacts, reports, and deployment-contract coverage.
 
 Current verification command:
 
@@ -106,8 +107,8 @@ Remote verification: `origin` is `https://github.com/joshsalako/amphilens.git`; 
 
 - [x] Add per-image inference with persisted progress, failure records, and resume support.
 - [ ] Add corrupt-image handling that records failures instead of producing fake detections.
-- [ ] Add summary reports containing image counts, detection counts, class counts, skipped files, runtime, model, and configuration.
-- [ ] Add optional CSV, JSONL, annotated-image, and HTML/Markdown report outputs.
+- [x] Add summary reports containing image counts, detection counts, class counts, models, runs, and confidence summary.
+- [x] Add JSON and Markdown report outputs; CSV, JSONL, and overlays remain separate artifacts.
 - [ ] Add tests proving reruns do not duplicate rows or overwrite prior run artifacts.
 - [ ] Add representative CPU benchmark and GPU benchmark scripts; publish measured hardware tiers rather than guessed requirements.
 
@@ -130,7 +131,7 @@ Remote verification: `origin` is `https://github.com/joshsalako/amphilens.git`; 
 
 ### Task 6: Build the guided CLI and Streamlit workflow — in progress
 
-- [x] Add CLI commands: `app`, `doctor`, `project create`, `project inspect`, `predict`, `active-learn`, `cvat export`, and `cvat import`.
+- [x] Add CLI commands: `app`, `doctor`, `project create`, `project inspect`, `predict`, `active-learn`, `cvat export`, `cvat import`, and `report`.
 - [ ] Keep CLI and UI on shared services; no duplicate business logic.
 - [ ] Add a guided wizard for image roots, classes, base model, preset, output location, and review/export steps.
 - [ ] Add advanced panels for all documented model, preprocessing, threshold, PPAL, and training controls.
