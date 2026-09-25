@@ -67,7 +67,7 @@ Checkpoint history currently pushed to `origin/main`:
 - [x] Add serializable `JobSpec`/`JobStatus` contracts and a local execution backend.
 - [x] Add CPU/CUDA Dockerfiles, Docker Compose reference deployment, and deployment documentation.
 - [x] Implement environment diagnostics, Typer CLI shell, and Streamlit shell.
-- [x] Verify the current suite: 30 tests passing with CLI dependencies, including PPAL artifacts, reports, UI helpers, deployment-contract coverage, and manifest/artifact hardening.
+- [x] Verify the current suite: 33 tests passing with CLI dependencies, including PPAL artifacts, reports, UI helpers, deployment-contract coverage, manifest/artifact hardening, and CVAT integrity checks.
 - [x] Add Apache-2.0 license, changelog, security/privacy note, code of conduct, and GitHub Actions CI for supported Python versions.
 
 Current verification command (the local equivalent of the CI dependency-light job):
@@ -138,9 +138,9 @@ Remote verification: `origin` is `https://github.com/joshsalako/amphilens.git`; 
 
 ### Task 5: Complete CVAT workflow — in progress
 
-- [ ] Add task-level manifest validation before export/import.
-- [ ] Add stable image IDs independent of filenames and preserve relative plus absolute source references where possible.
-- [ ] Add import validation for unknown classes, duplicate annotation IDs, invalid boxes, image dimension mismatches, and missing images.
+- [x] Add task-level manifest validation before export/import.
+- [x] Add stable image IDs independent of filenames and preserve relative plus absolute source references where possible.
+- [x] Add import validation for unknown classes, duplicate annotation IDs, invalid boxes, image dimension mismatches, and missing images.
 - [ ] Add optional CVAT REST integration only after file-based exchange is stable; credentials must never enter project manifests.
 - [ ] Add a user guide with the exact CVAT export, annotation, export, and import steps.
 

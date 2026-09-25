@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import shutil
 from collections.abc import Iterable
@@ -25,9 +26,135 @@ def _mapped_name(source: Path, used: set[str]) -> str:
     return f"{Path(candidate).stem}_{digest}{Path(candidate).suffix}"
 
 
+def _validate_classes(classes: Iterable[str]) -> list[str]:
+    names = [str(value).strip() for value in classes]
+    if not names or any(not name for name in names):
+        raise ValidationError("CVAT classes must contain at least one non-empty name")
+    if len(names) != len(set(names)):
+        raise ValidationError("CVAT classes must be unique")
+    return names
+
+
+def _read_json(path: Path, label: str) -> dict:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ValidationError(f"CVAT {label} is missing: {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValidationError(f"CVAT {label} is not valid JSON: {path}") from exc
+
+
+def _image_size(path: Path) -> tuple[int, int]:
+    try:
+        from PIL import Image
+    except ImportError as exc:
+        raise ValidationError(
+            "CVAT image validation requires Pillow; install 'amphilens[inference]'"
+        ) from exc
+    try:
+        with Image.open(path) as image:
+            return image.size
+    except Exception as exc:  # noqa: BLE001 - normalize decoder-specific errors
+        raise ValidationError(f"CVAT image cannot be read: {path}") from exc
+
+
+def _task_filename(value: object) -> str:
+    if not isinstance(value, str) or not value or Path(value).name != value:
+        raise ValidationError(f"Invalid CVAT image filename: {value!r}")
+    return value
+
+
+def _positive_int(value: object, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValidationError(f"CVAT {label} must be a positive integer")
+    return value
+
+
+def _validate_cvat_payload(
+    directory: Path, manifest: dict, coco: dict
+) -> tuple[dict[int, dict], dict[int, str]]:
+    classes = _validate_classes(manifest.get("classes", []))
+    image_map: dict[int, dict] = {}
+    for image in manifest.get("images", []):
+        image_id = _positive_int(image.get("image_id"), "manifest image id")
+        if image_id in image_map:
+            raise ValidationError(f"CVAT manifest contains duplicate image id: {image_id}")
+        filename = _task_filename(image.get("file_name"))
+        width = _positive_int(image.get("width"), f"width for image {image_id}")
+        height = _positive_int(image.get("height"), f"height for image {image_id}")
+        source_path = image.get("source_path")
+        if not isinstance(source_path, str) or not source_path:
+            raise ValidationError(f"CVAT source mapping is missing for image {image_id}")
+        packaged = directory / "images" / filename
+        if not packaged.is_file():
+            raise ValidationError(f"CVAT image is missing: {packaged}")
+        if _image_size(packaged) != (width, height):
+            raise ValidationError(f"CVAT image dimensions do not match manifest: {filename}")
+        image_map[image_id] = image
+
+    coco_images: dict[int, dict] = {}
+    for image in coco.get("images", []):
+        image_id = _positive_int(image.get("id"), "COCO image id")
+        if image_id in coco_images:
+            raise ValidationError(f"CVAT COCO contains duplicate image id: {image_id}")
+        if image_id not in image_map:
+            raise ValidationError(f"CVAT COCO references unknown image id: {image_id}")
+        if _task_filename(image.get("file_name")) != image_map[image_id]["file_name"]:
+            raise ValidationError(f"CVAT image filename mappings do not match: {image_id}")
+        if (
+            image.get("width") != image_map[image_id]["width"]
+            or image.get("height") != image_map[image_id]["height"]
+        ):
+            raise ValidationError(f"CVAT image dimensions do not match manifest: {image_id}")
+        coco_images[image_id] = image
+    if set(coco_images) != set(image_map):
+        raise ValidationError("CVAT manifest and COCO image sets do not match")
+
+    category_map: dict[int, str] = {}
+    for category in coco.get("categories", []):
+        category_id = _positive_int(category.get("id"), "category id")
+        name = category.get("name")
+        if category_id in category_map:
+            raise ValidationError(f"CVAT contains duplicate category id: {category_id}")
+        if not isinstance(name, str) or name not in classes:
+            raise ValidationError(f"Unknown CVAT class: {name!r}")
+        if name in category_map.values():
+            raise ValidationError(f"CVAT contains duplicate class name: {name}")
+        category_map[category_id] = name
+    expected_categories = {index + 1: name for index, name in enumerate(classes)}
+    if category_map != expected_categories:
+        raise ValidationError("CVAT categories do not match the manifest classes")
+
+    annotation_ids: set[int] = set()
+    for annotation in coco.get("annotations", []):
+        annotation_id = _positive_int(annotation.get("id"), "annotation id")
+        if annotation_id in annotation_ids:
+            raise ValidationError(f"CVAT contains duplicate annotation id: {annotation_id}")
+        annotation_ids.add(annotation_id)
+        image_id = annotation.get("image_id")
+        if image_id not in image_map:
+            raise ValidationError(f"CVAT annotation references unknown image id: {image_id}")
+        category_id = annotation.get("category_id")
+        if category_id not in category_map:
+            raise ValidationError(f"CVAT annotation references unknown category id: {category_id}")
+        bbox = annotation.get("bbox")
+        if not isinstance(bbox, list) or len(bbox) != 4:
+            raise ValidationError(f"CVAT annotation {annotation_id} has an invalid bbox")
+        x, y, width, height = bbox
+        if any(not isinstance(value, (int, float)) or not math.isfinite(value) for value in bbox):
+            raise ValidationError(f"CVAT annotation {annotation_id} has an invalid bbox")
+        image = image_map[image_id]
+        if x < 0 or y < 0 or width <= 0 or height <= 0:
+            raise ValidationError(f"CVAT annotation {annotation_id} has an invalid bbox")
+        if x + width > image["width"] or y + height > image["height"]:
+            raise ValidationError(f"CVAT annotation {annotation_id} is outside image bounds")
+    return image_map, category_map
+
+
 def export_cvat(
     records: Iterable[DetectionRecord], output_dir: str | Path, *, classes: list[str]
 ) -> Path:
+    classes = _validate_classes(classes)
     rows = sorted(
         list(records),
         key=lambda record: (
@@ -37,12 +164,15 @@ def export_cvat(
         ),
     )
     destination = Path(output_dir).expanduser().resolve()
+    source_paths = {Path(record.image_path).expanduser().resolve() for record in rows}
+    if any(destination == path or destination.is_relative_to(path) for path in source_paths):
+        raise SourceCollisionError("CVAT export directory overlaps a source image")
+    for record in rows:
+        if record.class_name not in classes:
+            raise ValidationError(f"Record class {record.class_name!r} is not present in classes")
     destination.mkdir(parents=True, exist_ok=True)
     images_dir = destination / "images"
     images_dir.mkdir(exist_ok=True)
-    source_paths = {Path(record.image_path).expanduser().resolve() for record in rows}
-    if any(path == destination or destination.is_relative_to(path) for path in source_paths):
-        raise SourceCollisionError("CVAT export directory overlaps a source image")
 
     image_ids: dict[str, int] = {}
     image_entries: list[dict] = []
@@ -111,10 +241,9 @@ def export_cvat(
 
 def import_cvat(task_dir: str | Path) -> list[DetectionRecord]:
     directory = Path(task_dir).expanduser().resolve()
-    manifest = json.loads((directory / "manifest.json").read_text())
-    coco = json.loads((directory / "annotations.json").read_text())
-    image_map = {item["image_id"]: item for item in manifest["images"]}
-    category_map = {item["id"]: item["name"] for item in coco["categories"]}
+    manifest = _read_json(directory / "manifest.json", "manifest")
+    coco = _read_json(directory / "annotations.json", "annotations")
+    image_map, category_map = _validate_cvat_payload(directory, manifest, coco)
     records: list[DetectionRecord] = []
     for annotation in coco["annotations"]:
         image = image_map[annotation["image_id"]]
@@ -143,7 +272,7 @@ def export_yolo(
     destination = export_cvat(rows, output_dir, classes=classes)
     labels_dir = destination / "labels"
     labels_dir.mkdir(exist_ok=True)
-    manifest = json.loads((destination / "manifest.json").read_text())
+    manifest = _read_json(destination / "manifest.json", "manifest")
     image_map = {item["source_path"]: item for item in manifest["images"]}
     grouped: dict[str, list[DetectionRecord]] = {}
     for record in rows:

@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 typer = pytest.importorskip("typer")
 from typer.testing import CliRunner
@@ -42,7 +43,7 @@ def test_project_create_and_inspect_commands(tmp_path: Path):
 
 def test_cvat_cli_exports_and_imports_prediction_csv(tmp_path: Path):
     image = tmp_path / "camera.jpg"
-    image.write_bytes(b"fixture")
+    Image.new("RGB", (20, 40), color="black").save(image)
     predictions = tmp_path / "predictions.csv"
     write_predictions_csv(
         [
