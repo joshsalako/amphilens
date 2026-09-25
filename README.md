@@ -22,6 +22,7 @@ This repository contains the first dependency-light foundation:
 - resumable per-image inference artifacts with progress, failure records, stable CSV, and summaries;
 - YOLO, RT-DETR, and Faster R-CNN detector adapters with lazy ML imports;
 - paper-compatible PPAL calibration and Hybrid PPAL selection contracts;
+- PPAL validation-match ingestion and auditable selection queue artifacts;
 - COCO/CVAT and YOLO annotation exchange with deterministic source mappings;
 - a Typer CLI, Streamlit shell, and environment diagnostics.
 
@@ -119,6 +120,13 @@ validation calibration -> PPAL class difficulty -> DCUS uncertainty -> CCMS dive
 The default requires calibration evidence for every selected class. Advanced users may configure budgets, ratios, seeds, priority-class weighting, image size, confidence thresholds, preprocessing, and architecture. Uncalibrated fallback behavior is never silent.
 
 Hybrid PPAL first covers available classes, then fills the remaining annotation budget with uncertainty and feature-based diversity. Selection records retain their curation reason and can be reproduced from the same calibration, features, and seed.
+
+The headless queue command is:
+
+```bash
+amphilens active-learn predictions.csv calibration.json features.json ./cycle-0 \
+  --budget 100 --seed 42
+```
 
 ## Annotation exchange
 

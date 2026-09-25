@@ -1,5 +1,6 @@
 from pathlib import Path
 import csv
+import json
 
 import pytest
 
@@ -107,3 +108,32 @@ def test_predict_command_runs_project_images(monkeypatch, tmp_path: Path):
     )
     assert result.exit_code == 0, result.stdout
     assert (tmp_path / "artifacts" / "predictions.csv").is_file()
+
+
+def test_active_learn_command_writes_ppal_queue(tmp_path: Path):
+    predictions = tmp_path / "predictions.csv"
+    records = []
+    for name, confidence in (("a.jpg", 0.51), ("b.jpg", 0.9)):
+        records.append(
+            DetectionRecord(
+                image_path=f"/pool/{name}", image_id=name, class_id=0, class_name="toad",
+                confidence=confidence, bbox_xyxy=[1, 1, 5, 5], image_width=10, image_height=10,
+                model_id="fixture", run_id="run-1",
+            )
+        )
+    write_predictions_csv(records, predictions)
+    calibration = tmp_path / "calibration.json"
+    calibration.write_text(json.dumps({
+        "classes": ["toad"], "difficulties": {"toad": 0.4},
+        "weights": {"toad": 1.1}, "xi": 0.5, "alpha": 1.0, "beta": 2.0,
+        "source": "validation",
+    }))
+    features = tmp_path / "features.json"
+    features.write_text(json.dumps({"/pool/a.jpg": [1, 0], "/pool/b.jpg": [0, 1]}))
+
+    result = CliRunner().invoke(
+        app,
+        ["active-learn", str(predictions), str(calibration), str(features), str(tmp_path / "cycle"), "--budget", "1"],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert (tmp_path / "cycle" / "selection_queue.csv").is_file()

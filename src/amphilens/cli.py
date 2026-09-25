@@ -16,8 +16,10 @@ except ImportError:  # pragma: no cover - exercised only in minimal installs
 from .core import ProjectManifest, ProjectStore, iter_images
 from .doctor import run_doctor
 from .annotations.cvat import export_cvat, import_cvat
+from .active_learning import HybridPPALConfig, HybridPPALStrategy, PPALCalibration
 from .core import DetectionRecord
 from .core import InferenceConfig
+from .curation import write_selection_artifacts
 from .inference import write_predictions_csv
 from .models import load_detector
 from .runs import run_resumable_inference
@@ -121,6 +123,26 @@ if typer is not None:
             "detection_count": summary.detection_count,
             "predictions_csv": str(summary.predictions_csv),
         }, indent=2))
+
+    @app.command("active-learn")
+    def active_learn(
+        predictions_csv: Path,
+        calibration_json: Path,
+        features_json: Path,
+        output_dir: Path,
+        budget: int = typer.Option(100, "--budget"),
+        seed: int = typer.Option(42, "--seed"),
+    ):
+        """Select a reproducible Hybrid PPAL annotation queue."""
+        predictions = _records_from_csv(predictions_csv)
+        calibration = PPALCalibration(**json.loads(calibration_json.read_text()))
+        features = json.loads(features_json.read_text())
+        config = HybridPPALConfig(budget=budget, seed=seed)
+        selected = HybridPPALStrategy(config).select(
+            predictions, calibration, features=features
+        )
+        artifacts = write_selection_artifacts(selected, calibration, config, output_dir)
+        typer.echo(json.dumps({name: str(path) for name, path in artifacts.items()}, indent=2))
 
     def _records_from_csv(path: Path) -> list[DetectionRecord]:
         records = []

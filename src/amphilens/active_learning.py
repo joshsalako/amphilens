@@ -77,6 +77,30 @@ def calibrate_ppal(
     return PPALCalibration(selected_classes, difficulties, weights, xi, alpha, beta)
 
 
+def calibrate_ppal_from_matches(
+    matches: Iterable[dict],
+    *,
+    classes: Iterable[str],
+    xi: float = 0.5,
+    alpha: float = 1.0,
+    beta: float = 2.0,
+) -> PPALCalibration:
+    """Convert matched validation predictions into the paper's PPAL evidence."""
+    evidence = []
+    for match in matches:
+        evidence.append(
+            {
+                "class_name": match["class_name"],
+                "difficulty": ppal_instance_difficulty(
+                    float(match["confidence"]), float(match["iou"]), xi
+                ),
+            }
+        )
+    return calibrate_ppal(
+        evidence, classes=classes, xi=xi, alpha=alpha, beta=beta
+    )
+
+
 @dataclass(slots=True)
 class HybridPPALConfig:
     budget: int = 100

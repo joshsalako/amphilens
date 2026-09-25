@@ -48,10 +48,11 @@ GitHub CLI inspection on 2026-09-25 reported invalid tokens for both `joshDrio` 
 - [x] Implement resumable per-image inference artifacts, failure records, stable CSV output, and run summaries.
 - [x] Make Hybrid PPAL class-aware before filling the remaining budget with diversity selection.
 - [x] Add `project create/inspect`, `predict`, and CVAT export/import CLI workflows over shared services.
+- [x] Add `active-learn` CLI workflow with PPAL calibration/feature inputs and auditable queue artifacts.
 - [x] Add serializable `JobSpec`/`JobStatus` contracts and a local execution backend.
 - [x] Add CPU/CUDA Dockerfiles, Docker Compose reference deployment, and deployment documentation.
 - [x] Implement environment diagnostics, Typer CLI shell, and Streamlit shell.
-- [x] Verify the current suite: 20 tests passing with CLI dependencies, including execution and deployment-contract coverage.
+- [x] Verify the current suite: 23 tests passing with CLI dependencies, including PPAL artifacts and deployment-contract coverage.
 
 Current verification command:
 
@@ -113,10 +114,10 @@ Remote verification: `origin` is `https://github.com/joshsalako/amphilens.git`; 
 ### Task 4: Make Hybrid PPAL paper-faithful and generic — in progress
 
 - [ ] Compare `ppal_instance_difficulty`, class-weight calculation, DCUS ratios, and CCMS selection against controlled reference values from the paper/research repository.
-- [ ] Add validation-evidence ingestion from labeled predictions and holdout annotations.
+- [x] Add validation-match ingestion from labeled prediction/IoU evidence.
 - [x] Require calibration evidence for every selected class in default mode.
 - [ ] Add advanced controls for `xi`, `alpha`, `beta`, pool multiplier, uncertain/certain/random ratios, target class, priority weight, seed, and diversity feature backend.
-- [ ] Add reproducible selection artifacts containing all candidate scores, selected rows, reason, seed, calibration source, and feature-model metadata.
+- [x] Add reproducible selection queue and calibration artifacts containing selected rows, reasons, seed, and calibration source.
 - [x] Add tests for class coverage, missing calibration, missing features, and budgeted selection.
 
 ### Task 5: Complete CVAT workflow — in progress
@@ -129,7 +130,7 @@ Remote verification: `origin` is `https://github.com/joshsalako/amphilens.git`; 
 
 ### Task 6: Build the guided CLI and Streamlit workflow — in progress
 
-- [x] Add CLI commands: `app`, `doctor`, `project create`, `project inspect`, `predict`, `cvat export`, and `cvat import`.
+- [x] Add CLI commands: `app`, `doctor`, `project create`, `project inspect`, `predict`, `active-learn`, `cvat export`, and `cvat import`.
 - [ ] Keep CLI and UI on shared services; no duplicate business logic.
 - [ ] Add a guided wizard for image roots, classes, base model, preset, output location, and review/export steps.
 - [ ] Add advanced panels for all documented model, preprocessing, threshold, PPAL, and training controls.

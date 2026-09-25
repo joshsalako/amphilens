@@ -5,6 +5,7 @@ from amphilens.active_learning import (
     HybridPPALConfig,
     HybridPPALStrategy,
     calibrate_ppal,
+    calibrate_ppal_from_matches,
 )
 from amphilens.core import DetectionRecord
 
@@ -74,3 +75,13 @@ def test_hybrid_ppal_covers_available_classes_before_filling_budget():
     )
 
     assert {item.class_name for item in selected} == {"toad", "frog"}
+
+
+def test_ppal_calibration_accepts_validation_matches():
+    calibration = calibrate_ppal_from_matches(
+        [{"class_name": "toad", "confidence": 0.8, "iou": 0.5}],
+        classes=["toad"],
+        xi=0.5,
+    )
+
+    assert calibration.difficulties["toad"] == pytest.approx(1 - (0.8 * 0.5) ** 0.5)
