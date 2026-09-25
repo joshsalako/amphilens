@@ -9,6 +9,8 @@ dist/
 build/
 *.egg-info/
 .streamlit/
+.agents/
+.claude/
 .amphilens/
 /models/
 artifacts/
