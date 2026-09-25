@@ -12,6 +12,7 @@ typer = pytest.importorskip("typer")
 from typer.testing import CliRunner
 
 import amphilens.cli as cli_module
+from amphilens.annotations.managed import CVATProjectSummary, CVATTaskSummary
 from amphilens.cli import app
 from amphilens.core import DetectionRecord
 from amphilens.inference import write_predictions_csv
@@ -76,6 +77,72 @@ def test_dataset_import_command_creates_an_immutable_snapshot(tmp_path: Path):
 
     assert result.exit_code == 0, result.stdout
     assert "snapshot_id" in result.stdout
+
+
+def test_cvat_projects_command_lists_project_metadata(monkeypatch):
+    class FakeTransport:
+        def __init__(self, server_url=None, token=None):
+            assert server_url == "https://cvat.example"
+            assert token is None
+
+        def list_projects(self):
+            return [
+                CVATProjectSummary(
+                    "17",
+                    "initial annotations",
+                    ["toad"],
+                    [CVATTaskSummary("23", "task one", 5, "completed")],
+                )
+            ]
+
+    monkeypatch.setattr(cli_module, "CVATSdkTransport", FakeTransport)
+    result = CliRunner().invoke(
+        app,
+        ["cvat", "projects", "--server-url", "https://cvat.example"],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload[0]["project_id"] == "17"
+    assert payload[0]["task_count"] == 1
+    assert payload[0]["tasks"][0]["name"] == "task one"
+
+
+def test_cvat_project_import_command_uses_project_id_and_mapping(monkeypatch, tmp_path: Path):
+    observed = {}
+
+    def fake_import(self, project_id, *, class_mapping=None, server_url=None):
+        observed.update(
+            project_id=project_id,
+            class_mapping=class_mapping,
+            server_url=server_url,
+        )
+        return SimpleNamespace(
+            manifest=SimpleNamespace(to_dict=lambda: {"snapshot_id": "snapshot-abc"})
+        )
+
+    monkeypatch.setattr(cli_module.ProjectStore, "import_cvat_project", fake_import)
+    result = CliRunner().invoke(
+        app,
+        [
+            "dataset",
+            "import-cvat",
+            str(tmp_path / "project"),
+            "--project-id",
+            "17",
+            "--server-url",
+            "https://cvat.example",
+            "--class-mapping",
+            '{"western leopard toad":"toad"}',
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert observed == {
+        "project_id": "17",
+        "class_mapping": {"western leopard toad": "toad"},
+        "server_url": "https://cvat.example",
+    }
 
 
 def test_train_command_is_blocked_until_a_labelled_snapshot_exists(tmp_path: Path):

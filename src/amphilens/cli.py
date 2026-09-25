@@ -112,6 +112,27 @@ if typer is not None:
         snapshot = ProjectStore(project_dir).import_dataset(archive, class_mapping=mapping)
         typer.echo(json.dumps(snapshot.manifest.to_dict(), indent=2))
 
+    @dataset_app.command("import-cvat")
+    def dataset_import_cvat(
+        project_dir: Path,
+        project_id: str = typer.Option(..., "--project-id"),
+        class_mapping: str = typer.Option("{}", "--class-mapping"),
+        server_url: str | None = typer.Option(None, "--server-url"),
+    ):
+        """Import a complete existing CVAT project through the CVAT API."""
+        try:
+            mapping = json.loads(class_mapping)
+        except json.JSONDecodeError as exc:
+            raise ValueError("--class-mapping must be a JSON object") from exc
+        if not isinstance(mapping, dict):
+            raise ValueError("--class-mapping must be a JSON object")
+        snapshot = ProjectStore(project_dir).import_cvat_project(
+            project_id,
+            class_mapping=mapping,
+            server_url=server_url,
+        )
+        typer.echo(json.dumps(snapshot.manifest.to_dict(), indent=2))
+
     @app.command()
     def train(
         project_dir: Path,
@@ -399,6 +420,14 @@ if typer is not None:
         transport = CVATSdkTransport(server_url=server_url, token=os.environ.get("CVAT_TOKEN"))
         return ManagedCVATCycleService(
             ProjectStore(project_dir), transport, server_url=transport.server_url
+        )
+
+    @cvat_app.command("projects")
+    def cvat_projects(server_url: str | None = typer.Option(None, "--server-url")):
+        """List accessible CVAT projects and their task metadata."""
+        transport = CVATSdkTransport(server_url=server_url, token=os.environ.get("CVAT_TOKEN"))
+        typer.echo(
+            json.dumps([project.to_dict() for project in transport.list_projects()], indent=2)
         )
 
     @cvat_app.command("managed-start")

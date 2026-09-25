@@ -21,6 +21,16 @@ from .models import ModelCatalog
 from .preprocessing import PreprocessingConfig
 
 
+def cvat_project_choices(projects):
+    """Build readable, stable Streamlit labels for CVAT project summaries."""
+    choices = {}
+    for project in projects:
+        noun = "task" if project.task_count == 1 else "tasks"
+        label = f"{project.name} (ID {project.project_id}; {project.task_count} {noun})"
+        choices[label] = project
+    return choices
+
+
 def parse_classes(value: str) -> list[str]:
     classes = [item.strip() for item in re.split(r"[,\n]", value) if item.strip()]
     if not classes:
@@ -111,21 +121,69 @@ def _render_create_project(st):
 
 
 def _render_import_dataset(st):
+    from .annotations.initial import CVATProjectImportService
+    from .annotations.managed import CVATSdkTransport
     from .core import ProjectStore
 
     st.header("2. Import your initial annotations")
     st.write(
-        "Export a CVAT project with its images, or provide a YOLO ZIP. "
-        "AmphiLens keeps the original "
-        "archive and creates a new immutable snapshot."
+        "Select an existing CVAT project through its API, or provide a local "
+        "CVAT/COCO/YOLO ZIP. AmphiLens keeps the source and creates an immutable snapshot."
     )
     project_dir = st.text_input("Project folder", value="./amphilens-project", key="import-project")
-    archive = st.text_input("CVAT or YOLO ZIP file")
+    source = st.radio(
+        "Annotation source",
+        ["CVAT project", "Local archive"],
+        horizontal=True,
+        key="initial-dataset-source",
+    )
     mapping = st.text_area("Optional class mapping (JSON)", value="{}")
-    if st.button("Import initial dataset", type="primary"):
+    if source == "Local archive":
+        archive = st.text_input("CVAT, COCO, or YOLO ZIP file")
+        if st.button("Import initial dataset", type="primary"):
+            try:
+                snapshot = ProjectStore(project_dir).import_dataset(
+                    archive, class_mapping=parse_class_mapping(mapping)
+                )
+                st.success(f"Imported {len(snapshot.manifest.images)} reviewed images")
+                st.json(snapshot.manifest.to_dict())
+            except Exception as exc:  # noqa: BLE001 - shown as an actionable UI error
+                st.error(str(exc))
+        return
+
+    server_url = st.text_input(
+        "CVAT server URL", value=os.environ.get("CVAT_URL", "http://localhost:8080")
+    )
+    st.caption("Set CVAT_TOKEN before starting AmphiLens; it is never saved in the project.")
+    if "amphilens-initial-cvat-projects" not in st.session_state:
+        st.session_state["amphilens-initial-cvat-projects"] = []
+    if st.button("Connect to CVAT"):
         try:
-            snapshot = ProjectStore(project_dir).import_dataset(
-                archive, class_mapping=parse_class_mapping(mapping)
+            transport = CVATSdkTransport(server_url=server_url or None)
+            projects = CVATProjectImportService(
+                ProjectStore(project_dir), transport
+            ).list_projects()
+            st.session_state["amphilens-initial-cvat-projects"] = projects
+            st.success(f"Found {len(projects)} CVAT projects")
+        except Exception as exc:  # noqa: BLE001 - shown as an actionable UI error
+            st.error(str(exc))
+
+    projects = st.session_state["amphilens-initial-cvat-projects"]
+    if not projects:
+        st.info("Connect to CVAT to choose the project containing your initial annotations.")
+        return
+    choices = cvat_project_choices(projects)
+    selected = choices[st.selectbox("CVAT project", list(choices))]
+    st.write(f"Labels: {', '.join(selected.labels)}")
+    st.write(f"Tasks: {selected.task_count}")
+    if st.button("Import project", type="primary"):
+        try:
+            transport = CVATSdkTransport(server_url=server_url or None)
+            snapshot = CVATProjectImportService(
+                ProjectStore(project_dir), transport
+            ).import_project(
+                selected.project_id,
+                class_mapping=parse_class_mapping(mapping),
             )
             st.success(f"Imported {len(snapshot.manifest.images)} reviewed images")
             st.json(snapshot.manifest.to_dict())
