@@ -34,7 +34,7 @@ from .preprocessing import PreprocessingConfig
 from .registry import ModelRegistry
 from .reporting import write_report
 from .runs import run_resumable_inference
-from .training import TrainingConfig, train_snapshot_and_register
+from .training import TrainingConfig, load_checkpoint_manifest, train_snapshot_and_register
 
 
 def _require_typer():
@@ -125,17 +125,35 @@ if typer is not None:
         grayscale: bool = typer.Option(True, "--grayscale/--no-grayscale"),
         clahe: bool = typer.Option(False, "--clahe/--no-clahe"),
         device: str = typer.Option("auto", "--device"),
+        resume_from: Path | None = typer.Option(None, "--resume-from"),
     ):
         """Fine-tune a catalog model from an imported immutable dataset snapshot."""
         store = ProjectStore(project_dir)
         project = store.load_manifest()
         selected_snapshot = DatasetSnapshot.load(snapshot) if snapshot else _latest_snapshot(store)
         preset = ModelCatalog().get(model_preset)
-        detector = load_preset_detector(preset, classes=project.classes, checkpoint=checkpoint)
         preprocessing = PreprocessingConfig(
             max_dimension=max_dimension,
             grayscale_enabled=grayscale,
             clahe_enabled=clahe,
+        )
+        parent_manifest = load_checkpoint_manifest(resume_from) if resume_from else None
+        if parent_manifest is not None:
+            parent_checkpoint = Path(parent_manifest.checkpoint_path)
+            if checkpoint is not None and checkpoint.expanduser().resolve() != parent_checkpoint:
+                raise ValueError("--checkpoint and --resume-from must refer to the same checkpoint")
+            checkpoint = parent_checkpoint
+        detector = (
+            load_detector(
+                checkpoint,
+                architecture=preset.architecture,
+                classes=project.classes,
+                model_id=parent_manifest.model_id if parent_manifest else preset.model_id,
+                checkpoint_manifest=parent_manifest,
+                preprocessing=preprocessing.to_dict(),
+            )
+            if checkpoint is not None
+            else load_preset_detector(preset, classes=project.classes)
         )
         result = train_snapshot_and_register(
             detector,
@@ -151,6 +169,7 @@ if typer is not None:
                 preprocessing=preprocessing,
             ),
             preprocessing=preprocessing,
+            resume_from=parent_manifest,
         )
         typer.echo(
             json.dumps(

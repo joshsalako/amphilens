@@ -16,6 +16,7 @@ class FixtureTrainer:
 
     def train(self, dataset_yaml, output_dir, config, resume_from=None):
         self.dataset_yaml = Path(dataset_yaml)
+        self.resume_from = resume_from
         output = Path(output_dir)
         output.mkdir(parents=True, exist_ok=True)
         checkpoint = output / "best.pt"
@@ -86,3 +87,27 @@ def test_training_from_snapshot_prepares_labels_with_the_same_preprocessing(tmp_
     assert trainer.dataset_yaml.parent.name == "prepared-dataset"
     saved = json.loads((tmp_path / "cycle-0" / "checkpoint.json").read_text())
     assert saved["training_config"]["preprocessing"]["max_dimension"] == 40
+
+
+def test_training_passes_parent_checkpoint_for_resume_lineage(tmp_path: Path):
+    trainer = FixtureTrainer()
+    preprocessing = PreprocessingConfig(max_dimension=320)
+    first = train_and_register(
+        trainer,
+        dataset_yaml=tmp_path / "dataset.yaml",
+        output_dir=tmp_path / "cycle-0",
+        config=TrainingConfig(epochs=1, image_size=320, preprocessing=preprocessing),
+        preprocessing=preprocessing,
+    )
+
+    resumed = train_and_register(
+        trainer,
+        dataset_yaml=tmp_path / "dataset.yaml",
+        output_dir=tmp_path / "cycle-1",
+        config=TrainingConfig(epochs=1, image_size=320, preprocessing=preprocessing),
+        preprocessing=preprocessing,
+        resume_from=first.manifest,
+    )
+
+    assert trainer.resume_from == first.manifest
+    assert resumed.manifest.parent_checkpoint == str(first.checkpoint)

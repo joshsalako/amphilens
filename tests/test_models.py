@@ -42,6 +42,13 @@ class FakeUltralyticsModel:
         self.calls.append(kwargs)
         return [SimpleNamespace(boxes=self.boxes, names=self.names)]
 
+    def train(self, **kwargs):
+        self.train_calls = kwargs
+        checkpoint = Path(kwargs["project"]) / kwargs["name"] / "weights" / "best.pt"
+        checkpoint.parent.mkdir(parents=True, exist_ok=True)
+        checkpoint.write_bytes(b"trained")
+        return SimpleNamespace(save_dir=checkpoint.parent.parent)
+
 
 def _image(tmp_path: Path) -> Path:
     image = tmp_path / "camera.jpg"
@@ -103,6 +110,32 @@ def test_ultralytics_adapter_preprocesses_before_prediction_and_maps_boxes(tmp_p
             model_id="fixture", preprocessing={"max_dimension": 40}
         ).preprocessing_fingerprint
     )
+
+
+def test_ultralytics_adapter_passes_resume_checkpoint_to_training(tmp_path: Path):
+    parent = tmp_path / "parent.pt"
+    parent.write_bytes(b"parent")
+    preprocessing = InferenceConfig(model_id="fixture").preprocessing_config.to_dict()
+    manifest = CheckpointManifest.create(
+        parent,
+        model_id="fixture",
+        architecture="yolo",
+        classes=["toad"],
+        preprocessing=preprocessing,
+    )
+    detector = UltralyticsDetector(parent, "yolo", ["toad"], model_id="fixture")
+    model = FakeUltralyticsModel(None)
+    detector._model = model
+
+    result = detector.train(
+        tmp_path / "dataset.yaml",
+        tmp_path / "output",
+        {"preprocessing": preprocessing, "epochs": 1},
+        resume_from=manifest,
+    )
+
+    assert result.is_file()
+    assert model.train_calls["resume"] == str(parent)
 
 
 def test_load_detector_rejects_missing_and_stale_checkpoints(tmp_path: Path):

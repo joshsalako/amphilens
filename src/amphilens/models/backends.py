@@ -141,17 +141,22 @@ class UltralyticsDetector:
                 classes=self.classes,
                 preprocessing=config.get("preprocessing", {}),
             )
+        train_config = {
+            "data": str(dataset_yaml),
+            "project": str(output),
+            "name": str(config.get("run_name", "train")),
+            "epochs": int(config.get("epochs", 100)),
+            "imgsz": int(config.get("image_size", 640)),
+            "batch": int(config.get("batch_size", 16)),
+            "device": config.get("device", "auto"),
+            "patience": int(config.get("patience", 25)),
+            "seed": int(config.get("seed", 42)),
+            "exist_ok": True,
+        }
+        if resume_from is not None:
+            train_config["resume"] = str(resume_from.checkpoint_path)
         results = model.train(
-            data=str(dataset_yaml),
-            project=str(output),
-            name=str(config.get("run_name", "train")),
-            epochs=int(config.get("epochs", 100)),
-            imgsz=int(config.get("image_size", 640)),
-            batch=int(config.get("batch_size", 16)),
-            device=config.get("device", "auto"),
-            patience=int(config.get("patience", 25)),
-            seed=int(config.get("seed", 42)),
-            exist_ok=True,
+            **train_config,
         )
         save_dir = Path(getattr(results, "save_dir", output / str(config.get("run_name", "train"))))
         checkpoint = save_dir / "weights" / "best.pt"

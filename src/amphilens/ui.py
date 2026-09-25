@@ -128,7 +128,11 @@ def _render_train(st):
     from .core import ProjectStore
     from .dataset import DatasetSnapshot
     from .models import load_detector, load_preset_detector
-    from .training import TrainingConfig, train_snapshot_and_register
+    from .training import (
+        TrainingConfig,
+        load_checkpoint_manifest,
+        train_snapshot_and_register,
+    )
 
     st.header("3. Train or continue a model")
     project_dir = st.text_input("Project folder", value="./amphilens-project", key="train-project")
@@ -149,6 +153,11 @@ def _render_train(st):
     checkpoint = st.text_input(
         "Optional local checkpoint (leave blank for official general-purpose weights)"
     )
+    resume_manifest_path = st.text_input(
+        "Optional parent checkpoint manifest (for continuing a cycle)",
+        value="",
+        key="train-resume-manifest",
+    )
     output_dir = st.text_input(
         "Training output folder", value=str(Path(project_dir) / "checkpoints" / "cycle-0")
     )
@@ -163,14 +172,24 @@ def _render_train(st):
             preprocessing = preprocessing_from_controls(
                 max_dimension=int(max_dimension), grayscale=grayscale, clahe=clahe
             )
+            parent_manifest = (
+                load_checkpoint_manifest(resume_manifest_path)
+                if resume_manifest_path.strip()
+                else None
+            )
+            selected_checkpoint = checkpoint.strip() or (
+                parent_manifest.checkpoint_path if parent_manifest else ""
+            )
             detector = (
                 load_detector(
-                    checkpoint,
+                    selected_checkpoint,
                     architecture=preset.architecture,
                     classes=project.classes,
-                    model_id=preset.model_id,
+                    model_id=parent_manifest.model_id if parent_manifest else preset.model_id,
+                    checkpoint_manifest=parent_manifest,
+                    preprocessing=preprocessing.to_dict(),
                 )
-                if checkpoint.strip()
+                if selected_checkpoint
                 else load_preset_detector(preset, classes=project.classes)
             )
             result = train_snapshot_and_register(
@@ -187,6 +206,7 @@ def _render_train(st):
                     preprocessing=preprocessing,
                 ),
                 preprocessing=preprocessing,
+                resume_from=parent_manifest,
             )
             st.success(f"Training finished: {result.checkpoint}")
             st.json({"checkpoint": str(result.checkpoint), "evaluation": "not evaluated"})
