@@ -197,3 +197,42 @@ def test_report_command_writes_summary_and_markdown(tmp_path: Path):
     result = CliRunner().invoke(app, ["report", str(predictions), str(tmp_path / "report")])
     assert result.exit_code == 0, result.stdout
     assert (tmp_path / "report" / "report.md").is_file()
+
+
+def test_checkpoint_registry_commands_persist_compatibility_metadata(tmp_path: Path):
+    checkpoint = tmp_path / "best.pt"
+    checkpoint.write_bytes(b"fixture-weights")
+    registry = tmp_path / "registry"
+    runner = CliRunner()
+    registered = runner.invoke(
+        app,
+        [
+            "checkpoint",
+            "register",
+            str(registry),
+            str(checkpoint),
+            "--model-id",
+            "fixture-yolo",
+            "--architecture",
+            "yolo",
+            "--class-name",
+            "toad",
+            "--training-domain",
+            "camera-trap",
+            "--source",
+            "fixture",
+            "--license",
+            "Apache-2.0",
+            "--preprocessing",
+            '{"name":"none"}',
+        ],
+    )
+    assert registered.exit_code == 0, registered.stdout
+
+    listed = runner.invoke(app, ["checkpoint", "list", str(registry)])
+    assert listed.exit_code == 0, listed.stdout
+    assert "fixture-yolo" in listed.stdout
+
+    inspected = runner.invoke(app, ["checkpoint", "inspect", str(registry), "fixture-yolo"])
+    assert inspected.exit_code == 0, inspected.stdout
+    assert '"architecture": "yolo"' in inspected.stdout

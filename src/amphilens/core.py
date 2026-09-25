@@ -362,6 +362,7 @@ class ModelManifest:
     preprocessing: dict[str, Any] = field(default_factory=dict)
     input_size: int = 640
     checkpoint_sha256: str | None = None
+    model_card: str | None = None
 
     def validate(self) -> None:
         if not self.model_id.strip() or not self.architecture.strip():

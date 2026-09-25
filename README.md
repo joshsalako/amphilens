@@ -90,6 +90,25 @@ amphilens predict ./my-project /path/to/model.pt \
   --output-dir ./my-project/artifacts/predict-yolo
 ```
 
+Register a reusable checkpoint before sharing it between projects:
+
+```bash
+amphilens checkpoint register ./model-registry /path/to/model.pt \
+  --model-id wlt-yolo-v1 \
+  --architecture yolo \
+  --class-name toad \
+  --training-domain camera-trap \
+  --source WLT-UP \
+  --license Apache-2.0 \
+  --preprocessing '{"name":"none"}'
+amphilens checkpoint list ./model-registry
+amphilens checkpoint inspect ./model-registry wlt-yolo-v1
+```
+
+Registration records the SHA-256 hash, ordered classes, preprocessing, domain,
+license, and optional model-card link. A later load can reject a tampered or
+incompatible checkpoint before importing the ML runtime.
+
 Export and import an annotation task:
 
 ```bash

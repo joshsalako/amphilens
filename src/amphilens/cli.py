@@ -14,11 +14,20 @@ except ImportError:  # pragma: no cover - exercised only in minimal installs
 
 from .active_learning import HybridPPALConfig, HybridPPALStrategy, PPALCalibration
 from .annotations.cvat import export_cvat, import_cvat
-from .core import DetectionRecord, InferenceConfig, ProjectManifest, ProjectStore, iter_images
+from .core import (
+    CheckpointManifest,
+    DetectionRecord,
+    InferenceConfig,
+    ModelManifest,
+    ProjectManifest,
+    ProjectStore,
+    iter_images,
+)
 from .curation import write_selection_artifacts
 from .doctor import run_doctor
 from .inference import read_predictions_csv, write_predictions_csv
 from .models import load_detector
+from .registry import ModelRegistry
 from .reporting import write_report
 from .runs import run_resumable_inference
 
@@ -32,8 +41,10 @@ if typer is not None:
     app = typer.Typer(help="Reproducible wildlife camera-trap detection.")
     project_app = typer.Typer(help="Create and inspect portable projects.")
     cvat_app = typer.Typer(help="Exchange annotations with CVAT and compatible tools.")
+    checkpoint_app = typer.Typer(help="Register and inspect reusable checkpoints.")
     app.add_typer(project_app, name="project")
     app.add_typer(cvat_app, name="cvat")
+    app.add_typer(checkpoint_app, name="checkpoint")
 
     @app.command()
     def doctor(path: str = "."):
@@ -66,6 +77,60 @@ if typer is not None:
     ):
         """Backward-compatible alias for `project create`."""
         project_create(project_dir, image_root, class_name, name)
+
+    @checkpoint_app.command("register")
+    def checkpoint_register(
+        registry_dir: Path,
+        checkpoint: Path,
+        model_id: str = typer.Option(..., "--model-id"),
+        architecture: str = typer.Option(..., "--architecture"),
+        class_name: list[str] = typer.Option(..., "--class-name"),
+        training_domain: str = typer.Option("unknown", "--training-domain"),
+        source: str = typer.Option("user", "--source"),
+        license_name: str = typer.Option("unknown", "--license"),
+        preprocessing: str = typer.Option("{}", "--preprocessing"),
+        model_card: str | None = typer.Option(None, "--model-card"),
+    ):
+        """Register a checkpoint with hash and compatibility metadata."""
+        try:
+            preprocessing_config = json.loads(preprocessing)
+        except json.JSONDecodeError as exc:
+            raise ValueError("--preprocessing must be a JSON object") from exc
+        if not isinstance(preprocessing_config, dict):
+            raise ValueError("--preprocessing must be a JSON object")
+        checkpoint_manifest = CheckpointManifest.create(
+            checkpoint,
+            model_id=model_id,
+            architecture=architecture,
+            classes=class_name,
+            preprocessing=preprocessing_config,
+        )
+        model = ModelManifest(
+            model_id=model_id,
+            architecture=architecture,
+            classes=class_name,
+            training_domain=training_domain,
+            source=source,
+            license=license_name,
+            preprocessing=preprocessing_config,
+            checkpoint_sha256=checkpoint_manifest.sha256,
+            model_card=model_card,
+        )
+        ModelRegistry(registry_dir).register(model, checkpoint_manifest)
+        typer.echo(json.dumps(model.to_dict(), indent=2))
+
+    @checkpoint_app.command("list")
+    def checkpoint_list(registry_dir: Path):
+        """List registered model identifiers."""
+        typer.echo(json.dumps(ModelRegistry(registry_dir).list_models(), indent=2))
+
+    @checkpoint_app.command("inspect")
+    def checkpoint_inspect(registry_dir: Path, model_id: str):
+        """Print registered model and checkpoint metadata."""
+        model, checkpoint = ModelRegistry(registry_dir).get(model_id)
+        typer.echo(
+            json.dumps({"model": model.to_dict(), "checkpoint": checkpoint.to_dict()}, indent=2)
+        )
 
     @app.command("app")
     def app_ui():
