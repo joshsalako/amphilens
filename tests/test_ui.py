@@ -1,6 +1,6 @@
 import pytest
 
-from amphilens.ui import parse_classes
+from amphilens.ui import parse_class_mapping, parse_classes, preprocessing_from_controls
 
 
 def test_parse_classes_normalizes_and_rejects_duplicates():
@@ -12,3 +12,17 @@ def test_parse_classes_normalizes_and_rejects_duplicates():
 def test_parse_classes_rejects_empty_input():
     with pytest.raises(ValueError, match="at least one"):
         parse_classes("\n, ")
+
+
+def test_ui_preprocessing_controls_build_reproducible_configuration():
+    config = preprocessing_from_controls(max_dimension=320, grayscale=False, clahe=True)
+
+    assert config.max_dimension == 320
+    assert config.grayscale_enabled is False
+    assert config.clahe_enabled is True
+
+
+def test_parse_class_mapping_requires_object_json():
+    assert parse_class_mapping('{"WLT": "toad"}') == {"WLT": "toad"}
+    with pytest.raises(ValueError, match="JSON object"):
+        parse_class_mapping('["toad"]')

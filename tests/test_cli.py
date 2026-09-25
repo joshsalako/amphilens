@@ -1,6 +1,9 @@
 import csv
 import json
+import zipfile
+from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from PIL import Image
@@ -39,6 +42,141 @@ def test_project_create_and_inspect_commands(tmp_path: Path):
     inspected = runner.invoke(app, ["project", "inspect", str(project)])
     assert inspected.exit_code == 0, inspected.stdout
     assert '"name": "demo"' in inspected.stdout
+
+
+def test_dataset_import_command_creates_an_immutable_snapshot(tmp_path: Path):
+    images = tmp_path / "images"
+    images.mkdir()
+    project = tmp_path / "project"
+    runner = CliRunner()
+    assert (
+        runner.invoke(
+            app,
+            [
+                "project",
+                "create",
+                str(project),
+                "--image-root",
+                str(images),
+                "--class-name",
+                "toad",
+            ],
+        ).exit_code
+        == 0
+    )
+    archive = tmp_path / "initial.zip"
+    image_bytes = BytesIO()
+    Image.new("RGB", (20, 10), color="black").save(image_bytes, format="JPEG")
+    with zipfile.ZipFile(archive, "w") as handle:
+        handle.writestr("images/camera.jpg", image_bytes.getvalue())
+        handle.writestr("classes.txt", "toad\n")
+        handle.writestr("labels/camera.txt", "")
+
+    result = runner.invoke(app, ["dataset", "import", str(project), str(archive)])
+
+    assert result.exit_code == 0, result.stdout
+    assert "snapshot_id" in result.stdout
+
+
+def test_train_command_is_blocked_until_a_labelled_snapshot_exists(tmp_path: Path):
+    images = tmp_path / "images"
+    images.mkdir()
+    project = tmp_path / "project"
+    assert (
+        CliRunner()
+        .invoke(
+            app,
+            [
+                "project",
+                "create",
+                str(project),
+                "--image-root",
+                str(images),
+                "--class-name",
+                "toad",
+            ],
+        )
+        .exit_code
+        == 0
+    )
+
+    result = CliRunner().invoke(app, ["train", str(project), "--output-dir", str(tmp_path / "out")])
+
+    assert result.exit_code != 0
+    assert "Import an annotated dataset" in str(result.exception)
+
+
+def test_train_command_passes_model_and_preprocessing_choices_to_engine(
+    monkeypatch, tmp_path: Path
+):
+    images = tmp_path / "images"
+    images.mkdir()
+    project = tmp_path / "project"
+    runner = CliRunner()
+    assert (
+        runner.invoke(
+            app,
+            [
+                "project",
+                "create",
+                str(project),
+                "--image-root",
+                str(images),
+                "--class-name",
+                "toad",
+            ],
+        ).exit_code
+        == 0
+    )
+    archive = tmp_path / "initial.zip"
+    image_bytes = BytesIO()
+    Image.new("RGB", (20, 10), color="black").save(image_bytes, format="JPEG")
+    with zipfile.ZipFile(archive, "w") as handle:
+        handle.writestr("images/camera.jpg", image_bytes.getvalue())
+        handle.writestr("classes.txt", "toad\n")
+        handle.writestr("labels/camera.txt", "")
+    assert runner.invoke(app, ["dataset", "import", str(project), str(archive)]).exit_code == 0
+
+    observed = {}
+
+    class Detector:
+        pass
+
+    def fake_load(preset, **_):
+        observed["preset"] = preset
+        return Detector()
+
+    monkeypatch.setattr(cli_module, "load_preset_detector", fake_load)
+
+    def fake_train(detector, **kwargs):
+        observed.update(kwargs)
+        checkpoint = tmp_path / "out" / "best.pt"
+        checkpoint.parent.mkdir()
+        checkpoint.write_bytes(b"weights")
+        return SimpleNamespace(checkpoint=checkpoint)
+
+    monkeypatch.setattr(cli_module, "train_snapshot_and_register", fake_train)
+    result = runner.invoke(
+        app,
+        [
+            "train",
+            str(project),
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--model-preset",
+            "rtdetr-l",
+            "--max-dimension",
+            "320",
+            "--no-grayscale",
+            "--clahe",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert observed["preset"].model_id == "rtdetr-l"
+    assert observed["preprocessing"].max_dimension == 320
+    assert observed["preprocessing"].grayscale_enabled is False
+    assert observed["preprocessing"].clahe_enabled is True
 
 
 def test_cvat_cli_exports_and_imports_prediction_csv(tmp_path: Path):

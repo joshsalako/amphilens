@@ -33,9 +33,8 @@ class PreprocessingConfig:
             raise ValueError("resize_interpolation must be nearest, bilinear, bicubic, or lanczos")
         if self.clahe_clip_limit <= 0:
             raise ValueError("clahe_clip_limit must be positive")
-        if (
-            len(self.clahe_tile_grid_size) != 2
-            or any(value <= 0 for value in self.clahe_tile_grid_size)
+        if len(self.clahe_tile_grid_size) != 2 or any(
+            value <= 0 for value in self.clahe_tile_grid_size
         ):
             raise ValueError("clahe_tile_grid_size must contain two positive integers")
         if self.color_space not in {"rgb", "lab"}:
@@ -104,6 +103,11 @@ class PreprocessedImage:
         if self.scale == 1:
             return [float(value) for value in box_xyxy]
         return [round(float(value) / self.scale, 6) for value in box_xyxy]
+
+    def map_box_to_processed(self, box_xyxy: list[float] | tuple[float, ...]) -> list[float]:
+        if len(box_xyxy) != 4:
+            raise ValueError("box_xyxy must contain four coordinates")
+        return [round(float(value) * self.scale, 6) for value in box_xyxy]
 
 
 class PreprocessingService:

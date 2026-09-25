@@ -197,6 +197,61 @@ class DatasetSnapshot:
         manifest = DatasetManifest.from_dict(read_json(path / "manifest.json"))
         return cls(path, manifest)
 
+    def to_yolo_dataset(
+        self,
+        destination: str | Path,
+        *,
+        preprocessing=None,
+    ) -> Path:
+        """Materialize a training directory without modifying the snapshot."""
+        from .preprocessing import PreprocessingConfig, PreprocessingService
+
+        target = Path(destination).expanduser().resolve()
+        if target.exists():
+            raise ValidationError(f"Prepared dataset destination already exists: {target}")
+        image_dir = target / "images"
+        label_dir = target / "labels"
+        image_dir.mkdir(parents=True)
+        label_dir.mkdir()
+        service = PreprocessingService(PreprocessingConfig.from_any(preprocessing))
+        for item in self.manifest.images:
+            source = self.root / item.relative_path
+            transformed = service.transform(source)
+            filename = Path(item.relative_path).name
+            transformed.image.save(image_dir / filename)
+            width, height = transformed.processed_size
+            lines = []
+            for annotation in item.annotations:
+                x1, y1, x2, y2 = transformed.map_box_to_processed(annotation.bbox_xyxy)
+                box_width = x2 - x1
+                box_height = y2 - y1
+                center_x = x1 + box_width / 2
+                center_y = y1 + box_height / 2
+                lines.append(
+                    f"{annotation.class_id} {center_x / width:.6f} {center_y / height:.6f} "
+                    f"{box_width / width:.6f} {box_height / height:.6f}"
+                )
+            (label_dir / f"{Path(filename).stem}.txt").write_text(
+                "\n".join(lines) + ("\n" if lines else ""), encoding="utf-8"
+            )
+        yaml_path = target / "dataset.yaml"
+        yaml_path.write_text(
+            json.dumps(
+                {
+                    "path": str(target),
+                    "train": "images",
+                    "labels": "labels",
+                    "names": {index: name for index, name in enumerate(self.manifest.classes)},
+                    "evaluation": "not evaluated",
+                    "preprocessing": service.config.to_dict(),
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return yaml_path
+
 
 class DatasetImporter:
     """Import CVAT XML, COCO, or YOLO ZIP archives into immutable snapshots."""

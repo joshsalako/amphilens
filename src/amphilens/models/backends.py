@@ -13,6 +13,8 @@ from ..core import (
     UnsupportedCheckpointError,
     ValidationError,
 )
+from ..preprocessing import PreprocessingService
+from .catalog import ModelPreset
 
 
 class OptionalDependencyError(RuntimeError):
@@ -53,7 +55,12 @@ class UltralyticsDetector:
     ):
         if architecture not in {"yolo", "rtdetr"}:
             raise ValidationError("UltralyticsDetector architecture must be 'yolo' or 'rtdetr'")
-        self.checkpoint = Path(checkpoint).expanduser().resolve()
+        checkpoint_path = Path(checkpoint).expanduser()
+        self.checkpoint = (
+            checkpoint_path.resolve()
+            if checkpoint_path.is_absolute() or checkpoint_path.is_file()
+            else checkpoint_path
+        )
         self.architecture = architecture
         self.classes = list(classes)
         self.model_id = model_id or self.checkpoint.stem
@@ -75,8 +82,9 @@ class UltralyticsDetector:
         model = self._load()
         for path in image_paths:
             width, height = _image_size(path)
+            transformed = PreprocessingService(config.preprocessing_config).transform(path)
             results = model.predict(
-                source=str(path),
+                source=transformed.image,
                 imgsz=config.image_size,
                 conf=config.confidence,
                 device=None if config.device == "auto" else config.device,
@@ -109,12 +117,12 @@ class UltralyticsDetector:
                     class_id=class_index,
                     class_name=str(class_name),
                     confidence=float(confidence),
-                    bbox_xyxy=[float(value) for value in box],
+                    bbox_xyxy=transformed.map_box_to_original(box),
                     image_width=width,
                     image_height=height,
                     model_id=self.model_id,
                     run_id=config.run_id,
-                    preprocessing=config.preprocessing,
+                    preprocessing=config.preprocessing_fingerprint,
                 )
 
     def train(
@@ -158,7 +166,13 @@ class FasterRCNNDetector:
     architecture = "faster_rcnn"
 
     def __init__(self, checkpoint: str | Path, classes: list[str], model_id: str | None = None):
-        self.checkpoint = Path(checkpoint).expanduser().resolve()
+        checkpoint_path = Path(checkpoint).expanduser()
+        self.checkpoint = (
+            checkpoint_path.resolve()
+            if checkpoint_path.is_absolute() or checkpoint_path.is_file()
+            else None
+        )
+        self.checkpoint_reference = str(checkpoint)
         self.classes = list(classes)
         self.model_id = model_id or self.checkpoint.stem
         self._model = None
@@ -174,13 +188,19 @@ class FasterRCNNDetector:
             raise OptionalDependencyError(
                 "Faster R-CNN inference requires the 'inference' extra"
             ) from exc
-        model = fasterrcnn_resnet50_fpn_v2(weights=None, weights_backbone=None)
+        if self.checkpoint is None and self.checkpoint_reference.startswith("torchvision://"):
+            from torchvision.models.detection import FasterRCNN_ResNet50_FPN_V2_Weights
+
+            model = fasterrcnn_resnet50_fpn_v2(weights=FasterRCNN_ResNet50_FPN_V2_Weights.DEFAULT)
+        else:
+            model = fasterrcnn_resnet50_fpn_v2(weights=None, weights_backbone=None)
         in_features = model.roi_heads.box_predictor.cls_score.in_features
         model.roi_heads.box_predictor = FastRCNNPredictor(in_features, len(self.classes) + 1)
-        state = torch.load(self.checkpoint, map_location="cpu", weights_only=False)
-        if isinstance(state, dict) and "model_state_dict" in state:
-            state = state["model_state_dict"]
-        model.load_state_dict(state)
+        if self.checkpoint is not None:
+            state = torch.load(self.checkpoint, map_location="cpu", weights_only=False)
+            if isinstance(state, dict) and "model_state_dict" in state:
+                state = state["model_state_dict"]
+            model.load_state_dict(state)
         model.eval()
         self._model = model
         return model
@@ -199,8 +219,9 @@ class FasterRCNNDetector:
         model.to(device)
         for path in image_paths:
             with Image.open(path) as image:
-                rgb = np.asarray(image.convert("RGB"))
-                width, height = image.width, image.height
+                width, height = image.size
+            transformed = PreprocessingService(config.preprocessing_config).transform(path)
+            rgb = np.asarray(transformed.image)
             tensor = torch.from_numpy(rgb).permute(2, 0, 1).float().div(255).to(device)
             with torch.no_grad():
                 output = model([tensor])[0]
@@ -219,18 +240,18 @@ class FasterRCNNDetector:
                         else f"class_{class_id}"
                     ),
                     confidence=score,
-                    bbox_xyxy=[float(value) for value in box.cpu().tolist()],
+                    bbox_xyxy=transformed.map_box_to_original(box.cpu().tolist()),
                     image_width=width,
                     image_height=height,
                     model_id=self.model_id,
                     run_id=config.run_id,
-                    preprocessing=config.preprocessing,
+                    preprocessing=config.preprocessing_fingerprint,
                 )
 
     def train(self, dataset_yaml, output_dir, config, resume_from=None) -> Path:
         from .faster_rcnn_training import FasterRCNNTrainer
 
-        if not self.checkpoint.is_file():
+        if self.checkpoint is not None and not self.checkpoint.is_file():
             raise UnsupportedCheckpointError(f"Checkpoint is missing: {self.checkpoint}")
         if resume_from is not None:
             resume_from.validate_compatibility(
@@ -282,3 +303,22 @@ def load_detector(
     if architecture == "faster_rcnn":
         return FasterRCNNDetector(checkpoint_path, classes, model_id)
     raise ValidationError(f"Unsupported detector architecture: {architecture}")
+
+
+def load_preset_detector(
+    preset: ModelPreset, *, classes: list[str], checkpoint: str | Path | None = None
+):
+    """Create a detector from a catalog preset without downloading weights at import time."""
+    selected = checkpoint or preset.checkpoint_reference
+    if checkpoint is not None:
+        return load_detector(
+            checkpoint,
+            architecture=preset.architecture,
+            classes=classes,
+            model_id=preset.model_id,
+        )
+    if preset.architecture in {"yolo", "rtdetr"}:
+        return UltralyticsDetector(selected, preset.architecture, classes, model_id=preset.model_id)
+    if preset.architecture == "faster_rcnn":
+        return FasterRCNNDetector(selected, classes, model_id=preset.model_id)
+    raise ValidationError(f"Unsupported detector architecture: {preset.architecture}")

@@ -7,6 +7,7 @@ from PIL import Image
 
 from amphilens.core import ProjectManifest, ProjectStore, ValidationError
 from amphilens.dataset import DatasetImporter, DatasetMerger
+from amphilens.preprocessing import PreprocessingConfig
 
 
 def _image_bytes(size=(40, 30), color=(0, 0, 0)) -> bytes:
@@ -190,3 +191,28 @@ def test_project_store_imports_snapshot_using_manifest_classes(tmp_path: Path):
 
     assert snapshot.root.is_relative_to(project.root / "datasets")
     assert snapshot.manifest.classes == ["toad"]
+
+
+def test_snapshot_prepares_yolo_training_data_with_shared_preprocessing(tmp_path: Path):
+    archive = _zip(
+        tmp_path / "initial.zip",
+        {
+            "images/a.png": _image_bytes(size=(80, 40)),
+            "classes.txt": "toad\n",
+            "labels/a.txt": "0 0.5 0.5 0.5 0.5\n",
+        },
+    )
+    snapshot = DatasetImporter().import_archive(archive, tmp_path / "snapshot", classes=["toad"])
+
+    dataset_yaml = snapshot.to_yolo_dataset(
+        tmp_path / "prepared",
+        preprocessing=PreprocessingConfig(max_dimension=40),
+    )
+
+    assert dataset_yaml.is_file()
+    with Image.open(dataset_yaml.parent / "images" / "a.png") as image:
+        assert image.size == (40, 20)
+        assert image.getpixel((0, 0))[0] == image.getpixel((0, 0))[1]
+    values = (dataset_yaml.parent / "labels" / "a.txt").read_text().split()
+    assert values[0] == "0"
+    assert [float(value) for value in values[1:]] == pytest.approx([0.5, 0.5, 0.5, 0.5])

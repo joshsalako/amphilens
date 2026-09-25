@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from .core import CheckpointManifest, ValidationError, atomic_write_json, read_json
+from .dataset import DatasetSnapshot
+from .preprocessing import PreprocessingConfig
 
 
 @dataclass(slots=True)
@@ -18,16 +20,23 @@ class TrainingConfig:
     seed: int = 42
     device: str = "auto"
     run_name: str = "train"
-    preprocessing: dict[str, Any] = field(default_factory=dict)
+    preprocessing: PreprocessingConfig | dict[str, Any] | str = field(
+        default_factory=PreprocessingConfig
+    )
+    freeze_strategy: str = "none"
+    evaluation: str = "not evaluated"
 
     def __post_init__(self) -> None:
         if self.epochs <= 0 or self.image_size <= 0 or self.batch_size <= 0:
             raise ValidationError("epochs, image_size, and batch_size must be positive")
         if self.patience < 0:
             raise ValidationError("patience cannot be negative")
+        self.preprocessing = PreprocessingConfig.from_any(self.preprocessing)
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        data["preprocessing"] = PreprocessingConfig.from_any(self.preprocessing).to_dict()
+        return data
 
 
 @dataclass(slots=True)
@@ -42,7 +51,7 @@ def train_and_register(
     dataset_yaml: str | Path,
     output_dir: str | Path,
     config: TrainingConfig,
-    preprocessing: dict[str, Any],
+    preprocessing: PreprocessingConfig | dict[str, Any] | str,
     resume_from: CheckpointManifest | None = None,
 ) -> TrainingResult:
     output = Path(output_dir).expanduser().resolve()
@@ -72,6 +81,32 @@ def train_and_register(
     )
     atomic_write_json(output / "checkpoint.json", manifest.to_dict())
     return TrainingResult(checkpoint=checkpoint, manifest=manifest)
+
+
+def train_snapshot_and_register(
+    detector,
+    *,
+    snapshot: DatasetSnapshot,
+    output_dir: str | Path,
+    config: TrainingConfig,
+    preprocessing: PreprocessingConfig | dict[str, Any] | str | None = None,
+    resume_from: CheckpointManifest | None = None,
+) -> TrainingResult:
+    """Prepare an immutable snapshot and train through the existing adapter contract."""
+    output = Path(output_dir).expanduser().resolve()
+    selected = PreprocessingConfig.from_any(preprocessing or config.preprocessing)
+    dataset_yaml = snapshot.to_yolo_dataset(
+        output / "prepared-dataset",
+        preprocessing=selected,
+    )
+    return train_and_register(
+        detector,
+        dataset_yaml=dataset_yaml,
+        output_dir=output,
+        config=config,
+        preprocessing=selected.to_dict(),
+        resume_from=resume_from,
+    )
 
 
 def load_checkpoint_manifest(path: str | Path) -> CheckpointManifest:

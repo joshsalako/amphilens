@@ -24,12 +24,15 @@ from .core import (
     iter_images,
 )
 from .curation import write_selection_artifacts
+from .dataset import DatasetSnapshot
 from .doctor import run_doctor
 from .inference import read_predictions_csv, write_predictions_csv
-from .models import load_detector
+from .models import ModelCatalog, load_detector, load_preset_detector
+from .preprocessing import PreprocessingConfig
 from .registry import ModelRegistry
 from .reporting import write_report
 from .runs import run_resumable_inference
+from .training import TrainingConfig, train_snapshot_and_register
 
 
 def _require_typer():
@@ -62,9 +65,11 @@ if typer is not None:
     app = typer.Typer(help="Reproducible wildlife camera-trap detection.")
     project_app = typer.Typer(help="Create and inspect portable projects.")
     cvat_app = typer.Typer(help="Exchange annotations with CVAT and compatible tools.")
+    dataset_app = typer.Typer(help="Import and merge immutable annotated datasets.")
     checkpoint_app = typer.Typer(help="Register and inspect reusable checkpoints.")
     app.add_typer(project_app, name="project")
     app.add_typer(cvat_app, name="cvat")
+    app.add_typer(dataset_app, name="dataset")
     app.add_typer(checkpoint_app, name="checkpoint")
 
     @app.command()
@@ -88,6 +93,73 @@ if typer is not None:
     def project_inspect(project_dir: Path):
         """Print a project's validated manifest."""
         typer.echo(json.dumps(ProjectStore(project_dir).load_manifest().to_dict(), indent=2))
+
+    @dataset_app.command("import")
+    def dataset_import(
+        project_dir: Path,
+        archive: Path,
+        class_mapping: str = typer.Option("{}", "--class-mapping"),
+    ):
+        """Import a CVAT, COCO, or YOLO ZIP into an immutable snapshot."""
+        try:
+            mapping = json.loads(class_mapping)
+        except json.JSONDecodeError as exc:
+            raise ValueError("--class-mapping must be a JSON object") from exc
+        if not isinstance(mapping, dict):
+            raise ValueError("--class-mapping must be a JSON object")
+        snapshot = ProjectStore(project_dir).import_dataset(archive, class_mapping=mapping)
+        typer.echo(json.dumps(snapshot.manifest.to_dict(), indent=2))
+
+    @app.command()
+    def train(
+        project_dir: Path,
+        output_dir: Path = typer.Option(..., "--output-dir"),
+        snapshot: Path | None = typer.Option(None, "--snapshot"),
+        model_preset: str = typer.Option("yolo26-l", "--model-preset"),
+        checkpoint: Path | None = typer.Option(None, "--checkpoint"),
+        epochs: int = typer.Option(100, "--epochs"),
+        batch_size: int = typer.Option(16, "--batch-size"),
+        max_dimension: int = typer.Option(640, "--max-dimension"),
+        grayscale: bool = typer.Option(True, "--grayscale/--no-grayscale"),
+        clahe: bool = typer.Option(False, "--clahe/--no-clahe"),
+        device: str = typer.Option("auto", "--device"),
+    ):
+        """Fine-tune a catalog model from an imported immutable dataset snapshot."""
+        store = ProjectStore(project_dir)
+        project = store.load_manifest()
+        selected_snapshot = DatasetSnapshot.load(snapshot) if snapshot else _latest_snapshot(store)
+        preset = ModelCatalog().get(model_preset)
+        detector = load_preset_detector(preset, classes=project.classes, checkpoint=checkpoint)
+        preprocessing = PreprocessingConfig(
+            max_dimension=max_dimension,
+            grayscale_enabled=grayscale,
+            clahe_enabled=clahe,
+        )
+        result = train_snapshot_and_register(
+            detector,
+            snapshot=selected_snapshot,
+            output_dir=output_dir,
+            config=TrainingConfig(
+                epochs=epochs,
+                batch_size=batch_size,
+                image_size=project.project_config.image_size,
+                patience=project.project_config.patience,
+                seed=project.project_config.random_seed,
+                device=device,
+                preprocessing=preprocessing,
+            ),
+            preprocessing=preprocessing,
+        )
+        typer.echo(
+            json.dumps(
+                {
+                    "checkpoint": str(result.checkpoint),
+                    "checkpoint_manifest": str(Path(output_dir) / "checkpoint.json"),
+                    "evaluation": "not evaluated",
+                },
+                indent=2,
+            )
+        )
 
     @app.command("project-create")
     def project_create_legacy(
@@ -265,6 +337,16 @@ if typer is not None:
 
     def _records_from_csv(path: Path) -> list[DetectionRecord]:
         return read_predictions_csv(path)
+
+    def _latest_snapshot(store: ProjectStore) -> DatasetSnapshot:
+        candidates = sorted(
+            path
+            for path in (store.root / "datasets").glob("*")
+            if path.is_dir() and (path / "manifest.json").is_file()
+        )
+        if not candidates:
+            raise ValueError("Import an annotated dataset before training")
+        return DatasetSnapshot.load(candidates[-1])
 
     @cvat_app.command("export")
     def cvat_export(
