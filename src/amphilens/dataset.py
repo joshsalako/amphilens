@@ -284,6 +284,9 @@ class DatasetImporter:
                 raise ValidationError("Dataset archive must include image files")
             source_format, parsed = self._parse(extracted, images, expected_classes, class_mapping)
             manifest_images = self._copy_images(parsed, target)
+        source_dir = target / "source"
+        source_dir.mkdir()
+        shutil.copy2(archive, source_dir / archive.name)
         manifest = DatasetManifest(
             snapshot_id=target_id,
             source_format=source_format,

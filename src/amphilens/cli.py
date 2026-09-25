@@ -259,6 +259,9 @@ if typer is not None:
         run_id: str | None = typer.Option(None, "--run-id"),
         registry_dir: Path | None = typer.Option(None, "--registry-dir"),
         preprocessing: str = typer.Option("{}", "--preprocessing"),
+        max_dimension: int = typer.Option(640, "--max-dimension"),
+        grayscale: bool = typer.Option(True, "--grayscale/--no-grayscale"),
+        clahe: bool = typer.Option(False, "--clahe/--no-clahe"),
     ):
         """Run a compatible detector and persist resumable prediction artifacts."""
         store = ProjectStore(project_dir)
@@ -270,6 +273,12 @@ if typer is not None:
             raise ValueError("--preprocessing must be a JSON object") from exc
         if not isinstance(preprocessing_config, dict):
             raise ValueError("--preprocessing must be a JSON object")
+        if not preprocessing_config:
+            preprocessing_config = PreprocessingConfig(
+                max_dimension=max_dimension,
+                grayscale_enabled=grayscale,
+                clahe_enabled=clahe,
+            ).to_dict()
         checkpoint_manifest = None
         if registry_dir is not None:
             checkpoint_manifest = ModelRegistry(registry_dir).resolve(
@@ -291,7 +300,7 @@ if typer is not None:
             image_size=image_size,
             confidence=confidence,
             device=device,
-            preprocessing=str(preprocessing_config.get("name", "none")),
+            preprocessing=preprocessing_config,
             run_id=run_id or f"predict-{resolved_model_id}",
         )
         summary = run_resumable_inference(

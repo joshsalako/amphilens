@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0a1
+
+- Add the first guided local workflow for annotated dataset import, model
+  selection, shared preprocessing, training, prediction, and active learning.
+- Add immutable CVAT/COCO/YOLO dataset snapshots and reproducible project
+  configuration metadata.
+
 All notable changes to AmphiLens are recorded here.
 
 The project is currently pre-release. Version `0.1.0` is a foundation

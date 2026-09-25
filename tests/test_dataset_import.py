@@ -55,6 +55,7 @@ def test_imports_cvat_xml_zip_and_preserves_reviewed_negative(tmp_path: Path):
     assert negative.reviewed is True
     assert negative.annotations == []
     assert snapshot.manifest.source_format == "cvat-xml"
+    assert (snapshot.root / "source" / "cvat.zip").is_file()
 
 
 def test_imports_coco_zip_and_maps_classes_explicitly(tmp_path: Path):

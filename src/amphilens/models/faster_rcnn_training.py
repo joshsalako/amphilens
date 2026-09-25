@@ -256,7 +256,12 @@ class FasterRCNNTrainer:
         output.mkdir(parents=True, exist_ok=True)
         device = _select_torch_device(torch, str(config.get("device", "auto")))
         torch.manual_seed(int(config.get("seed", 42)))
-        model = fasterrcnn_resnet50_fpn_v2(weights=None, weights_backbone=None)
+        weights = None
+        if config.get("use_official_weights"):
+            from torchvision.models.detection import FasterRCNN_ResNet50_FPN_V2_Weights
+
+            weights = FasterRCNN_ResNet50_FPN_V2_Weights.DEFAULT
+        model = fasterrcnn_resnet50_fpn_v2(weights=weights, weights_backbone=None)
         in_features = model.roi_heads.box_predictor.cls_score.in_features
         model.roi_heads.box_predictor = FastRCNNPredictor(in_features, len(self.classes) + 1)
         model.to(device)

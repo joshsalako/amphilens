@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "amphilens"
-version = "0.1.0"
+version = "0.1.0a1"
 description = "Reproducible amphibian and wildlife camera-trap detection with active learning."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -22,6 +22,7 @@ ui = [
 ]
 inference = [
   "numpy>=1.24",
+  "opencv-python-headless>=4.10",
   "pillow>=10.0",
   "torch>=2.2",
   "torchvision>=0.17",
@@ -31,14 +32,22 @@ training = [
   "amphilens[inference]",
   "pyyaml>=6.0",
 ]
+cvat = [
+  "cvat-cli==2.76.0",
+  "cvat-sdk==2.76.0",
+]
 dev = [
   "amphilens[cli,inference]",
   "pytest>=8.0",
   "pytest-cov>=5.0",
   "ruff>=0.6",
 ]
+release = [
+  "build>=1.2",
+  "twine>=5.1",
+]
 all = [
-  "amphilens[cli,ui,inference,training]",
+  "amphilens[cli,ui,inference,training,cvat,release]",
 ]
 
 [project.scripts]

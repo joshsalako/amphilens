@@ -40,3 +40,11 @@ def test_project_config_defaults_match_paper_aligned_preprocessing():
     assert config.preprocessing.clahe_enabled is False
     assert config.evaluation == "not evaluated"
 
+
+def test_paper_aligned_project_preset_enables_clahe_and_phased_freezing():
+    config = ProjectConfig.paper_aligned(["toad"])
+
+    assert config.model_preset == "yolo26-l"
+    assert config.preprocessing.grayscale_enabled is True
+    assert config.preprocessing.clahe_enabled is True
+    assert config.freeze_strategy == "paper-phased"

@@ -1,14 +1,40 @@
-# Fine-tuning a Faster R-CNN checkpoint
+# Training and active learning
 
-AmphiLens can fine-tune Faster R-CNN from the portable YOLO bundle produced by
-the CVAT exchange. This path requires the optional `training` extra because it
-uses PyTorch, torchvision, NumPy, Pillow, and PyYAML.
+The normal path is the browser app. Create a project, import a labelled CVAT or
+YOLO ZIP, choose a model, and press **Train model**. The initial imported images
+are all used for training. AmphiLens does not invent a validation split; until
+you provide a separate validation dataset, reports say `evaluation: not evaluated`.
 
 Install the training runtime:
 
 ```bash
 python -m pip install -e ".[cli,inference,training]"
 ```
+
+The CLI equivalent is:
+
+```bash
+amphilens project create ./my-project \
+  --image-root /path/to/unlabelled-images \
+  --class-name toad
+amphilens dataset import ./my-project /path/to/initial-cvat-or-yolo.zip
+amphilens train ./my-project \
+  --output-dir ./my-project/checkpoints/cycle-0 \
+  --model-preset yolo26-l
+```
+
+The first supported model presets are YOLO26-L (`yolo26l.pt`), RT-DETR-L
+(`rtdetr-l.pt`), and Faster R-CNN ResNet-50 FPN v2. Official general-purpose
+weights are used when no local checkpoint is selected. A preset is not claimed
+to be the exact paper checkpoint until that checkpoint is supplied and recorded.
+
+## Initial dataset formats
+
+The import action accepts CVAT for Images 1.1 ZIP, COCO 1.0 ZIP, or YOLO ZIP
+with `images/`, labels, and `classes.txt` or `dataset.yaml`. Images with empty
+labels are retained as reviewed negatives. Archives are hashed, validated, and
+copied into immutable snapshots; original images and previous snapshots are
+never modified.
 
 The expected dataset bundle contains:
 
@@ -23,7 +49,7 @@ cycle-0/
 ```
 
 `dataset.yaml` must identify one training image directory and class order. The
-CVAT/YOLO export already writes the required fields:
+AmphiLens snapshot preparation writes the required fields:
 
 ```yaml
 path: /absolute/path/to/cycle-0
@@ -57,6 +83,21 @@ best = detector.train(
 )
 print(best)
 ```
+
+## Preprocessing
+
+The same configuration is used when preparing training data and when running
+inference:
+
+```text
+load image -> maximum-dimension resize -> optional grayscale -> optional CLAHE
+```
+
+The maximum dimension defaults to 640 and never enlarges a smaller image.
+Grayscale is on by default and is replicated into three channels. CLAHE is off
+for generic projects and uses `clip_limit=2.0` and an `(8, 8)` tile grid when
+enabled. Resizing happens first so CLAHE processes fewer pixels. A cache is
+keyed by the source hash and preprocessing fingerprint.
 
 The trainer writes `best.pt`, `last.pt`, and `metrics.json`. Metrics currently
 report training loss and explicitly record `evaluation: not evaluated`; a

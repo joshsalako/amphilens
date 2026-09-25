@@ -59,17 +59,19 @@ if the browser does not open automatically.
 
 1. Check the environment and available hardware.
 2. Create a project and choose the folder containing the camera-trap images.
-3. Choose the wildlife classes you want to detect and a compatible base model.
-4. Run prediction on the image collection.
-5. Review the active-learning queue and select images for annotation.
-6. Use the portable CVAT exchange to annotate the selected images.
-7. Import the completed annotations and use them for the next training cycle.
+3. Choose the wildlife classes, model, maximum image dimension, grayscale, and
+   optional CLAHE settings.
+4. If you already have labels, import a CVAT-for-Images or YOLO ZIP. The
+   archive must include its images.
+5. Train the initial model, or run the selected base model directly.
+6. Review the active-learning queue and annotate the selected images in CVAT.
+7. Import the completed annotations and train the next cycle.
 8. Download the predictions CSV, report, and visual evidence.
 
-The current release provides portable CVAT export/import. The one-button CVAT
-connection—create task, open CVAT, click Continue, import the annotations, and
-continue training—is planned and documented in the
-[implementation plan](docs/superpowers/plans/2026-09-25-amphilens-platform.md).
+AmphiLens keeps source images unchanged. By default it downsizes only images
+larger than 640 pixels on their longest side, preserves aspect ratio, converts
+to three-channel grayscale, and leaves CLAHE off for generic projects. Every
+choice is saved with the project and run.
 
 ## What you get
 
@@ -79,6 +81,13 @@ continue training—is planned and documented in the
   them.
 - A reproducible record of the model, settings, source images, and outputs.
 - Reusable model checkpoints when fine-tuning is enabled.
+
+## Hardware
+
+CPU inference works for small or moderate collections. A CUDA GPU is strongly
+recommended for fine-tuning and large collections. The app's **Environment**
+page and `amphilens doctor` show the installed libraries, GPU status, and free
+disk space before a run.
 
 ## Learn more
 

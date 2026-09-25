@@ -22,6 +22,11 @@ class DoctorReport:
     ultralytics_installed: bool
     streamlit_installed: bool
     cvat_exchange: bool = True
+    pillow_installed: bool = False
+    numpy_installed: bool = False
+    opencv_installed: bool = False
+    yaml_installed: bool = False
+    cvat_sdk_installed: bool = False
 
     def to_dict(self):
         return asdict(self)
@@ -47,4 +52,9 @@ def run_doctor(path: str | Path = ".") -> DoctorReport:
         cuda_available=cuda_available,
         ultralytics_installed=importlib.util.find_spec("ultralytics") is not None,
         streamlit_installed=importlib.util.find_spec("streamlit") is not None,
+        pillow_installed=importlib.util.find_spec("PIL") is not None,
+        numpy_installed=importlib.util.find_spec("numpy") is not None,
+        opencv_installed=importlib.util.find_spec("cv2") is not None,
+        yaml_installed=importlib.util.find_spec("yaml") is not None,
+        cvat_sdk_installed=importlib.util.find_spec("cvat_sdk") is not None,
     )

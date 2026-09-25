@@ -54,3 +54,24 @@ The first execution backend is local. Future backends consume the same job and a
 ## Quality bar
 
 The package uses typed modular interfaces, dependency-light core imports, lazy optional ML/UI dependencies, deterministic tests, model cards, contributor guidance, and plain-language documentation. It fails closed on missing images, invalid boxes, class mismatches, unsupported checkpoints, missing calibration evidence, and source/output collisions.
+
+## First usable app contracts
+
+The v1 user workflow accepts an unlabeled image folder and an optional initial
+annotated archive. CVAT for Images 1.1 XML, COCO 1.0, and YOLO ZIP archives
+must include image files. AmphiLens validates dimensions, boxes, classes,
+duplicate image content, corrupt files, and archive paths, then stores an
+immutable snapshot with the original archive hash and reviewed negative images.
+
+The shared preprocessing order is maximum-dimension resize, optional grayscale,
+and optional CLAHE, followed by three-channel model input. Resizing preserves
+aspect ratio and never enlarges images. Grayscale defaults on; CLAHE defaults
+off for generic projects and uses the paper-aligned `2.0`/`(8, 8)` settings
+when enabled. The same structured configuration and fingerprint are used by
+snapshot preparation and detector inference, and prediction boxes are mapped
+back to original dimensions.
+
+The first explicit product presets are YOLO26-L (`yolo26l.pt`), RT-DETR-L
+(`rtdetr-l.pt`), and Faster R-CNN ResNet-50 FPN v2. Official general-purpose
+weights are distinct from any future paper-specific checkpoint; the catalog
+does not claim equivalence without a recorded checkpoint source.

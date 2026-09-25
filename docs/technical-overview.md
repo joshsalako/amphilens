@@ -11,7 +11,12 @@ and a Typer command-line interface. Both use the same services:
 
 - `amphilens.core` stores project, run, model, checkpoint, and detection
   manifests.
-- `amphilens.models` provides YOLO, RT-DETR, and Faster R-CNN adapters.
+- `amphilens.models` provides explicit YOLO26-L, RT-DETR-L, and Faster R-CNN
+  ResNet-50 presets plus detector adapters.
+- `amphilens.dataset` validates CVAT XML, COCO, and YOLO archives and creates
+  immutable snapshots that can be prepared for training.
+- `amphilens.preprocessing` owns the shared resize, grayscale, CLAHE, cache,
+  and coordinate-mapping behavior.
 - `amphilens.inference` runs predictions, writes stable CSV files, and creates
   visual evidence.
 - `amphilens.active_learning` implements the default Hybrid PPAL selection
@@ -21,6 +26,25 @@ and a Typer command-line interface. Both use the same services:
 
 The package keeps source images untouched. Derived files are written to the
 project's artifact directories and retain mappings back to their source files.
+
+## Dataset import and preprocessing
+
+An initial labelled dataset is optional for prediction but required for
+fine-tuning. Supported archives must include image files. The importer checks
+archive safety, image readability, dimensions, duplicate content, classes, and
+bounding boxes, and retains zero-box reviewed images as negatives.
+
+The preprocessing contract is:
+
+```text
+source image -> max width/height cap -> grayscale (optional) -> CLAHE (optional)
+             -> three-channel model input
+```
+
+The source image is never overwritten. Detector boxes are mapped back to the
+original image dimensions before they are written to CSV. The exact structured
+configuration and fingerprint are recorded in project, run, dataset, and
+checkpoint metadata.
 
 ## Active-learning method
 
@@ -87,6 +111,14 @@ amphilens report \
 ```
 
 See the CLI help for the complete command set.
+
+Import an initial annotated archive and train from the newest snapshot:
+
+```bash
+amphilens dataset import ./my-project /path/to/initial-cvat-or-yolo.zip
+amphilens train ./my-project --output-dir ./my-project/checkpoints/cycle-0 \
+  --model-preset yolo26-l --max-dimension 640
+```
 
 ## CVAT exchange and managed integration
 

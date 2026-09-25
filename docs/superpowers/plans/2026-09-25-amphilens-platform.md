@@ -272,3 +272,35 @@ Before every checkpoint: run the complete test command, inspect `git diff --chec
 3. Add the CLI/UI one-button create, open, Continue, merge, and resume lifecycle over that service.
 4. Lock and smoke-test the Python 3.11 CPU/GPU dependency profile, then add the pinned CVAT Compose reference.
 5. Complete detector training/evaluation gates and keep this plan and checkpoint history current after each coherent implementation slice.
+
+## 2026-09-25 implementation update
+
+The first usable local workflow is now implemented and checkpointed in small
+commits:
+
+- `3e7d18a` adds `PreprocessingConfig`, the shared preprocessing service,
+  cache fingerprints, coordinate mapping, and persisted `ProjectConfig`.
+- `daa5a9e` adds CVAT XML, COCO, and YOLO ZIP import, archive/image hashes,
+  reviewed negatives, validation, immutable snapshots, and dataset merging.
+- `27068b5` adds the YOLO26-L, RT-DETR-L, and Faster R-CNN ResNet-50 catalog,
+  snapshot-to-training preparation, detector preprocessing, training CLI, and
+  the guided Streamlit workflow.
+
+The remaining release-critical work is deliberately explicit:
+
+1. Add managed CVAT create/open/status/Continue services over the pinned
+   `cvat-sdk==2.76.0` profile, while keeping portable ZIP exchange as the
+   recovery path.
+2. Add real runtime smoke tests for YOLO26-L, RT-DETR-L, Faster R-CNN, CPU
+   inference, and short CPU/GPU training with the locked Python 3.11 profile.
+3. Complete checkpoint artifact normalization (`best.pt`, `last.pt`, metrics,
+   logs), holdout evaluation when supplied, and full resume lineage.
+4. Add the pinned dependency lockfile and Docker/CVAT Compose smoke tests.
+5. Publish a clean prerelease to TestPyPI only after the exposed token has been
+   revoked and a fresh upload-scoped token is supplied through the process
+   environment. No token is stored in project files or shell configuration.
+
+The current dependency-light verification boundary is the complete Pytest
+suite with Pillow/Typer, Ruff, and `git diff --check`; the CLAHE path was also
+exercised with the installed OpenCV runtime. ML model downloads and GPU tests
+remain release-gate checks rather than being implied by the fixture suite.

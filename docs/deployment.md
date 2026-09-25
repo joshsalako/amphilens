@@ -12,6 +12,15 @@ amphilens app
 
 Use a CUDA-enabled Python environment for large-pool inference and training. The core package does not install CUDA automatically because PyTorch wheels depend on the host operating system and driver.
 
+The supported v1 release profile is Python 3.11. The `inference` extra includes
+Pillow, NumPy, OpenCV, PyTorch, torchvision, and Ultralytics. The `training`
+extra adds PyYAML. OpenCV is needed when CLAHE is enabled. Run `amphilens doctor`
+before the first project to see which optional runtime pieces are available.
+
+For managed CVAT compatibility, use the pinned CVAT Community `v2.76.0`
+profile with `cvat-sdk==2.76.0` and `cvat-cli==2.76.0`. Portable ZIP exchange
+does not require a CVAT server or CVAT credentials.
+
 ## Docker Compose reference deployment
 
 The CPU service runs the local Streamlit UI with explicit project and model volumes:
@@ -36,4 +45,3 @@ Training images should be pinned to a tested CUDA/PyTorch combination before use
 Remote execution will submit a serializable `JobSpec` containing project reference, model reference, configuration, code version, and input references. Workers return a `JobStatus` and an `ArtifactBundle` containing logs, predictions, checkpoints, metrics, and hashes.
 
 The planned order is local process → SSH/Slurm → Docker worker → provider-neutral cloud worker. Object storage, queues, metadata databases, authentication, and multi-user isolation belong to the hosted phase, not the local v1 contract.
-

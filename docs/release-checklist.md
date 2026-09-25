@@ -21,6 +21,10 @@ considered verified merely because the package builds.
 - [ ] Build both wheel and source distribution.
 - [ ] Install each artifact in a clean environment and run `amphilens doctor`.
 - [ ] Exercise a fixture prediction run, report generation, and CVAT round trip.
+- [ ] Exercise CVAT XML, COCO, and YOLO initial-dataset import, including a
+  reviewed negative image and an immutable merge.
+- [ ] Exercise the preprocessing fixture: grayscale, aspect-ratio-preserving
+  max-dimension resizing, no upscaling, resize-before-CLAHE, and box remapping.
 - [ ] If detector extras changed, run backend contract tests with each
   available runtime and record the exact versions and device.
 - [ ] If training changed, run a short CPU smoke test and a representative GPU
@@ -40,6 +44,11 @@ considered verified merely because the package builds.
   upgrade or migration notes.
 
 ## Publication
+
+- [ ] Build and install the package from TestPyPI in a clean Python 3.11
+  environment. Use a fresh upload-scoped token supplied through environment
+  variables only; never store it in the repository, shell history, logs, or
+  package metadata.
 
 - [ ] Verify PyPI package-name availability and the AmphiLens name/trademark
   status before public publication.

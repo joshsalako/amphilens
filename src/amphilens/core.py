@@ -98,6 +98,16 @@ class ProjectConfig:
                 f"Unsupported project config schema version: {self.schema_version}"
             )
 
+    @classmethod
+    def paper_aligned(cls, classes: Iterable[str]) -> ProjectConfig:
+        """Create the explicit research-oriented preset without claiming paper identity."""
+        return cls(
+            classes=list(classes),
+            model_preset="yolo26-l",
+            preprocessing=PreprocessingConfig(clahe_enabled=True),
+            freeze_strategy="paper-phased",
+        )
+
     def validate(self, expected_classes: Iterable[str] | None = None) -> None:
         _validate_classes(self.classes)
         if expected_classes is not None and self.classes != list(expected_classes):

@@ -262,6 +262,9 @@ class FasterRCNNDetector:
             resume_checkpoint = resume_from.checkpoint_path
         else:
             resume_checkpoint = None
+        if self.checkpoint is None and self.checkpoint_reference.startswith("torchvision://"):
+            config = dict(config)
+            config["use_official_weights"] = True
         return FasterRCNNTrainer(self.classes).train(
             dataset_yaml,
             output_dir,
