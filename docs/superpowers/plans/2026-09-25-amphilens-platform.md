@@ -44,6 +44,15 @@ Checkpoint history currently pushed to `origin/main`:
 - `1ae363a` auditable Hybrid PPAL queues
 - `338ab26` prediction reports
 - `d46a250` guided local Streamlit workflow
+- `bf84517` release metadata, CI, Ruff, and package-quality checks
+- `c8c97a5` manifest schema migration, atomic JSON, and artifact index
+- `f6b0956` CVAT payload integrity validation
+- `fe6251c` tracked detector adapters and backend contracts
+- `dce79b8` Faster R-CNN training interface
+- `cb581bf` checkpoint registry CLI
+- `8af82af` guided advanced controls
+- `46e6712` persisted run metadata and artifact indexing
+- `fa27b51` registry-enforced prediction compatibility
 
 ## Completed implementation slices
 
@@ -76,6 +85,18 @@ Current verification command (the local equivalent of the CI dependency-light jo
 ```bash
 PYTHONPATH=src UV_CACHE_DIR=/private/tmp/amphilens-uv-cache \
   uv run --with pytest --with pillow --with typer --no-project pytest -q
+
+Latest verification on 2026-09-25:
+
+- 45 tests passed; Ruff check and format check passed; `git diff --check` passed.
+- `uv build` produced `dist/amphilens-0.1.0-py3-none-any.whl` and
+  `dist/amphilens-0.1.0.tar.gz`.
+- Both artifacts imported as version `0.1.0` from isolated virtual environments.
+- The final tree was clean on `main`, tracking `origin/main` at `fa27b51`.
+- `gh auth status` confirmed active account `joshsalako` with HTTPS `repo` and
+  `workflow` scopes.
+- Optional PyTorch, torchvision, Ultralytics, Streamlit, and CUDA runtime
+  execution remains outside this dependency-light verification boundary.
 ```
 
 ## Remaining tasks
