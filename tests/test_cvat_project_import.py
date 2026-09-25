@@ -1,3 +1,4 @@
+import hashlib
 import io
 import json
 import zipfile
@@ -123,6 +124,24 @@ def test_sdk_transport_lists_project_tasks_and_exports_complete_project(tmp_path
     ]
 
 
+def test_sdk_transport_converts_project_access_failure_to_validation_error():
+    class DeniedProjects:
+        def list(self):
+            raise RuntimeError("403 forbidden")
+
+    client = type("Client", (), {"projects": DeniedProjects()})()
+    transport = CVATSdkTransport("https://cvat.example/", token="secret")
+    transport._load_sdk = lambda: (
+        lambda host, access_token: _ClientContext(client),
+        _Models,
+        type("ResourceType", (), {"LOCAL": "local"}),
+        type("Location", (), {"LOCAL": "local"}),
+    )
+
+    with pytest.raises(ValidationError, match="CVAT project listing failed"):
+        transport.list_projects()
+
+
 def _valid_project_archive(path: Path) -> Path:
     image = io.BytesIO()
     Image.new("RGB", (20, 10), color="black").save(image, format="JPEG")
@@ -188,6 +207,8 @@ def test_project_import_downloads_validates_and_records_remote_provenance(tmp_pa
         "task_ids": ["11"],
         "export_format": "CVAT for images 1.1",
         "client_version": "cvat-sdk==2.76.0",
+        "archive_filename": "cvat-project-7.zip",
+        "archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
     }
     assert (snapshot.root / "source" / "cvat-project-7.zip").is_file()
     assert "secret" not in json.dumps(snapshot.manifest.to_dict())

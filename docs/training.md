@@ -6,17 +6,33 @@ This guide describes the normal workflow after the browser app is installed.
 
 1. Create or open a project in the browser app.
 2. Set the image folder and the classes you want to detect.
-3. Import an initial CVAT, COCO, or YOLO archive if labelled images are
-   available.
+3. Import an initial annotated dataset from an existing CVAT project or a
+   local CVAT, COCO, or YOLO archive if labelled images are available.
 4. Confirm that the imported snapshot contains the expected images and classes.
 
 Initial imported images are all used for training. AmphiLens does not invent a
 validation split. Until a separate validation dataset is supplied, results say
 `evaluation: not evaluated`.
 
-## 2. Supported annotation archives
+## 2. Import the initial dataset
 
-Initial import accepts:
+### Import from an existing CVAT project
+
+1. Install the `cvat` extra and set `CVAT_URL` and `CVAT_TOKEN`.
+2. Open **Import initial dataset**.
+3. Choose **CVAT project** and press **Connect to CVAT**.
+4. Select the project containing the initial annotations.
+5. Confirm the labels or provide an explicit class mapping.
+6. Press **Import project**.
+
+AmphiLens exports the complete project through the CVAT API, including all
+tasks and images, then validates it through the same importer used for local
+archives. The dataset snapshot records the CVAT project ID, task IDs, server
+URL, export format, SDK version, and archive hash. Tokens are not recorded.
+
+### Import a local archive
+
+Initial local import accepts:
 
 1. CVAT for Images 1.1 ZIP;
 2. COCO 1.0 ZIP; or
@@ -89,7 +105,10 @@ The CLI equivalent is:
 amphilens project create ./my-project \
   --image-root /path/to/unlabelled-images \
   --class-name toad
-amphilens dataset import ./my-project /path/to/initial-cvat-or-yolo.zip
+amphilens cvat projects
+amphilens dataset import-cvat ./my-project --project-id 17
+# Local archive fallback:
+# amphilens dataset import ./my-project /path/to/initial-cvat-or-yolo.zip
 amphilens train ./my-project \
   --output-dir ./my-project/checkpoints/cycle-0 \
   --model-preset yolo26-l

@@ -52,9 +52,17 @@ uv run --locked amphilens app
 ```
 
 The supported managed profile uses CVAT Community `v2.76.0`,
-`cvat-sdk==2.76.0`, and `cvat-cli==2.76.0`. AmphiLens uploads images only when
-the user presses **Send to CVAT**. The token is not written to project files,
-manifests, logs, CSV files, URLs, or Git.
+`cvat-sdk==2.76.0`, and `cvat-cli==2.76.0`. The same connection supports two
+workflows:
+
+1. **Import initial annotations:** list existing CVAT projects, select one,
+   and download its complete project export with images through the API.
+2. **Active learning:** press **Send to CVAT** to create a task for a selected
+   review queue, then return to AmphiLens after annotation.
+
+The token is not written to project files, manifests, logs, CSV files, URLs, or
+Git. AmphiLens never changes or deletes an existing CVAT project during initial
+import.
 
 If images must remain entirely local, use the portable CVAT or YOLO ZIP
 exchange instead.

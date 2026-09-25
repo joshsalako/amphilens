@@ -25,6 +25,8 @@ considered verified merely because the package builds.
 - [ ] Exercise a fixture prediction run, report generation, and CVAT round trip.
 - [x] Exercise the managed CVAT fake-SDK contract; the live CVAT Community
   `v2.76.0` server contract remains pending.
+- [ ] Exercise direct CVAT project listing, selection, project export with
+  images, provenance recording, and duplicate-safe initial import.
 - [ ] Exercise CVAT XML, COCO, and YOLO initial-dataset import, including a
   reviewed negative image and an immutable merge.
 - [ ] Exercise the preprocessing fixture: grayscale, aspect-ratio-preserving

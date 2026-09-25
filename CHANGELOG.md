@@ -22,6 +22,8 @@ planned detector-training and remote-execution feature is production ready.
 
 - Continue hardening manifests, annotation validation, detector contracts,
   training workflows, and release automation.
+- Add direct CVAT project listing and whole-project initial dataset import
+  through the pinned CVAT SDK, with immutable snapshots and provenance.
 
 ## [0.1.0] - 2026-09-25
 

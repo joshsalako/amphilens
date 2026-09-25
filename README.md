@@ -95,25 +95,34 @@ The original image folder is never modified.
 
 ## 4. Import existing annotations
 
-If you already labelled some images, open **Import initial dataset** and select
-an archive containing both images and annotations.
+If you already labelled some images, open **Import initial dataset**. You can
+choose the recommended direct CVAT workflow or use a local archive.
 
-Supported formats are:
+### Import directly from CVAT
+
+1. Set `CVAT_URL` and `CVAT_TOKEN` before starting AmphiLens.
+2. Choose **CVAT project**.
+3. Press **Connect to CVAT**.
+4. Select the CVAT project containing your initial annotations.
+5. Review the labels and add a class mapping only when names differ.
+6. Press **Import project**.
+
+AmphiLens downloads the complete project, including all of its tasks and
+images, through the CVAT API. You do not need to download a ZIP manually.
+
+### Import a local archive
+
+Choose **Local archive** and select an archive containing both images and
+annotations. Supported formats are:
 
 - CVAT for Images 1.1 ZIP;
 - COCO 1.0 ZIP; and
 - YOLO ZIP with `classes.txt` or `dataset.yaml`.
 
-Then:
-
-1. Select the project folder.
-2. Select the annotation ZIP file.
-3. Add a class mapping only if the archive names differ from your project names.
-4. Press **Import initial dataset**.
-
 AmphiLens checks image files, dimensions, classes, and bounding boxes. Images
 with no boxes are kept as reviewed negatives. The imported dataset becomes an
-immutable snapshot.
+immutable snapshot, including the CVAT project and task provenance when the
+API workflow is used.
 
 ## 5. Choose the model and image settings
 

@@ -127,6 +127,12 @@ class CVATSdkTransport:
             return "cvat-sdk (version unavailable)"
 
     @staticmethod
+    def _raise_api_failure(operation: str, exc: Exception):
+        if isinstance(exc, ValidationError):
+            raise exc
+        raise ValidationError(f"CVAT {operation} failed: {exc}") from exc
+
+    @staticmethod
     def _status_value(value: Any) -> str | None:
         if value is None:
             return None
@@ -158,16 +164,22 @@ class CVATSdkTransport:
         )
 
     def list_projects(self) -> list[CVATProjectSummary]:
-        with self._client() as client:
-            return [self._project_summary(project) for project in client.projects.list()]
+        try:
+            with self._client() as client:
+                return [self._project_summary(project) for project in client.projects.list()]
+        except Exception as exc:  # noqa: BLE001 - normalize optional SDK failures
+            self._raise_api_failure("project listing", exc)
 
     def get_project(self, project_id: str) -> CVATProjectSummary:
         try:
             resolved_id = int(project_id)
         except (TypeError, ValueError) as exc:
             raise ValidationError(f"CVAT project ID must be an integer: {project_id!r}") from exc
-        with self._client() as client:
-            return self._project_summary(client.projects.retrieve(resolved_id))
+        try:
+            with self._client() as client:
+                return self._project_summary(client.projects.retrieve(resolved_id))
+        except Exception as exc:  # noqa: BLE001 - normalize optional SDK failures
+            self._raise_api_failure("project lookup", exc)
 
     def list_project_tasks(self, project_id: str) -> list[CVATTaskSummary]:
         return self.get_project(project_id).tasks
@@ -186,14 +198,17 @@ class CVATSdkTransport:
             resolved_id = int(project_id)
         except (TypeError, ValueError) as exc:
             raise ValidationError(f"CVAT project ID must be an integer: {project_id!r}") from exc
-        with self._client() as client:
-            project = client.projects.retrieve(resolved_id)
-            exported = project.export_dataset(
-                self.export_format,
-                target,
-                include_images=include_images,
-                location=location.LOCAL,
-            )
+        try:
+            with self._client() as client:
+                project = client.projects.retrieve(resolved_id)
+                exported = project.export_dataset(
+                    self.export_format,
+                    target,
+                    include_images=include_images,
+                    location=location.LOCAL,
+                )
+        except Exception as exc:  # noqa: BLE001 - normalize optional SDK failures
+            self._raise_api_failure("project export", exc)
         result = Path(exported).expanduser().resolve() if exported else target
         if not result.is_file():
             raise ValidationError(

@@ -112,12 +112,22 @@ amphilens report \
 
 See the CLI help for the complete command set.
 
-Import an initial annotated archive and train from the newest snapshot:
+Import an initial annotated CVAT project through the API and train from the
+newest snapshot:
+
+```bash
+export CVAT_URL=http://localhost:8080
+export CVAT_TOKEN='read-from-your-secret-store'
+amphilens cvat projects
+amphilens dataset import-cvat ./my-project --project-id 17
+amphilens train ./my-project --output-dir ./my-project/checkpoints/cycle-0 \
+  --model-preset yolo26-l --max-dimension 640
+```
+
+The local archive fallback remains available:
 
 ```bash
 amphilens dataset import ./my-project /path/to/initial-cvat-or-yolo.zip
-amphilens train ./my-project --output-dir ./my-project/checkpoints/cycle-0 \
-  --model-preset yolo26-l --max-dimension 640
 ```
 
 ## 5. CVAT exchange and managed integration
@@ -129,6 +139,14 @@ The current portable exchange writes:
 - a manifest mapping each review image to its original source path;
 - `classes.txt`; and
 - YOLO labels and `dataset.yaml` when YOLO exchange is requested.
+
+The initial CVAT import workflow uses the pinned SDK to list accessible
+projects, preview project labels and tasks, and export the selected complete
+project with images. The export is passed through `DatasetImporter` and becomes
+an immutable snapshot. Its provenance records the CVAT server URL, project ID
+and name, task IDs, export format, SDK version, and archive hash. The token is
+never recorded. Whole-project import is intentional in v1; selecting one task
+or reusing local images without downloading is not supported yet.
 
 The managed workflow uses the official `cvat-sdk==2.76.0` profile. It creates
 or reuses one CVAT project per AmphiLens project, creates one task per

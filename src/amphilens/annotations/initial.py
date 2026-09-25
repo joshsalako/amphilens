@@ -83,6 +83,8 @@ class CVATProjectImportService:
                     getattr(self.transport, "export_format", "CVAT for images 1.1")
                 ),
                 "client_version": str(getattr(self.transport, "client_version", "unknown")),
+                "archive_filename": exported.name,
+                "archive_sha256": _sha256(exported),
             }
             return self.store.import_dataset(
                 exported,
