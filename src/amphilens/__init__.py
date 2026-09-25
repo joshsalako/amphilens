@@ -1,6 +1,7 @@
 """AmphiLens: reproducible wildlife camera-trap detection."""
 
 from .core import (
+    ArtifactRecord,
     CheckpointManifest,
     DetectionRecord,
     InferenceConfig,
@@ -8,6 +9,7 @@ from .core import (
     ProjectManifest,
     ProjectStore,
     RunManifest,
+    atomic_write_json,
 )
 from .curation import write_selection_artifacts
 from .execution import JobHandle, JobSpec, JobStatus, LocalExecutionBackend
@@ -17,6 +19,7 @@ from .runs import RunSummary, run_resumable_inference
 
 __all__ = [
     "CheckpointManifest",
+    "ArtifactRecord",
     "DetectionRecord",
     "InferenceConfig",
     "ModelManifest",
@@ -32,6 +35,7 @@ __all__ = [
     "LocalExecutionBackend",
     "write_selection_artifacts",
     "write_report",
+    "atomic_write_json",
 ]
 
 __version__ = "0.1.0"

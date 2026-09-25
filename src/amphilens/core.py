@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import platform
 import sys
+import tempfile
 import uuid
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
@@ -28,6 +30,9 @@ class SourceCollisionError(AmphiLensError):
 
 class UnsupportedCheckpointError(AmphiLensError):
     """Raised when a checkpoint is incompatible with a requested run."""
+
+
+CURRENT_SCHEMA_VERSION = 1
 
 
 def utc_now() -> str:
@@ -53,6 +58,109 @@ def _validate_classes(classes: Iterable[str]) -> list[str]:
     if len(values) != len(set(values)):
         raise ValidationError("Class names must be unique")
     return values
+
+
+def _migrate_manifest_data(data: dict[str, Any], kind: str) -> dict[str, Any]:
+    """Migrate pre-versioned manifests and reject versions we cannot read."""
+    migrated = dict(data)
+    version = migrated.get("schema_version", 0)
+    if not isinstance(version, int):
+        raise ValidationError(f"{kind} manifest schema version must be an integer")
+    if version > CURRENT_SCHEMA_VERSION:
+        raise ValidationError(
+            f"{kind} manifest schema version {version} is newer than supported "
+            f"version {CURRENT_SCHEMA_VERSION}"
+        )
+    if version == 0:
+        if kind == "project" and "image_root" in migrated and "image_roots" not in migrated:
+            migrated["image_roots"] = [migrated.pop("image_root")]
+        if kind == "checkpoint" and "preprocess" in migrated and "preprocessing" not in migrated:
+            migrated["preprocessing"] = migrated.pop("preprocess")
+        migrated["schema_version"] = CURRENT_SCHEMA_VERSION
+    return migrated
+
+
+def atomic_write_json(path: str | Path, value: Any) -> None:
+    """Write JSON by replacement so an interrupted write keeps the old file."""
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            delete=False,
+        ) as handle:
+            json.dump(value, handle, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+            temporary = Path(handle.name)
+        os.replace(temporary, destination)
+    except Exception:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+        raise
+
+
+def read_json(path: str | Path) -> Any:
+    """Read JSON and recover a valid interrupted temporary write if needed."""
+    destination = Path(path)
+    try:
+        return json.loads(destination.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        candidates = sorted(
+            destination.parent.glob(f".{destination.name}.*"),
+            key=lambda candidate: candidate.stat().st_mtime,
+            reverse=True,
+        )
+        for candidate in candidates:
+            try:
+                value = json.loads(candidate.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                candidate.unlink(missing_ok=True)
+                continue
+            os.replace(candidate, destination)
+            return value
+        raise
+
+
+def _validate_run_id(run_id: str) -> None:
+    safe_characters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+    if not run_id or any(character not in safe_characters for character in run_id):
+        raise ValidationError("run_id must be a safe path component")
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactRecord:
+    relative_path: str
+    sha256: str
+    artifact_type: str
+    cycle: int | None = None
+    producer_run: str | None = None
+    created_at: str = field(default_factory=utc_now)
+
+    def __post_init__(self) -> None:
+        relative = Path(self.relative_path)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise ValidationError("Artifact paths must be relative to the project")
+        if not self.artifact_type.strip():
+            raise ValidationError("Artifact type cannot be empty")
+        if len(self.sha256) != 64 or any(
+            character not in "0123456789abcdef" for character in self.sha256.lower()
+        ):
+            raise ValidationError("Artifact sha256 must be a 64-character hexadecimal digest")
+        if self.cycle is not None and self.cycle < 0:
+            raise ValidationError("Artifact cycle cannot be negative")
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ArtifactRecord:
+        return cls(**data)
 
 
 @dataclass(slots=True)
@@ -89,12 +197,19 @@ class ProjectManifest:
             metadata=dict(metadata or {}),
         )
 
-    def validate(self) -> None:
+    def validate(self, require_existing_roots: bool = True) -> None:
         if not self.name.strip():
             raise ValidationError("Project name cannot be empty")
         _validate_classes(self.classes)
         if not self.image_roots:
             raise ValidationError("At least one image root is required")
+        roots = [_resolve(root) for root in self.image_roots]
+        if len(roots) != len(set(roots)):
+            raise ValidationError("Image roots must be unique")
+        if require_existing_roots:
+            missing = [str(root) for root in roots if not root.exists()]
+            if missing:
+                raise ValidationError(f"Image root does not exist: {missing[0]}")
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
@@ -102,7 +217,7 @@ class ProjectManifest:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ProjectManifest:
-        manifest = cls(**data)
+        manifest = cls(**_migrate_manifest_data(data, "project"))
         manifest.validate()
         return manifest
 
@@ -137,6 +252,8 @@ class RunManifest:
     status: str
     config: dict[str, Any]
     software: dict[str, str]
+    schema_version: int = CURRENT_SCHEMA_VERSION
+    finished_at: str | None = None
 
     @classmethod
     def create(cls, kind: str, config: dict[str, Any]) -> RunManifest:
@@ -148,6 +265,23 @@ class RunManifest:
             config=config,
             software={"python": sys.version.split()[0], "platform": platform.platform()},
         )
+
+    def validate(self) -> None:
+        if self.schema_version != CURRENT_SCHEMA_VERSION:
+            raise ValidationError(f"Unsupported run manifest schema version: {self.schema_version}")
+        _validate_run_id(self.run_id)
+        if not self.kind.strip():
+            raise ValidationError("Run kind cannot be empty")
+
+    def to_dict(self) -> dict[str, Any]:
+        self.validate()
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> RunManifest:
+        manifest = cls(**_migrate_manifest_data(data, "run"))
+        manifest.validate()
+        return manifest
 
 
 @dataclass(slots=True)
@@ -257,6 +391,7 @@ class CheckpointManifest:
     parent_checkpoint: str | None = None
     software: dict[str, str] = field(default_factory=dict)
     training_config: dict[str, Any] = field(default_factory=dict)
+    schema_version: int = CURRENT_SCHEMA_VERSION
 
     @classmethod
     def create(
@@ -287,6 +422,27 @@ class CheckpointManifest:
             training_config=dict(training_config or {}),
         )
 
+    def validate(self) -> None:
+        if self.schema_version != CURRENT_SCHEMA_VERSION:
+            raise ValidationError(
+                f"Unsupported checkpoint manifest schema version: {self.schema_version}"
+            )
+        if not self.model_id.strip() or not self.architecture.strip():
+            raise ValidationError("Checkpoint model_id and architecture are required")
+        _validate_classes(self.classes)
+        if len(self.sha256) != 64:
+            raise ValidationError("Checkpoint sha256 must be a 64-character digest")
+
+    def to_dict(self) -> dict[str, Any]:
+        self.validate()
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> CheckpointManifest:
+        manifest = cls(**_migrate_manifest_data(data, "checkpoint"))
+        manifest.validate()
+        return manifest
+
     def validate_compatibility(
         self,
         *,
@@ -294,6 +450,7 @@ class CheckpointManifest:
         classes: Iterable[str],
         preprocessing: dict[str, Any],
     ) -> None:
+        self.validate()
         if self.architecture != architecture:
             raise UnsupportedCheckpointError(
                 f"Checkpoint architecture {self.architecture!r} does not match {architecture!r}"
@@ -315,40 +472,92 @@ class ProjectStore:
         destination = _resolve(output_dir or self.root)
         roots = [_resolve(root) for root in manifest.image_roots]
         for root in roots:
-            if _is_same_or_inside(destination, root) or _is_same_or_inside(root, destination):
-                raise SourceCollisionError(
-                    f"Project output {destination} overlaps source image root {root}"
-                )
+            for candidate in (self.root, destination):
+                if _is_same_or_inside(candidate, root) or _is_same_or_inside(root, candidate):
+                    raise SourceCollisionError(
+                        f"Project output {candidate} overlaps source image root {root}"
+                    )
         self.root.mkdir(parents=True, exist_ok=True)
         for directory in ("runs", "artifacts", "checkpoints", "annotations"):
             (self.root / directory).mkdir(exist_ok=True)
-        (self.root / "manifest.json").write_text(
-            json.dumps(manifest.to_dict(), indent=2) + "\n", encoding="utf-8"
-        )
+        atomic_write_json(self.root / "manifest.json", manifest.to_dict())
 
     def load_manifest(self) -> ProjectManifest:
         path = self.root / "manifest.json"
         if not path.is_file():
             raise ValidationError(f"Project manifest not found: {path}")
-        return ProjectManifest.from_dict(json.loads(path.read_text(encoding="utf-8")))
+        return ProjectManifest.from_dict(read_json(path))
 
     def start_run(self, config: InferenceConfig, kind: str = "inference") -> RunManifest:
         run = RunManifest.create(kind, config.to_dict())
         if config.run_id:
+            _validate_run_id(config.run_id)
             run.run_id = config.run_id
+        run.validate()
         run_dir = self.root / "runs" / run.run_id
         run_dir.mkdir(parents=True, exist_ok=False)
-        (run_dir / "run.json").write_text(json.dumps(asdict(run), indent=2) + "\n")
+        atomic_write_json(run_dir / "run.json", run.to_dict())
         return run
 
     def complete_run(self, run_id: str, status: str = "completed") -> None:
         path = self.root / "runs" / run_id / "run.json"
         if not path.is_file():
             raise ValidationError(f"Run manifest not found: {run_id}")
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = read_json(path)
         data["status"] = status
         data["finished_at"] = utc_now()
-        path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        atomic_write_json(path, data)
+
+    def register_artifact(
+        self,
+        artifact_path: str | Path,
+        *,
+        artifact_type: str,
+        cycle: int | None = None,
+        producer_run: str | None = None,
+    ) -> ArtifactRecord:
+        path = _resolve(artifact_path)
+        if not path.is_file():
+            raise ValidationError(f"Artifact does not exist: {path}")
+        if not _is_same_or_inside(path, self.root):
+            raise ValidationError("Artifact must be inside the project root")
+        relative = path.relative_to(self.root).as_posix()
+        if relative == "artifacts/index.json":
+            raise ValidationError("The artifact index cannot register itself")
+        record = ArtifactRecord(
+            relative_path=relative,
+            sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+            artifact_type=artifact_type,
+            cycle=cycle,
+            producer_run=producer_run,
+        )
+        records = {item.relative_path: item for item in self.load_artifact_index()}
+        records[record.relative_path] = record
+        index_path = self.root / "artifacts" / "index.json"
+        atomic_write_json(
+            index_path,
+            {
+                "schema_version": CURRENT_SCHEMA_VERSION,
+                "artifacts": [
+                    item.to_dict()
+                    for item in sorted(records.values(), key=lambda value: value.relative_path)
+                ],
+            },
+        )
+        return record
+
+    def load_artifact_index(self) -> list[ArtifactRecord]:
+        path = self.root / "artifacts" / "index.json"
+        if not path.is_file():
+            return []
+        data = read_json(path)
+        version = data.get("schema_version", 0)
+        if version > CURRENT_SCHEMA_VERSION:
+            raise ValidationError(f"Unsupported artifact index schema version: {version}")
+        records = [ArtifactRecord.from_dict(item) for item in data.get("artifacts", [])]
+        if len({item.relative_path for item in records}) != len(records):
+            raise ValidationError("Artifact index contains duplicate paths")
+        return sorted(records, key=lambda item: item.relative_path)
 
 
 def iter_images(roots: Iterable[str | Path]) -> list[Path]:

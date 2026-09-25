@@ -67,7 +67,7 @@ Checkpoint history currently pushed to `origin/main`:
 - [x] Add serializable `JobSpec`/`JobStatus` contracts and a local execution backend.
 - [x] Add CPU/CUDA Dockerfiles, Docker Compose reference deployment, and deployment documentation.
 - [x] Implement environment diagnostics, Typer CLI shell, and Streamlit shell.
-- [x] Verify the current suite: 26 tests passing with CLI dependencies, including PPAL artifacts, reports, UI helpers, and deployment-contract coverage.
+- [x] Verify the current suite: 30 tests passing with CLI dependencies, including PPAL artifacts, reports, UI helpers, deployment-contract coverage, and manifest/artifact hardening.
 - [x] Add Apache-2.0 license, changelog, security/privacy note, code of conduct, and GitHub Actions CI for supported Python versions.
 
 Current verification command (the local equivalent of the CI dependency-light job):
@@ -103,11 +103,11 @@ Remote verification: `origin` is `https://github.com/joshsalako/amphilens.git`; 
 
 ### Task 1: Harden core contracts and artifact storage — in progress
 
-- [ ] Add schema version migrations for project, run, and checkpoint manifests.
-- [ ] Add atomic JSON writes and recovery for interrupted writes.
-- [ ] Add manifest validation for missing image roots, duplicate class IDs, invalid output paths, and stale checkpoint hashes.
-- [ ] Add an explicit artifact index containing relative artifact paths, SHA-256, type, cycle, and producer run.
-- [ ] Add tests for interrupted writes, stale hashes, nested source/output collisions, and manifest round trips.
+- [x] Add schema version migrations for project, run, and checkpoint manifests.
+- [x] Add atomic JSON writes and recovery for interrupted writes.
+- [ ] Add remaining manifest validation for duplicate class IDs and all output-path forms; missing roots, unsafe run IDs, nested collisions, and stale checkpoint hashes are covered.
+- [x] Add an explicit artifact index containing relative artifact paths, SHA-256, type, cycle, and producer run.
+- [x] Add tests for interrupted writes, stale hashes, nested source/output collisions, and manifest round trips.
 
 ### Task 2: Complete model registry and detector contracts
 

@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .core import CheckpointManifest, ValidationError
+from .core import CheckpointManifest, ValidationError, atomic_write_json, read_json
 
 
 @dataclass(slots=True)
@@ -71,7 +70,7 @@ def train_and_register(
         parent_checkpoint=resume_from.checkpoint_path if resume_from else None,
         training_config=training_config,
     )
-    (output / "checkpoint.json").write_text(json.dumps(asdict(manifest), indent=2) + "\n")
+    atomic_write_json(output / "checkpoint.json", manifest.to_dict())
     return TrainingResult(checkpoint=checkpoint, manifest=manifest)
 
 
@@ -79,4 +78,4 @@ def load_checkpoint_manifest(path: str | Path) -> CheckpointManifest:
     manifest_path = Path(path).expanduser().resolve()
     if manifest_path.is_dir():
         manifest_path = manifest_path / "checkpoint.json"
-    return CheckpointManifest(**json.loads(manifest_path.read_text(encoding="utf-8")))
+    return CheckpointManifest.from_dict(read_json(manifest_path))

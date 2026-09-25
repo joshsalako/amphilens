@@ -1,15 +1,21 @@
+import json
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
 
+import amphilens.core as core
 from amphilens.core import (
+    ArtifactRecord,
     CheckpointManifest,
     DetectionRecord,
     InferenceConfig,
     ProjectManifest,
     ProjectStore,
+    RunManifest,
     SourceCollisionError,
     UnsupportedCheckpointError,
+    ValidationError,
 )
 
 
@@ -81,3 +87,91 @@ def test_checkpoint_compatibility_requires_matching_classes_and_architecture(tmp
         manifest.validate_compatibility(
             architecture="rtdetr", classes=["toad"], preprocessing={"name": "clahe"}
         )
+
+
+def test_unversioned_manifests_are_migrated_and_future_versions_fail(tmp_path: Path):
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    project = ProjectManifest.create("legacy", [image_dir], ["toad"])
+    legacy_project = project.to_dict()
+    legacy_project.pop("schema_version")
+    assert ProjectManifest.from_dict(legacy_project).schema_version == 1
+
+    run = RunManifest.create("inference", {"model_id": "fixture"})
+    legacy_run = asdict(run)
+    legacy_run.pop("schema_version")
+    assert RunManifest.from_dict(legacy_run).schema_version == 1
+
+    checkpoint_path = tmp_path / "best.pt"
+    checkpoint_path.write_bytes(b"checkpoint")
+    checkpoint = CheckpointManifest.create(
+        checkpoint_path,
+        model_id="fixture",
+        architecture="yolo",
+        classes=["toad"],
+        preprocessing={},
+    )
+    legacy_checkpoint = asdict(checkpoint)
+    legacy_checkpoint.pop("schema_version")
+    assert CheckpointManifest.from_dict(legacy_checkpoint).schema_version == 1
+
+    future = project.to_dict()
+    future["schema_version"] = 99
+    with pytest.raises(ValidationError, match="schema version"):
+        ProjectManifest.from_dict(future)
+
+
+def test_atomic_json_write_keeps_previous_document_on_replace_failure(tmp_path: Path, monkeypatch):
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps({"state": "old"}) + "\n", encoding="utf-8")
+
+    def fail_replace(*args, **kwargs):
+        raise OSError("simulated interruption")
+
+    monkeypatch.setattr(core.os, "replace", fail_replace)
+    with pytest.raises(OSError, match="simulated interruption"):
+        core.atomic_write_json(path, {"state": "new"})
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {"state": "old"}
+    assert list(tmp_path.glob(".state.json.*")) == []
+
+
+def test_artifact_index_records_relative_path_hash_and_producer(tmp_path: Path):
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    store = ProjectStore(tmp_path / "project")
+    store.create(ProjectManifest.create("artifacts", [image_dir], ["toad"]))
+    artifact = store.root / "artifacts" / "predictions.csv"
+    artifact.write_text("image_id\ntrap-1\n", encoding="utf-8")
+
+    record = store.register_artifact(
+        artifact, artifact_type="predictions", cycle=2, producer_run="run-123"
+    )
+    assert record == ArtifactRecord(
+        relative_path="artifacts/predictions.csv",
+        sha256=record.sha256,
+        artifact_type="predictions",
+        cycle=2,
+        producer_run="run-123",
+        created_at=record.created_at,
+    )
+    saved = store.load_artifact_index()
+    assert [item.relative_path for item in saved] == ["artifacts/predictions.csv"]
+    assert saved[0].sha256 == record.sha256
+
+
+def test_project_store_rejects_unsafe_run_ids_and_missing_source_roots(tmp_path: Path):
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    store = ProjectStore(tmp_path / "project")
+    store.create(ProjectManifest.create("runs", [image_dir], ["toad"]))
+    with pytest.raises(ValidationError, match="run_id"):
+        store.start_run(InferenceConfig(model_id="fixture", run_id="../escape"))
+
+    missing = ProjectManifest(
+        name="missing",
+        classes=["toad"],
+        image_roots=[str(tmp_path / "does-not-exist")],
+    )
+    with pytest.raises(ValidationError, match="does not exist"):
+        missing.validate()

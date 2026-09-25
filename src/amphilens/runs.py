@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-from .core import DetectionRecord, InferenceConfig, SourceCollisionError
+from .core import (
+    DetectionRecord,
+    InferenceConfig,
+    SourceCollisionError,
+    atomic_write_json,
+    read_json,
+)
 from .inference import write_predictions_csv
 
 
@@ -22,16 +26,6 @@ class RunSummary:
     detection_count: int
     predictions_csv: Path
     summary_json: Path
-
-
-def _atomic_json(path: Path, value: dict) -> None:
-    with tempfile.NamedTemporaryFile(
-        mode="w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", delete=False
-    ) as handle:
-        json.dump(value, handle, indent=2)
-        handle.write("\n")
-        temporary = Path(handle.name)
-    os.replace(temporary, path)
 
 
 def _load_jsonl(path: Path) -> list[DetectionRecord]:
@@ -65,7 +59,7 @@ def run_resumable_inference(
         "failed_images": {},
     }
     if progress_path.is_file():
-        progress = json.loads(progress_path.read_text())
+        progress = read_json(progress_path)
         if progress.get("run_id") != config.run_id or progress.get("model_id") != config.model_id:
             raise ValueError("Existing inference artifacts belong to a different run or model")
     completed = set(progress.get("completed_images", []))
@@ -88,7 +82,7 @@ def run_resumable_inference(
             failures.pop(image_path, None)
         except Exception as exc:  # noqa: BLE001 - persisted as a user-visible image failure
             failures[image_path] = f"{type(exc).__name__}: {exc}"
-        _atomic_json(
+        atomic_write_json(
             progress_path,
             {
                 "run_id": config.run_id,
@@ -109,7 +103,7 @@ def run_resumable_inference(
         "predictions_csv": str(predictions_csv),
     }
     summary_path = artifact / "summary.json"
-    _atomic_json(summary_path, summary)
+    atomic_write_json(summary_path, summary)
     return RunSummary(
         run_id=config.run_id,
         image_count=len(paths),

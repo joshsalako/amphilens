@@ -3,24 +3,16 @@
 from __future__ import annotations
 
 import hashlib
-import json
-import os
-import tempfile
-from dataclasses import asdict
 from pathlib import Path
 
-from .core import CheckpointManifest, ModelManifest, UnsupportedCheckpointError, ValidationError
-
-
-def _atomic_json_write(path: Path, value: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        mode="w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", delete=False
-    ) as handle:
-        json.dump(value, handle, indent=2)
-        handle.write("\n")
-        temporary = Path(handle.name)
-    os.replace(temporary, path)
+from .core import (
+    CheckpointManifest,
+    ModelManifest,
+    UnsupportedCheckpointError,
+    ValidationError,
+    atomic_write_json,
+    read_json,
+)
 
 
 class ModelRegistry:
@@ -40,8 +32,8 @@ class ModelRegistry:
         if checkpoint.model_id != model.model_id:
             raise ValidationError("Model and checkpoint ids must match")
         directory = self.root / model.model_id
-        _atomic_json_write(directory / "model.json", model.to_dict())
-        _atomic_json_write(directory / "checkpoint.json", asdict(checkpoint))
+        atomic_write_json(directory / "model.json", model.to_dict())
+        atomic_write_json(directory / "checkpoint.json", checkpoint.to_dict())
 
     def list_models(self) -> list[str]:
         return sorted(
@@ -53,10 +45,8 @@ class ModelRegistry:
     def get(self, model_id: str) -> tuple[ModelManifest, CheckpointManifest]:
         directory = self.root / model_id
         try:
-            model = ModelManifest.from_dict(json.loads((directory / "model.json").read_text()))
-            checkpoint = CheckpointManifest(
-                **json.loads((directory / "checkpoint.json").read_text())
-            )
+            model = ModelManifest.from_dict(read_json(directory / "model.json"))
+            checkpoint = CheckpointManifest.from_dict(read_json(directory / "checkpoint.json"))
         except FileNotFoundError as exc:
             raise ValidationError(f"Registered model not found: {model_id}") from exc
         return model, checkpoint
