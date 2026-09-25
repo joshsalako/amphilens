@@ -82,7 +82,9 @@ class LocalExecutionBackend:
             raise ValidationError(f"Job not found: {job_id}")
         return JobStatus(**json.loads(path.read_text()))
 
-    def update(self, job_id: str, state: str, message: str = "", artifacts: list[str] | None = None) -> JobStatus:
+    def update(
+        self, job_id: str, state: str, message: str = "", artifacts: list[str] | None = None
+    ) -> JobStatus:
         status = JobStatus(job_id, state, _now(), message, artifacts or [])
         self._write_status(status)
         return status
@@ -90,4 +92,3 @@ class LocalExecutionBackend:
     def _write_status(self, status: JobStatus) -> None:
         path = self.root / status.job_id / "status.json"
         path.write_text(json.dumps(asdict(status), indent=2) + "\n")
-

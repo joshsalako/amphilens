@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from dataclasses import dataclass, field
-from typing import Iterable
+from collections.abc import Iterable
+from dataclasses import dataclass
 
 from .core import DetectionRecord, ValidationError
 
@@ -53,7 +53,8 @@ def calibrate_ppal(
     rows = list(evidence)
     if not rows:
         raise CalibrationRequiredError(
-            "Hybrid PPAL requires validation evidence; provide matched validation difficulty records"
+            "Hybrid PPAL requires validation evidence; provide matched "
+            "validation difficulty records"
         )
     by_class: dict[str, list[float]] = defaultdict(list)
     for row in rows:
@@ -96,9 +97,7 @@ def calibrate_ppal_from_matches(
                 ),
             }
         )
-    return calibrate_ppal(
-        evidence, classes=classes, xi=xi, alpha=alpha, beta=beta
-    )
+    return calibrate_ppal(evidence, classes=classes, xi=xi, alpha=alpha, beta=beta)
 
 
 @dataclass(slots=True)
@@ -172,13 +171,19 @@ class HybridPPALStrategy:
             best = max(image_records, key=lambda item: item.confidence or 0.0)
             score = sum(
                 calibration.weights.get(record.class_name, 1.0)
-                * (self.config.priority_weight if record.class_name == self.config.priority_class else 1.0)
+                * (
+                    self.config.priority_weight
+                    if record.class_name == self.config.priority_class
+                    else 1.0
+                )
                 * _entropy(record.confidence or 0.0, len(calibration.classes))
                 for record in image_records
             )
             image_scores.append((image_path, best.class_name, score))
         image_scores.sort(key=lambda row: (-row[2], row[0]))
-        pool = image_scores[: min(len(image_scores), self.config.budget * self.config.pool_multiplier)]
+        pool = image_scores[
+            : min(len(image_scores), self.config.budget * self.config.pool_multiplier)
+        ]
         if not pool:
             return []
 
@@ -187,7 +192,9 @@ class HybridPPALStrategy:
         available_by_class: dict[str, tuple[str, str, float]] = {}
         for candidate in pool:
             available_by_class.setdefault(candidate[1], candidate)
-        for candidate in sorted(available_by_class.values(), key=lambda row: (-row[2], row[1], row[0])):
+        for candidate in sorted(
+            available_by_class.values(), key=lambda row: (-row[2], row[1], row[0])
+        ):
             if len(chosen) >= min(self.config.budget, len(pool)):
                 break
             chosen.append((*candidate, "hybrid_ppal:class_coverage+dcus_uncertainty"))

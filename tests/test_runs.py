@@ -43,13 +43,10 @@ def test_resumable_inference_records_failures_and_resumes(tmp_path: Path):
     assert first.completed_images == 1
     assert first.failed_images == [str(images[1].resolve())]
 
-    second = run_resumable_inference(
-        RecoverableDetector(), images, config, tmp_path / "artifacts"
-    )
+    second = run_resumable_inference(RecoverableDetector(), images, config, tmp_path / "artifacts")
     assert second.completed_images == 2
     assert second.failed_images == []
     rows = (tmp_path / "artifacts" / "predictions.csv").read_text().splitlines()
     assert len(rows) == 3
     progress = json.loads((tmp_path / "artifacts" / "progress.json").read_text())
     assert len(progress["completed_images"]) == 2
-

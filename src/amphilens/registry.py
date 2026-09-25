@@ -54,7 +54,9 @@ class ModelRegistry:
         directory = self.root / model_id
         try:
             model = ModelManifest.from_dict(json.loads((directory / "model.json").read_text()))
-            checkpoint = CheckpointManifest(**json.loads((directory / "checkpoint.json").read_text()))
+            checkpoint = CheckpointManifest(
+                **json.loads((directory / "checkpoint.json").read_text())
+            )
         except FileNotFoundError as exc:
             raise ValidationError(f"Registered model not found: {model_id}") from exc
         return model, checkpoint
@@ -69,7 +71,9 @@ class ModelRegistry:
     ) -> CheckpointManifest:
         model, checkpoint = self.get(model_id)
         if model.architecture != architecture or model.classes != classes:
-            raise UnsupportedCheckpointError("Registered model metadata does not match the requested run")
+            raise UnsupportedCheckpointError(
+                "Registered model metadata does not match the requested run"
+            )
         checkpoint.validate_compatibility(
             architecture=architecture, classes=classes, preprocessing=preprocessing
         )
@@ -80,4 +84,3 @@ class ModelRegistry:
         if current_hash != checkpoint.sha256:
             raise UnsupportedCheckpointError("Registered checkpoint hash does not match the file")
         return checkpoint
-

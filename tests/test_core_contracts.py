@@ -81,4 +81,3 @@ def test_checkpoint_compatibility_requires_matching_classes_and_architecture(tmp
         manifest.validate_compatibility(
             architecture="rtdetr", classes=["toad"], preprocessing={"name": "clahe"}
         )
-

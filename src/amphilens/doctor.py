@@ -7,7 +7,7 @@ import os
 import platform
 import shutil
 import sys
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 
@@ -48,4 +48,3 @@ def run_doctor(path: str | Path = ".") -> DoctorReport:
         ultralytics_installed=importlib.util.find_spec("ultralytics") is not None,
         streamlit_installed=importlib.util.find_spec("streamlit") is not None,
     )
-

@@ -30,7 +30,20 @@
 
 `wlt-app` was initially empty and required an elevated local Git initialization because the managed workspace rejected `.git` writes. Git is now initialized on `main`, the requested `origin` is configured, and the first checkpoint is pushed.
 
-GitHub CLI inspection on 2026-09-25 reported invalid tokens for both `joshDrio` and `joshsalako`. `gh auth switch` alone will not work until the `joshsalako` account is authenticated again.
+GitHub CLI was switched to `joshsalako` on 2026-09-25. Fresh `gh auth status`
+confirmed that account as the active HTTPS identity with `repo` and `workflow`
+scopes; `origin` is `https://github.com/joshsalako/amphilens.git`.
+
+Checkpoint history currently pushed to `origin/main`:
+
+- `9195577` foundation, contracts, docs, and tests
+- `7df9928` model registry and checkpoint validation
+- `2cce326` resumable inference and class-aware PPAL
+- `2e09aa0` CVAT and project CLI workflows
+- `baee771` execution contracts and Docker deployment foundations
+- `1ae363a` auditable Hybrid PPAL queues
+- `338ab26` prediction reports
+- `d46a250` guided local Streamlit workflow
 
 ## Completed implementation slices
 
@@ -55,12 +68,13 @@ GitHub CLI inspection on 2026-09-25 reported invalid tokens for both `joshDrio` 
 - [x] Add CPU/CUDA Dockerfiles, Docker Compose reference deployment, and deployment documentation.
 - [x] Implement environment diagnostics, Typer CLI shell, and Streamlit shell.
 - [x] Verify the current suite: 26 tests passing with CLI dependencies, including PPAL artifacts, reports, UI helpers, and deployment-contract coverage.
+- [x] Add Apache-2.0 license, changelog, security/privacy note, code of conduct, and GitHub Actions CI for supported Python versions.
 
-Current verification command:
+Current verification command (the local equivalent of the CI dependency-light job):
 
 ```bash
 PYTHONPATH=src UV_CACHE_DIR=/private/tmp/amphilens-uv-cache \
-  uv run --with pytest --with pillow --no-project pytest -q
+  uv run --with pytest --with pillow --with typer --no-project pytest -q
 ```
 
 ## Remaining tasks
@@ -141,12 +155,13 @@ Remote verification: `origin` is `https://github.com/joshsalako/amphilens.git`; 
 
 ### Task 7: Package and release quality
 
-- [ ] Add lockable development environments and CI for supported Python versions.
-- [ ] Add Ruff lint/format checks, Pytest coverage, import-without-ML-dependencies check, and package build verification.
-- [ ] Add a changelog, security/privacy note, code of conduct, license file, and release checklist.
+- [ ] Add lockable development environments for supported Python versions.
+- [x] Add CI with Ruff linting, Pytest coverage, import-without-ML-dependencies check, and package build verification.
+- [x] Add a changelog, security/privacy note, code of conduct, and license file.
+- [x] Add a release checklist.
+- [x] Execute clean wheel/sdist install verification in isolated environments; both artifacts imported as version `0.1.0`.
 - [ ] Complete model cards for every published base checkpoint.
 - [ ] Verify PyPI name availability and package/trademark naming before publishing.
-- [ ] Build a source distribution and wheel; install both into clean environments.
 
 ### Task 8: Docker and remote execution roadmap — in progress
 
@@ -209,11 +224,12 @@ Before every checkpoint: run the complete test command, inspect `git diff --chec
 - **Ruling:** Use CVAT file exchange before REST integration — it keeps the first annotation contract portable and credential-free.
 - **Ruling:** Require calibration in default Hybrid PPAL — silent AP/hard-coded fallbacks are not dependable for new taxa or domains.
 - **Ruling:** Support all three detector families behind adapters — this preserves the paper’s architecture comparison while keeping the engine model-independent.
-- **Ruling:** Do not publish or push until GitHub authentication is valid as `joshsalako` and the requested remote is verified.
+- **Ruling:** Repository publication is performed only through the verified `joshsalako` identity and the requested `origin` remote.
 
 ## Next immediate work
 
-1. Resolve writable Git metadata and create the first checkpoint commit.
-2. Re-run the full test suite and add `git diff --check` once Git is available.
-3. Harden manifests/artifacts and add the model registry.
-4. Update this plan after that slice before continuing.
+1. Harden manifest schemas, atomic artifact indexing, and recovery for interrupted writes.
+2. Add deeper CVAT validation for unknown classes, duplicate IDs, dimensions, and missing images.
+3. Complete detector backend contract coverage and decide the stable Faster R-CNN training dataset interface.
+4. Add advanced Streamlit controls and explicit failure guidance for calibration, checkpoints, GPU, and disk.
+5. Keep this plan and the checkpoint history current after each coherent implementation slice.

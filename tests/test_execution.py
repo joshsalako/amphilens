@@ -19,4 +19,3 @@ def test_local_execution_backend_persists_reproducible_job_state(tmp_path: Path)
     assert saved["operation"] == "predict"
     assert saved["config"]["seed"] == 42
     assert backend.status(job.job_id).state == "queued"
-

@@ -34,4 +34,3 @@ def test_training_registers_reusable_checkpoint_manifest(tmp_path: Path):
     CheckpointManifest(**saved).validate_compatibility(
         architecture="yolo", classes=["toad"], preprocessing={"name": "none"}
     )
-

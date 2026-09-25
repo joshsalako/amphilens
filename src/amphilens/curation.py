@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import csv
 import json
+from collections.abc import Iterable
 from dataclasses import asdict
 from pathlib import Path
-from typing import Iterable
 
 from .active_learning import HybridPPALConfig, PPALCalibration, SelectedImage
 
@@ -49,4 +49,3 @@ def write_selection_artifacts(
         "calibration_json": calibration_json,
         "selection_json": selection_json,
     }
-

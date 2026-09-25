@@ -21,8 +21,7 @@ This file applies to the entire `wlt-app` project. `wlt-app` is the product code
 Run the dependency-light suite with:
 
 ```bash
-PYTHONPATH=src uv run --with pytest --with pillow --no-project pytest -q
+PYTHONPATH=src uv run --with pytest --with pillow --with typer --no-project pytest -q
 ```
 
 Run formatting/linting with Ruff when available. Before claiming completion, inspect the complete test output and verify the requested files and repository state.
-

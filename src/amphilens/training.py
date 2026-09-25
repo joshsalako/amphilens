@@ -50,14 +50,18 @@ def train_and_register(
     output.mkdir(parents=True, exist_ok=True)
     training_config = config.to_dict()
     training_config["preprocessing"] = preprocessing
-    checkpoint = Path(
-        detector.train(
-            dataset_yaml,
-            output,
-            training_config,
-            resume_from=resume_from,
+    checkpoint = (
+        Path(
+            detector.train(
+                dataset_yaml,
+                output,
+                training_config,
+                resume_from=resume_from,
+            )
         )
-    ).expanduser().resolve()
+        .expanduser()
+        .resolve()
+    )
     manifest = CheckpointManifest.create(
         checkpoint,
         model_id=detector.model_id,
@@ -76,4 +80,3 @@ def load_checkpoint_manifest(path: str | Path) -> CheckpointManifest:
     if manifest_path.is_dir():
         manifest_path = manifest_path / "checkpoint.json"
     return CheckpointManifest(**json.loads(manifest_path.read_text(encoding="utf-8")))
-

@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import platform
 import sys
 import uuid
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 
 class AmphiLensError(Exception):
@@ -72,7 +72,7 @@ class ProjectManifest:
         image_roots: Iterable[str | Path],
         classes: Iterable[str],
         metadata: dict[str, Any] | None = None,
-    ) -> "ProjectManifest":
+    ) -> ProjectManifest:
         clean_name = str(name).strip()
         if not clean_name:
             raise ValidationError("Project name cannot be empty")
@@ -101,7 +101,7 @@ class ProjectManifest:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ProjectManifest":
+    def from_dict(cls, data: dict[str, Any]) -> ProjectManifest:
         manifest = cls(**data)
         manifest.validate()
         return manifest
@@ -139,7 +139,7 @@ class RunManifest:
     software: dict[str, str]
 
     @classmethod
-    def create(cls, kind: str, config: dict[str, Any]) -> "RunManifest":
+    def create(cls, kind: str, config: dict[str, Any]) -> RunManifest:
         return cls(
             run_id=f"run-{uuid.uuid4().hex[:12]}",
             kind=kind,
@@ -213,7 +213,7 @@ class DetectionRecord:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "DetectionRecord":
+    def from_dict(cls, data: dict[str, Any]) -> DetectionRecord:
         return cls(**data)
 
 
@@ -239,7 +239,7 @@ class ModelManifest:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ModelManifest":
+    def from_dict(cls, data: dict[str, Any]) -> ModelManifest:
         manifest = cls(**data)
         manifest.validate()
         return manifest
@@ -269,7 +269,7 @@ class CheckpointManifest:
         preprocessing: dict[str, Any],
         parent_checkpoint: str | None = None,
         training_config: dict[str, Any] | None = None,
-    ) -> "CheckpointManifest":
+    ) -> CheckpointManifest:
         path = _resolve(checkpoint_path)
         if not path.is_file():
             raise ValidationError(f"Checkpoint does not exist: {path}")
@@ -359,5 +359,9 @@ def iter_images(roots: Iterable[str | Path]) -> list[Path]:
         if path.is_file() and path.suffix.lower() in extensions:
             paths.add(path)
         elif path.is_dir():
-            paths.update(item for item in path.rglob("*") if item.is_file() and item.suffix.lower() in extensions)
+            paths.update(
+                item
+                for item in path.rglob("*")
+                if item.is_file() and item.suffix.lower() in extensions
+            )
     return sorted(paths)

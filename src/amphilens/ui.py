@@ -21,7 +21,9 @@ def _render_environment(st):
 
     st.header("Environment")
     st.json(run_doctor(".").to_dict())
-    st.caption("CPU inference is supported. A CUDA GPU is recommended for fine-tuning and large pools.")
+    st.caption(
+        "CPU inference is supported. A CUDA GPU is recommended for fine-tuning and large pools."
+    )
 
 
 def _render_create_project(st):
@@ -59,7 +61,9 @@ def _render_project(st):
     st.write(f"Classes: {', '.join(manifest.classes)}")
     checkpoint = st.text_input("Checkpoint path")
     architecture = st.selectbox("Architecture", ["yolo", "rtdetr", "faster_rcnn"])
-    output_dir = st.text_input("Output folder", value=str(Path(project_dir) / "artifacts" / "prediction"))
+    output_dir = st.text_input(
+        "Output folder", value=str(Path(project_dir) / "artifacts" / "prediction")
+    )
     confidence = st.slider("Confidence threshold", 0.0, 1.0, 0.25, 0.01)
     image_size = st.number_input("Image size", min_value=32, value=640, step=32)
     if st.button("Run prediction", type="primary"):
@@ -69,14 +73,19 @@ def _render_project(st):
                 checkpoint, architecture=architecture, classes=manifest.classes, model_id=model_id
             )
             config = InferenceConfig(
-                model_id=model_id, image_size=int(image_size), confidence=confidence,
+                model_id=model_id,
+                image_size=int(image_size),
+                confidence=confidence,
                 run_id=f"predict-{model_id}",
             )
             summary = run_resumable_inference(
                 detector, iter_images(manifest.image_roots), config, output_dir
             )
             report = write_report(summary.predictions_csv, Path(output_dir) / "report")
-            st.success(f"Processed {summary.completed_images} images and {summary.detection_count} detections")
+            st.success(
+                f"Processed {summary.completed_images} images and "
+                f"{summary.detection_count} detections"
+            )
             st.json({"summary": str(summary.summary_json), "report": str(report["markdown"])})
         except Exception as exc:  # noqa: BLE001 - shown as an actionable UI error
             st.error(str(exc))
@@ -98,7 +107,8 @@ def _render_active_learning(st):
             selected_calibration = PPALCalibration(**json.loads(Path(calibration).read_text()))
             selected_config = HybridPPALConfig(budget=int(budget))
             selected = HybridPPALStrategy(selected_config).select(
-                read_predictions_csv(Path(predictions)), selected_calibration,
+                read_predictions_csv(Path(predictions)),
+                selected_calibration,
                 features=json.loads(Path(features).read_text()),
             )
             artifacts = write_selection_artifacts(
@@ -119,7 +129,9 @@ def main():
     st.set_page_config(page_title="AmphiLens", page_icon="🐸", layout="wide")
     st.title("AmphiLens")
     st.caption("Local-first, reproducible amphibian and wildlife camera-trap detection")
-    page = st.sidebar.radio("Workflow", ["Environment", "Create project", "Run prediction", "Hybrid PPAL queue"])
+    page = st.sidebar.radio(
+        "Workflow", ["Environment", "Create project", "Run prediction", "Hybrid PPAL queue"]
+    )
     if page == "Environment":
         _render_environment(st)
     elif page == "Create project":

@@ -32,9 +32,7 @@ def test_default_ppal_requires_calibration_evidence():
 
 def test_hybrid_ppal_returns_budgeted_diverse_images():
     predictions = [_record("a", 0.51), _record("b", 0.52), _record("c", 0.95)]
-    calibration = calibrate_ppal(
-        [{"class_name": "toad", "difficulty": 0.4}], classes=["toad"]
-    )
+    calibration = calibrate_ppal([{"class_name": "toad", "difficulty": 0.4}], classes=["toad"])
     strategy = HybridPPALStrategy(HybridPPALConfig(budget=2, seed=7))
     selected = strategy.select(
         predictions,

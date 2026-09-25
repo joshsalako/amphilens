@@ -6,8 +6,8 @@ import hashlib
 import json
 import re
 import shutil
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 from ..core import DetectionRecord, SourceCollisionError, ValidationError
 
@@ -100,7 +100,9 @@ def export_cvat(
     }
     (destination / "annotations.json").write_text(json.dumps(coco, indent=2) + "\n")
     (destination / "manifest.json").write_text(
-        json.dumps({"format": "amphilens-cvat-coco-v1", "classes": classes, "images": mapping}, indent=2)
+        json.dumps(
+            {"format": "amphilens-cvat-coco-v1", "classes": classes, "images": mapping}, indent=2
+        )
         + "\n"
     )
     (destination / "classes.txt").write_text("\n".join(classes) + "\n")

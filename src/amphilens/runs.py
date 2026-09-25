@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 from .core import DetectionRecord, InferenceConfig, SourceCollisionError
 from .inference import write_predictions_csv
@@ -37,7 +37,11 @@ def _atomic_json(path: Path, value: dict) -> None:
 def _load_jsonl(path: Path) -> list[DetectionRecord]:
     if not path.is_file():
         return []
-    return [DetectionRecord.from_dict(json.loads(line)) for line in path.read_text().splitlines() if line]
+    return [
+        DetectionRecord.from_dict(json.loads(line))
+        for line in path.read_text().splitlines()
+        if line
+    ]
 
 
 def run_resumable_inference(
@@ -54,7 +58,12 @@ def run_resumable_inference(
     artifact.mkdir(parents=True, exist_ok=True)
     progress_path = artifact / "progress.json"
     records_path = artifact / "predictions.jsonl"
-    progress = {"run_id": config.run_id, "model_id": config.model_id, "completed_images": [], "failed_images": {}}
+    progress = {
+        "run_id": config.run_id,
+        "model_id": config.model_id,
+        "completed_images": [],
+        "failed_images": {},
+    }
     if progress_path.is_file():
         progress = json.loads(progress_path.read_text())
         if progress.get("run_id") != config.run_id or progress.get("model_id") != config.model_id:
@@ -110,4 +119,3 @@ def run_resumable_inference(
         predictions_csv=predictions_csv,
         summary_json=summary_path,
     )
-

@@ -39,4 +39,3 @@ def test_registry_persists_model_and_validates_checkpoint_hash(tmp_path: Path):
         registry.resolve(
             "demo-yolo", architecture="yolo", classes=["toad"], preprocessing={"name": "none"}
         )
-

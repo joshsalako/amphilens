@@ -1,14 +1,14 @@
-from pathlib import Path
 import csv
 import json
+from pathlib import Path
 
 import pytest
 
 typer = pytest.importorskip("typer")
 from typer.testing import CliRunner
 
-from amphilens.cli import app
 import amphilens.cli as cli_module
+from amphilens.cli import app
 from amphilens.core import DetectionRecord
 from amphilens.inference import write_predictions_csv
 
@@ -93,17 +93,29 @@ def test_predict_command_runs_project_images(monkeypatch, tmp_path: Path):
         def predict(self, image_paths, config):
             for path in image_paths:
                 yield DetectionRecord(
-                    image_path=str(path), image_id=path.name, class_id=0, class_name="toad",
-                    confidence=0.9, bbox_xyxy=[1, 1, 5, 5], image_width=10, image_height=10,
-                    model_id="fixture", run_id=config.run_id,
+                    image_path=str(path),
+                    image_id=path.name,
+                    class_id=0,
+                    class_name="toad",
+                    confidence=0.9,
+                    bbox_xyxy=[1, 1, 5, 5],
+                    image_width=10,
+                    image_height=10,
+                    model_id="fixture",
+                    run_id=config.run_id,
                 )
 
     monkeypatch.setattr(cli_module, "load_detector", lambda *args, **kwargs: Detector())
     result = runner.invoke(
         app,
         [
-            "predict", str(project), str(tmp_path / "model.pt"),
-            "--architecture", "yolo", "--output-dir", str(tmp_path / "artifacts"),
+            "predict",
+            str(project),
+            str(tmp_path / "model.pt"),
+            "--architecture",
+            "yolo",
+            "--output-dir",
+            str(tmp_path / "artifacts"),
         ],
     )
     assert result.exit_code == 0, result.stdout
@@ -116,24 +128,47 @@ def test_active_learn_command_writes_ppal_queue(tmp_path: Path):
     for name, confidence in (("a.jpg", 0.51), ("b.jpg", 0.9)):
         records.append(
             DetectionRecord(
-                image_path=f"/pool/{name}", image_id=name, class_id=0, class_name="toad",
-                confidence=confidence, bbox_xyxy=[1, 1, 5, 5], image_width=10, image_height=10,
-                model_id="fixture", run_id="run-1",
+                image_path=f"/pool/{name}",
+                image_id=name,
+                class_id=0,
+                class_name="toad",
+                confidence=confidence,
+                bbox_xyxy=[1, 1, 5, 5],
+                image_width=10,
+                image_height=10,
+                model_id="fixture",
+                run_id="run-1",
             )
         )
     write_predictions_csv(records, predictions)
     calibration = tmp_path / "calibration.json"
-    calibration.write_text(json.dumps({
-        "classes": ["toad"], "difficulties": {"toad": 0.4},
-        "weights": {"toad": 1.1}, "xi": 0.5, "alpha": 1.0, "beta": 2.0,
-        "source": "validation",
-    }))
+    calibration.write_text(
+        json.dumps(
+            {
+                "classes": ["toad"],
+                "difficulties": {"toad": 0.4},
+                "weights": {"toad": 1.1},
+                "xi": 0.5,
+                "alpha": 1.0,
+                "beta": 2.0,
+                "source": "validation",
+            }
+        )
+    )
     features = tmp_path / "features.json"
     features.write_text(json.dumps({"/pool/a.jpg": [1, 0], "/pool/b.jpg": [0, 1]}))
 
     result = CliRunner().invoke(
         app,
-        ["active-learn", str(predictions), str(calibration), str(features), str(tmp_path / "cycle"), "--budget", "1"],
+        [
+            "active-learn",
+            str(predictions),
+            str(calibration),
+            str(features),
+            str(tmp_path / "cycle"),
+            "--budget",
+            "1",
+        ],
     )
     assert result.exit_code == 0, result.stdout
     assert (tmp_path / "cycle" / "selection_queue.csv").is_file()
@@ -144,11 +179,19 @@ def test_report_command_writes_summary_and_markdown(tmp_path: Path):
     write_predictions_csv(
         [
             DetectionRecord(
-                image_path="/pool/a.jpg", image_id="a.jpg", class_id=0, class_name="toad",
-                confidence=0.8, bbox_xyxy=[1, 1, 5, 5], image_width=10, image_height=10,
-                model_id="fixture", run_id="run-1",
+                image_path="/pool/a.jpg",
+                image_id="a.jpg",
+                class_id=0,
+                class_name="toad",
+                confidence=0.8,
+                bbox_xyxy=[1, 1, 5, 5],
+                image_width=10,
+                image_height=10,
+                model_id="fixture",
+                run_id="run-1",
             )
-        ], predictions,
+        ],
+        predictions,
     )
     result = CliRunner().invoke(app, ["report", str(predictions), str(tmp_path / "report")])
     assert result.exit_code == 0, result.stdout

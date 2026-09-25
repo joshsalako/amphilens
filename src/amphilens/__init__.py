@@ -9,11 +9,11 @@ from .core import (
     ProjectStore,
     RunManifest,
 )
-from .runs import RunSummary, run_resumable_inference
-from .inference import read_predictions_csv
-from .execution import JobHandle, JobSpec, JobStatus, LocalExecutionBackend
 from .curation import write_selection_artifacts
+from .execution import JobHandle, JobSpec, JobStatus, LocalExecutionBackend
+from .inference import read_predictions_csv
 from .reporting import write_report
+from .runs import RunSummary, run_resumable_inference
 
 __all__ = [
     "CheckpointManifest",

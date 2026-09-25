@@ -12,13 +12,11 @@ try:
 except ImportError:  # pragma: no cover - exercised only in minimal installs
     typer = None
 
-from .core import ProjectManifest, ProjectStore, iter_images
-from .doctor import run_doctor
-from .annotations.cvat import export_cvat, import_cvat
 from .active_learning import HybridPPALConfig, HybridPPALStrategy, PPALCalibration
-from .core import DetectionRecord
-from .core import InferenceConfig
+from .annotations.cvat import export_cvat, import_cvat
+from .core import DetectionRecord, InferenceConfig, ProjectManifest, ProjectStore, iter_images
 from .curation import write_selection_artifacts
+from .doctor import run_doctor
 from .inference import read_predictions_csv, write_predictions_csv
 from .models import load_detector
 from .reporting import write_report
@@ -76,7 +74,9 @@ if typer is not None:
         try:
             subprocess.run([sys.executable, "-m", "streamlit", "run", str(ui_path)], check=True)
         except FileNotFoundError as exc:
-            raise RuntimeError("The UI requires the 'ui' extra: pip install 'amphilens[ui]'") from exc
+            raise RuntimeError(
+                "The UI requires the 'ui' extra: pip install 'amphilens[ui]'"
+            ) from exc
 
     @app.command()
     def images(project_dir: Path):
@@ -89,7 +89,9 @@ if typer is not None:
     def predict(
         project_dir: Path,
         checkpoint: Path,
-        architecture: str = typer.Option(..., "--architecture", help="yolo, rtdetr, or faster_rcnn"),
+        architecture: str = typer.Option(
+            ..., "--architecture", help="yolo, rtdetr, or faster_rcnn"
+        ),
         output_dir: Path = typer.Option(..., "--output-dir"),
         confidence: float = typer.Option(0.25, "--confidence"),
         image_size: int = typer.Option(640, "--image-size"),
@@ -116,13 +118,18 @@ if typer is not None:
         summary = run_resumable_inference(
             detector, iter_images(manifest.image_roots), config, output_dir
         )
-        typer.echo(json.dumps({
-            "run_id": summary.run_id,
-            "completed_images": summary.completed_images,
-            "failed_images": summary.failed_images,
-            "detection_count": summary.detection_count,
-            "predictions_csv": str(summary.predictions_csv),
-        }, indent=2))
+        typer.echo(
+            json.dumps(
+                {
+                    "run_id": summary.run_id,
+                    "completed_images": summary.completed_images,
+                    "failed_images": summary.failed_images,
+                    "detection_count": summary.detection_count,
+                    "predictions_csv": str(summary.predictions_csv),
+                },
+                indent=2,
+            )
+        )
 
     @app.command("active-learn")
     def active_learn(
@@ -138,9 +145,7 @@ if typer is not None:
         calibration = PPALCalibration(**json.loads(calibration_json.read_text()))
         features = json.loads(features_json.read_text())
         config = HybridPPALConfig(budget=budget, seed=seed)
-        selected = HybridPPALStrategy(config).select(
-            predictions, calibration, features=features
-        )
+        selected = HybridPPALStrategy(config).select(predictions, calibration, features=features)
         artifacts = write_selection_artifacts(selected, calibration, config, output_dir)
         typer.echo(json.dumps({name: str(path) for name, path in artifacts.items()}, indent=2))
 

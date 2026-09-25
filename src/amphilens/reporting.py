@@ -15,7 +15,9 @@ def write_report(predictions_csv: str | Path, output_dir: str | Path) -> dict[st
     rows = list(csv.DictReader(source.open(newline="", encoding="utf-8")))
     classes = Counter(row.get("class_name", "") for row in rows if row.get("class_name"))
     images = {row.get("image_path", "") for row in rows if row.get("image_path")}
-    confidences = [float(row["confidence"]) for row in rows if row.get("confidence") not in {None, ""}]
+    confidences = [
+        float(row["confidence"]) for row in rows if row.get("confidence") not in {None, ""}
+    ]
     models = sorted({row.get("model_id", "") for row in rows if row.get("model_id")})
     runs = sorted({row.get("run_id", "") for row in rows if row.get("run_id")})
     summary = {
@@ -34,7 +36,9 @@ def write_report(predictions_csv: str | Path, output_dir: str | Path) -> dict[st
     summary_path = destination / "summary.json"
     summary_path.write_text(json.dumps(summary, indent=2) + "\n")
     markdown_path = destination / "report.md"
-    class_lines = "\n".join(f"- `{name}`: {count}" for name, count in sorted(classes.items())) or "- None"
+    class_lines = (
+        "\n".join(f"- `{name}`: {count}" for name, count in sorted(classes.items())) or "- None"
+    )
     markdown_path.write_text(
         "# AmphiLens prediction report\n\n"
         f"- Source CSV: `{source}`\n"
@@ -46,4 +50,3 @@ def write_report(predictions_csv: str | Path, output_dir: str | Path) -> dict[st
         f"{class_lines}\n"
     )
     return {"summary_json": summary_path, "markdown": markdown_path}
-

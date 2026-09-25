@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import csv
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable, Protocol
+from typing import Protocol
 
 from .core import DetectionRecord, InferenceConfig
 
@@ -105,7 +106,11 @@ def write_overlays(records: Iterable[DetectionRecord], output_dir: str | Path) -
         draw = ImageDraw.Draw(image)
         for record in image_records:
             box = tuple(record.bbox_xyxy)
-            label = record.class_name if record.confidence is None else f"{record.class_name} {record.confidence:.3f}"
+            label = (
+                record.class_name
+                if record.confidence is None
+                else f"{record.class_name} {record.confidence:.3f}"
+            )
             draw.rectangle(box, outline="red", width=3)
             draw.text((box[0], max(0, box[1] - 14)), label, fill="red")
         output = destination / source.name

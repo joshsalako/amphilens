@@ -40,4 +40,3 @@ def test_inference_writes_stable_csv(tmp_path: Path):
     assert "image_path" in text
     assert "bbox_xmin" in text
     assert "fixture" in text
-
