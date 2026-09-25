@@ -309,3 +309,10 @@ gate, validated export/import, immutable merge, CLI commands, and Streamlit
 actions are covered by fake-SDK and managed-cycle tests. A live CVAT Community
 server contract test remains a release-gate check because no server is
 available in the dependency-light test environment.
+
+The `0.1.0a1` prerelease was uploaded to TestPyPI after `twine check` and
+verified in a clean Python 3.11 environment from TestPyPI with CLI, Streamlit,
+and the pinned CVAT extras. The fresh upload token was supplied through
+gitignored environment configuration and was not committed or printed. Live
+model-weight downloads, GPU training, and a live CVAT server remain separate
+runtime gates.

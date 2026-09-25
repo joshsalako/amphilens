@@ -6,6 +6,11 @@
   selection, shared preprocessing, training, prediction, and active learning.
 - Add immutable CVAT/COCO/YOLO dataset snapshots and reproducible project
   configuration metadata.
+- Add managed CVAT cycles with idempotent task creation, completion checks,
+  validated annotation import, immutable merging, and resumable training
+  lineage.
+- Publish `0.1.0a1` to TestPyPI; clean Python 3.11 installation verified with
+  CLI, Streamlit, and CVAT extras.
 
 All notable changes to AmphiLens are recorded here.
 

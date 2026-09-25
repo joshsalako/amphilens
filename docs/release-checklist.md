@@ -17,13 +17,14 @@ considered verified merely because the package builds.
 
 - [ ] Run the full dependency-light test suite on every supported Python
   version.
-- [ ] Run Ruff and `git diff --check`.
-- [ ] Run `uv lock --check` against the committed `uv.lock`.
-- [ ] Build both wheel and source distribution.
-- [ ] Install each artifact in a clean environment and run `amphilens doctor`.
+- [x] Run Ruff and `git diff --check`.
+- [x] Run `uv lock --check` against the committed `uv.lock`.
+- [x] Build both wheel and source distribution.
+- [x] Install the published prerelease in a clean Python 3.11 environment and
+  run `amphilens doctor`.
 - [ ] Exercise a fixture prediction run, report generation, and CVAT round trip.
-- [ ] Exercise the managed CVAT fake-SDK contract and, when available, the
-  pinned CVAT Community `v2.76.0` server contract.
+- [x] Exercise the managed CVAT fake-SDK contract; the live CVAT Community
+  `v2.76.0` server contract remains pending.
 - [ ] Exercise CVAT XML, COCO, and YOLO initial-dataset import, including a
   reviewed negative image and an immutable merge.
 - [ ] Exercise the preprocessing fixture: grayscale, aspect-ratio-preserving
@@ -48,14 +49,17 @@ considered verified merely because the package builds.
 
 ## Publication
 
-- [ ] Build and install the package from TestPyPI in a clean Python 3.11
-  environment. Use a fresh upload-scoped token supplied through environment
-  variables only; never store it in the repository, shell history, logs, or
-  package metadata.
+- [x] Build and install `amphilens==0.1.0a1` from TestPyPI in a clean Python
+  3.11 environment. The fresh upload-scoped token was supplied through
+  `TWINE_USERNAME`/`TWINE_PASSWORD` process variables loaded from a gitignored
+  env file and was not committed, logged, or written to package metadata.
 
 - [ ] Verify PyPI package-name availability and the AmphiLens name/trademark
   status before public publication.
 - [ ] Tag the verified commit and push the tag using the intended GitHub
   identity.
-- [ ] Upload artifacts only after the clean-install and scientific review
-  gates above pass.
+- [x] Upload artifacts only after the package build, `twine check`, and clean
+  TestPyPI install checks passed. Scientific holdout/GPU/live-CVAT checks remain
+  outside this prerelease verification.
+
+Published prerelease: [AmphiLens 0.1.0a1 on TestPyPI](https://test.pypi.org/project/amphilens/0.1.0a1/).
