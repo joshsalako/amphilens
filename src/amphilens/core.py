@@ -15,6 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .preprocessing import PreprocessingConfig
+
 
 class AmphiLensError(Exception):
     """Base error for user-facing AmphiLens failures."""
@@ -58,6 +60,81 @@ def _validate_classes(classes: Iterable[str]) -> list[str]:
     if len(values) != len(set(values)):
         raise ValidationError("Class names must be unique")
     return values
+
+
+@dataclass(slots=True)
+class ProjectConfig:
+    """Explicit, serializable configuration for a reproducible project."""
+
+    classes: list[str]
+    model_preset: str = "yolo26-l"
+    checkpoint_source: str = "official-general-purpose"
+    checkpoint_identifier: str | None = None
+    preprocessing: PreprocessingConfig = field(default_factory=PreprocessingConfig)
+    image_size: int = 640
+    confidence_threshold: float = 0.25
+    device: str = "auto"
+    epochs: int = 100
+    batch_size: int = 16
+    patience: int = 25
+    random_seed: int = 42
+    freeze_strategy: str = "none"
+    active_learning: dict[str, Any] = field(default_factory=dict)
+    evaluation: str = "not evaluated"
+    software: dict[str, str] = field(default_factory=dict)
+    schema_version: int = CURRENT_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        self.classes = _validate_classes(self.classes)
+        self.preprocessing = PreprocessingConfig.from_any(self.preprocessing)
+        if self.image_size <= 0 or self.epochs <= 0 or self.batch_size <= 0:
+            raise ValidationError("image_size, epochs, and batch_size must be positive")
+        if self.patience < 0:
+            raise ValidationError("patience cannot be negative")
+        if not 0 <= self.confidence_threshold <= 1:
+            raise ValidationError("confidence_threshold must be between 0 and 1")
+        if self.schema_version != CURRENT_SCHEMA_VERSION:
+            raise ValidationError(
+                f"Unsupported project config schema version: {self.schema_version}"
+            )
+
+    def validate(self, expected_classes: Iterable[str] | None = None) -> None:
+        _validate_classes(self.classes)
+        if expected_classes is not None and self.classes != list(expected_classes):
+            raise ValidationError("Project config classes do not match the manifest classes")
+
+    def to_dict(self) -> dict[str, Any]:
+        self.validate()
+        return {
+            "classes": list(self.classes),
+            "model_preset": self.model_preset,
+            "checkpoint_source": self.checkpoint_source,
+            "checkpoint_identifier": self.checkpoint_identifier,
+            "preprocessing": self.preprocessing.to_dict(),
+            "image_size": self.image_size,
+            "confidence_threshold": self.confidence_threshold,
+            "device": self.device,
+            "epochs": self.epochs,
+            "batch_size": self.batch_size,
+            "patience": self.patience,
+            "random_seed": self.random_seed,
+            "freeze_strategy": self.freeze_strategy,
+            "active_learning": dict(self.active_learning),
+            "evaluation": self.evaluation,
+            "software": dict(self.software),
+            "schema_version": self.schema_version,
+        }
+
+    @classmethod
+    def from_dict(
+        cls, data: dict[str, Any] | None, *, fallback_classes: Iterable[str] | None = None
+    ) -> ProjectConfig:
+        values = dict(data or {})
+        classes = values.pop("classes", None) or list(fallback_classes or [])
+        values["classes"] = classes
+        if "preprocessing" in values:
+            values["preprocessing"] = PreprocessingConfig.from_any(values["preprocessing"])
+        return cls(**values)
 
 
 def _migrate_manifest_data(data: dict[str, Any], kind: str) -> dict[str, Any]:
@@ -172,6 +249,7 @@ class ProjectManifest:
     schema_version: int = 1
     created_at: str = field(default_factory=utc_now)
     metadata: dict[str, Any] = field(default_factory=dict)
+    config: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def create(
@@ -180,10 +258,12 @@ class ProjectManifest:
         image_roots: Iterable[str | Path],
         classes: Iterable[str],
         metadata: dict[str, Any] | None = None,
+        project_config: ProjectConfig | dict[str, Any] | None = None,
     ) -> ProjectManifest:
         clean_name = str(name).strip()
         if not clean_name:
             raise ValidationError("Project name cannot be empty")
+        clean_classes = _validate_classes(classes)
         roots = [_resolve(root) for root in image_roots]
         if not roots:
             raise ValidationError("At least one image root is required")
@@ -192,9 +272,18 @@ class ProjectManifest:
             raise ValidationError(f"Image root does not exist: {missing[0]}")
         return cls(
             name=clean_name,
-            classes=_validate_classes(classes),
+            classes=clean_classes,
             image_roots=[str(root) for root in roots],
             metadata=dict(metadata or {}),
+            config=(
+                (
+                    project_config.to_dict()
+                    if isinstance(project_config, ProjectConfig)
+                    else dict(project_config)
+                )
+                if project_config is not None
+                else ProjectConfig(classes=clean_classes).to_dict()
+            ),
         )
 
     def validate(self, require_existing_roots: bool = True) -> None:
@@ -210,16 +299,26 @@ class ProjectManifest:
             missing = [str(root) for root in roots if not root.exists()]
             if missing:
                 raise ValidationError(f"Image root does not exist: {missing[0]}")
+        self.project_config.validate(expected_classes=self.classes)
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
-        return asdict(self)
+        payload = asdict(self)
+        payload["config"] = self.project_config.to_dict()
+        return payload
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ProjectManifest:
-        manifest = cls(**_migrate_manifest_data(data, "project"))
+        migrated = _migrate_manifest_data(data, "project")
+        if "project_config" in migrated and "config" not in migrated:
+            migrated["config"] = migrated.pop("project_config")
+        manifest = cls(**migrated)
         manifest.validate()
         return manifest
+
+    @property
+    def project_config(self) -> ProjectConfig:
+        return ProjectConfig.from_dict(self.config, fallback_classes=self.classes)
 
 
 @dataclass(slots=True)
@@ -227,7 +326,9 @@ class InferenceConfig:
     model_id: str
     image_size: int = 640
     confidence: float = 0.25
-    preprocessing: str = "none"
+    preprocessing: PreprocessingConfig | dict[str, Any] | str = field(
+        default_factory=PreprocessingConfig
+    )
     batch_size: int = 1
     device: str = "auto"
     run_id: str = ""
@@ -239,9 +340,20 @@ class InferenceConfig:
             raise ValidationError("image_size and batch_size must be positive")
         if not 0 <= self.confidence <= 1:
             raise ValidationError("confidence must be between 0 and 1")
+        self.preprocessing = PreprocessingConfig.from_any(self.preprocessing)
+
+    @property
+    def preprocessing_config(self) -> PreprocessingConfig:
+        return PreprocessingConfig.from_any(self.preprocessing)
+
+    @property
+    def preprocessing_fingerprint(self) -> str:
+        return self.preprocessing_config.fingerprint
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        payload["preprocessing"] = self.preprocessing_config.to_dict()
+        return payload
 
 
 @dataclass(slots=True)
