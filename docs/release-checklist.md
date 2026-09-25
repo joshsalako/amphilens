@@ -18,9 +18,12 @@ considered verified merely because the package builds.
 - [ ] Run the full dependency-light test suite on every supported Python
   version.
 - [ ] Run Ruff and `git diff --check`.
+- [ ] Run `uv lock --check` against the committed `uv.lock`.
 - [ ] Build both wheel and source distribution.
 - [ ] Install each artifact in a clean environment and run `amphilens doctor`.
 - [ ] Exercise a fixture prediction run, report generation, and CVAT round trip.
+- [ ] Exercise the managed CVAT fake-SDK contract and, when available, the
+  pinned CVAT Community `v2.76.0` server contract.
 - [ ] Exercise CVAT XML, COCO, and YOLO initial-dataset import, including a
   reviewed negative image and an immutable merge.
 - [ ] Exercise the preprocessing fixture: grayscale, aspect-ratio-preserving

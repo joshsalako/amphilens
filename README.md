@@ -34,6 +34,10 @@ similar to the model's training domain.
 AmphiLens currently runs locally from a Python environment. Copy these
 commands into a terminal.
 
+The supported first-release environment is Python 3.11. A committed
+`uv.lock` records the reproducible dependency resolution; ordinary `pip`
+installation is provided below for the simplest start.
+
 ### macOS or Linux
 
 ```bash

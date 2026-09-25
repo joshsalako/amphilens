@@ -140,7 +140,7 @@ Remote verification: `origin` is `https://github.com/joshsalako/amphilens.git`; 
 - [x] Add backend contract tests covering empty predictions, confidence filtering, image dimensions, device selection, and malformed checkpoints.
 - [x] Complete the Faster R-CNN training adapter using a stable CVAT/YOLO dataset and trainer interface rather than importing hard-coded research paths; runtime GPU benchmarks remain open.
 - [ ] Preserve YOLO and RT-DETR training configs while making epochs, freeze schedule, batch size, seed, preprocessing, and image size explicit.
-- [ ] Add `best.pt`, `last.pt`, checkpoint manifest, training log, and metrics artifact handling for every YOLO/RT-DETR cycle; the Faster R-CNN adapter now writes best/last/metrics and the shared orchestration writes its checkpoint manifest.
+- [x] Add `best.pt`, `last.pt`, checkpoint manifest, and metrics artifact handling for every cycle; the shared orchestration normalizes adapter output and records parent checkpoint lineage. Training logs and representative runtime metrics remain open.
 
 ### Task 3: Finish production inference and reporting — in progress
 
@@ -182,11 +182,11 @@ Remote verification: `origin` is `https://github.com/joshsalako/amphilens.git`; 
 - [x] Add **Send to CVAT**, **Open CVAT**, **Refresh status**, and **Continue cycle** actions over the managed CVAT service; the UI shows task URL, status, annotation count, selected-image count, and the exact blocking reason.
 - [ ] Add advanced panels for all documented model, preprocessing, threshold, PPAL, and training controls.
 - [ ] Show actionable failures for missing GPU, missing calibration, incompatible checkpoint, invalid annotation, and insufficient disk.
-- [ ] Add UI smoke tests for project creation, diagnostics, configuration validation, and artifact download.
+- [ ] Add UI smoke tests for project creation, diagnostics, configuration validation, and artifact download; pure helper tests and the managed CVAT action contract are covered, while a live Streamlit browser smoke remains open.
 
 ### Task 7: Package and release quality
 
-- [ ] Add one supported release profile first: Python 3.11 with a committed lockfile; avoid claiming every Python minor has equivalent ML/CVAT coverage.
+- [x] Add one supported release profile first: Python 3.11 with a committed `uv.lock`; avoid claiming every Python minor has equivalent ML/CVAT coverage.
 - [ ] Pin the managed CVAT compatibility profile to CVAT Community `v2.76.0`, `cvat-sdk==2.76.0`, and `cvat-cli==2.76.0`; pin matched PyTorch/torchvision and tested Ultralytics versions in the lockfile and container images.
 - [ ] Keep unpinned or broad dependency ranges only for source-level library compatibility; release and Docker instructions must install from the lockfile.
 - [ ] Add CPU inference and GPU fine-tuning smoke tests using the same lockfile, with optional newer-version checks separated from the supported release gate.
@@ -288,15 +288,13 @@ commits:
 
 The remaining release-critical work is deliberately explicit:
 
-1. Add managed CVAT create/open/status/Continue services over the pinned
-   `cvat-sdk==2.76.0` profile, while keeping portable ZIP exchange as the
-   recovery path.
-2. Add real runtime smoke tests for YOLO26-L, RT-DETR-L, Faster R-CNN, CPU
+1. Add real runtime smoke tests for YOLO26-L, RT-DETR-L, Faster R-CNN, CPU
    inference, and short CPU/GPU training with the locked Python 3.11 profile.
-3. Complete checkpoint artifact normalization (`best.pt`, `last.pt`, metrics,
-   logs), holdout evaluation when supplied, and full resume lineage.
-4. Add the pinned dependency lockfile and Docker/CVAT Compose smoke tests.
-5. Publish a clean prerelease to TestPyPI only after the exposed token has been
+2. Complete training logs, holdout evaluation when supplied, and runtime
+   benchmark reporting.
+3. Add the local pinned Docker/CVAT Compose smoke test and verify the browser
+   workflow against the supported dependency profile.
+4. Publish a clean prerelease to TestPyPI only after the exposed token has been
    revoked and a fresh upload-scoped token is supplied through the process
    environment. No token is stored in project files or shell configuration.
 

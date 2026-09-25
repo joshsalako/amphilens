@@ -17,6 +17,17 @@ Pillow, NumPy, OpenCV, PyTorch, torchvision, and Ultralytics. The `training`
 extra adds PyYAML. OpenCV is needed when CLAHE is enabled. Run `amphilens doctor`
 before the first project to see which optional runtime pieces are available.
 
+For the reproducible release profile, use the committed `uv.lock` rather than
+floating dependency resolution:
+
+```bash
+uv sync --frozen --extra cli --extra ui --extra inference --extra training
+```
+
+The lockfile records the tested package resolution. CPU and CUDA PyTorch wheels
+remain platform-specific; select the lockfile environment that matches the
+host before starting a long training run.
+
 For managed CVAT compatibility, use the pinned CVAT Community `v2.76.0`
 profile with `cvat-sdk==2.76.0` and `cvat-cli==2.76.0`. Portable ZIP exchange
 does not require a CVAT server or CVAT credentials.
