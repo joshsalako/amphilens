@@ -21,12 +21,14 @@ This repository contains the first dependency-light foundation:
 - checkpoint manifests with hashes and compatibility checks;
 - resumable per-image inference artifacts with progress, failure records, stable CSV, and summaries;
 - YOLO, RT-DETR, and Faster R-CNN detector adapters with lazy ML imports;
+- an optional Faster R-CNN trainer for CVAT/YOLO directory bundles, including
+  `best.pt`, `last.pt`, metrics, and resume support;
 - paper-compatible PPAL calibration and Hybrid PPAL selection contracts;
 - PPAL validation-match ingestion and auditable selection queue artifacts;
 - COCO/CVAT and YOLO annotation exchange with deterministic source mappings;
 - a Typer CLI, guided Streamlit workflows, and environment diagnostics.
 
-The full production training workflows and remote execution are being built incrementally. Faster R-CNN inference is supported through the optional ML adapter; its training path remains explicitly guarded until the dataset-specific trainer contract is completed. Streamlit UI smoke tests require the optional `ui` extra and are not run in the dependency-light suite.
+The production training and remote-execution workflows are being built incrementally. Faster R-CNN training is implemented through the optional `training` extra and consumes the portable dataset bundle produced by the CVAT/YOLO exchange; real GPU benchmarks and holdout evaluation remain release gates. Streamlit UI smoke tests require the optional `ui` extra and are not run in the dependency-light suite.
 
 ## Requirements
 
@@ -44,6 +46,12 @@ GPU support is optional. AmphiLens will not upload camera-trap data in local mod
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install -e ".[cli,ui,inference]"
+```
+
+Add `training` when fine-tuning locally:
+
+```bash
+python -m pip install -e ".[cli,ui,inference,training]"
 ```
 
 For a CPU-only core/CLI installation:
@@ -171,7 +179,7 @@ See [`docs/deployment.md`](docs/deployment.md) for the local, Docker Compose, CU
 Run the tests with the dependency-light isolated command:
 
 ```bash
-PYTHONPATH=src uv run --with pytest --with pillow --no-project pytest -q
+PYTHONPATH=src uv run --with pytest --with pillow --with typer --no-project pytest -q
 ```
 
 Do not add datasets, model weights, generated artifacts, credentials, or machine-specific paths to source control. See [`AGENTS.md`](AGENTS.md) and [`CONTRIBUTING.md`](CONTRIBUTING.md).

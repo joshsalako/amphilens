@@ -5,5 +5,12 @@ from .backends import (
     UltralyticsDetector,
     load_detector,
 )
+from .faster_rcnn_training import FasterRCNNDatasetSpec, FasterRCNNTrainer
 
-__all__ = ["FasterRCNNDetector", "UltralyticsDetector", "load_detector"]
+__all__ = [
+    "FasterRCNNDatasetSpec",
+    "FasterRCNNDetector",
+    "FasterRCNNTrainer",
+    "UltralyticsDetector",
+    "load_detector",
+]

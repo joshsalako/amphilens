@@ -5,8 +5,12 @@ import pytest
 from PIL import Image
 
 from amphilens.core import CheckpointManifest, InferenceConfig, UnsupportedCheckpointError
-from amphilens.models import UltralyticsDetector, load_detector
+from amphilens.models import FasterRCNNDetector, UltralyticsDetector, load_detector
 from amphilens.models.backends import OptionalDependencyError, _select_torch_device
+from amphilens.models.faster_rcnn_training import (
+    FasterRCNNDatasetSpec,
+    parse_yolo_label_lines,
+)
 
 
 class FakeArray:
@@ -126,3 +130,32 @@ def test_torch_device_selection_fails_closed_for_unavailable_cuda():
     assert _select_torch_device(fake_torch, "auto") == "cpu"
     with pytest.raises(OptionalDependencyError, match="CUDA"):
         _select_torch_device(fake_torch, "cuda")
+
+
+def test_faster_rcnn_dataset_spec_is_stable_for_yolo_layout(tmp_path: Path):
+    image_dir = tmp_path / "images"
+    label_dir = tmp_path / "labels"
+    image_dir.mkdir()
+    label_dir.mkdir()
+    spec = FasterRCNNDatasetSpec.from_mapping(
+        tmp_path / "dataset.yaml",
+        {"path": str(tmp_path), "train": "images", "labels": "labels", "names": ["toad"]},
+        expected_classes=["toad"],
+    )
+    assert spec.image_dir == image_dir.resolve()
+    assert spec.label_dir == label_dir.resolve()
+
+
+def test_faster_rcnn_label_parser_rejects_unknown_classes_and_bad_boxes(tmp_path: Path):
+    labels = parse_yolo_label_lines(["0 0.5 0.5 0.4 0.6"], 40, 30, class_count=1)
+    assert labels == [([12.0, 6.0, 28.0, 24.0], 1)]
+    with pytest.raises(ValueError, match="class id"):
+        parse_yolo_label_lines(["1 0.5 0.5 0.4 0.6"], 40, 30, class_count=1)
+    with pytest.raises(ValueError, match="within the image"):
+        parse_yolo_label_lines(["0 0.1 0.5 0.4 0.6"], 40, 30, class_count=1)
+
+
+def test_faster_rcnn_training_rejects_missing_base_checkpoint(tmp_path: Path):
+    detector = FasterRCNNDetector(tmp_path / "missing.pt", ["toad"])
+    with pytest.raises(UnsupportedCheckpointError, match="missing"):
+        detector.train(tmp_path / "dataset.yaml", tmp_path / "output", {"epochs": 1})

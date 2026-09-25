@@ -44,7 +44,13 @@ def _image_size(path: Path) -> tuple[int, int]:
 class UltralyticsDetector:
     """YOLO or RT-DETR adapter using Ultralytics' lazy runtime."""
 
-    def __init__(self, checkpoint: str | Path, architecture: str, classes: list[str], model_id: str | None = None):
+    def __init__(
+        self,
+        checkpoint: str | Path,
+        architecture: str,
+        classes: list[str],
+        model_id: str | None = None,
+    ):
         if architecture not in {"yolo", "rtdetr"}:
             raise ValidationError("UltralyticsDetector architecture must be 'yolo' or 'rtdetr'")
         self.checkpoint = Path(checkpoint).expanduser().resolve()
@@ -90,7 +96,12 @@ class UltralyticsDetector:
                 class_name = (
                     names[class_index]
                     if isinstance(names, (list, tuple))
-                    else names.get(class_index, self.classes[class_index] if class_index < len(self.classes) else f"class_{class_index}")
+                    else names.get(
+                        class_index,
+                        self.classes[class_index]
+                        if class_index < len(self.classes)
+                        else f"class_{class_index}",
+                    )
                 )
                 yield DetectionRecord(
                     image_path=str(path),
@@ -176,9 +187,9 @@ class FasterRCNNDetector:
 
     def predict(self, image_paths: Iterable[Path], config: InferenceConfig):
         try:
+            import numpy as np
             import torch
             from PIL import Image
-            import numpy as np
         except ImportError as exc:
             raise OptionalDependencyError(
                 "Faster R-CNN inference requires the 'inference' extra"
@@ -202,7 +213,11 @@ class FasterRCNNDetector:
                     image_path=str(path),
                     image_id=path.name,
                     class_id=class_id,
-                    class_name=self.classes[class_id] if 0 <= class_id < len(self.classes) else f"class_{class_id}",
+                    class_name=(
+                        self.classes[class_id]
+                        if 0 <= class_id < len(self.classes)
+                        else f"class_{class_id}"
+                    ),
                     confidence=score,
                     bbox_xyxy=[float(value) for value in box.cpu().tolist()],
                     image_width=width,
@@ -213,8 +228,25 @@ class FasterRCNNDetector:
                 )
 
     def train(self, dataset_yaml, output_dir, config, resume_from=None) -> Path:
-        raise OptionalDependencyError(
-            "Faster R-CNN training requires a dataset-specific trainer; use the AmphiLens training extra and a registered trainer configuration"
+        from .faster_rcnn_training import FasterRCNNTrainer
+
+        if not self.checkpoint.is_file():
+            raise UnsupportedCheckpointError(f"Checkpoint is missing: {self.checkpoint}")
+        if resume_from is not None:
+            resume_from.validate_compatibility(
+                architecture=self.architecture,
+                classes=self.classes,
+                preprocessing=config.get("preprocessing", {}),
+            )
+            resume_checkpoint = resume_from.checkpoint_path
+        else:
+            resume_checkpoint = None
+        return FasterRCNNTrainer(self.classes).train(
+            dataset_yaml,
+            output_dir,
+            config,
+            initial_checkpoint=self.checkpoint,
+            resume_from=resume_checkpoint,
         )
 
 
@@ -239,7 +271,9 @@ def load_detector(
             preprocessing=preprocessing or {},
         )
         if model_id is not None and checkpoint_manifest.model_id != model_id:
-            raise UnsupportedCheckpointError("Checkpoint model id does not match the requested model")
+            raise UnsupportedCheckpointError(
+                "Checkpoint model id does not match the requested model"
+            )
         current_hash = hashlib.sha256(checkpoint_path.read_bytes()).hexdigest()
         if current_hash != checkpoint_manifest.sha256:
             raise UnsupportedCheckpointError("Checkpoint hash does not match its manifest")
