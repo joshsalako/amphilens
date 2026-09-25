@@ -87,8 +87,14 @@ Run a registered-compatible checkpoint over a project image pool:
 ```bash
 amphilens predict ./my-project /path/to/model.pt \
   --architecture yolo \
-  --output-dir ./my-project/artifacts/predict-yolo
+  --output-dir ./my-project/artifacts/predict-yolo \
+  --registry-dir ./model-registry \
+  --model-id wlt-yolo-v1 \
+  --preprocessing '{"name":"none"}'
 ```
+
+The registry options are recommended for reproducible reuse. Omit them for a
+deliberate exploratory run with an unregistered base checkpoint.
 
 Register a reusable checkpoint before sharing it between projects:
 

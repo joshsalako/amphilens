@@ -68,7 +68,7 @@ Checkpoint history currently pushed to `origin/main`:
 - [x] Add serializable `JobSpec`/`JobStatus` contracts and a local execution backend.
 - [x] Add CPU/CUDA Dockerfiles, Docker Compose reference deployment, and deployment documentation.
 - [x] Implement environment diagnostics, Typer CLI shell, and Streamlit shell.
-- [x] Verify the current suite: 44 tests passing with CLI dependencies, including PPAL artifacts, reports, UI helpers, deployment-contract coverage, manifest/artifact hardening, CVAT integrity checks, detector contracts, Faster R-CNN training, checkpoint registry workflows, guided UI controls, and run-artifact indexing.
+- [x] Verify the current suite: 45 tests passing with CLI dependencies, including PPAL artifacts, reports, UI helpers, deployment-contract coverage, manifest/artifact hardening, CVAT integrity checks, detector contracts, Faster R-CNN training, checkpoint registry workflows, guided UI controls, run-artifact indexing, and registry-enforced prediction.
 - [x] Add Apache-2.0 license, changelog, security/privacy note, code of conduct, and GitHub Actions CI for supported Python versions.
 
 Current verification command (the local equivalent of the CI dependency-light job):
@@ -113,7 +113,7 @@ Remote verification: `origin` is `https://github.com/joshsalako/amphilens.git`; 
 ### Task 2: Complete model registry and detector contracts
 
 - [x] Add `ModelRegistry` and `ModelManifest` persistence with model-card links, license, domain, class order, preprocessing, and checkpoint hash.
-- [x] Add `load_detector()` compatibility checks before loading any checkpoint when a checkpoint manifest is supplied.
+- [x] Add `load_detector()` compatibility checks before loading any checkpoint when a checkpoint manifest is supplied, and expose registry-enforced prediction through the CLI.
 - [x] Add backend contract tests covering empty predictions, confidence filtering, image dimensions, device selection, and malformed checkpoints.
 - [x] Complete the Faster R-CNN training adapter using a stable CVAT/YOLO dataset and trainer interface rather than importing hard-coded research paths; runtime GPU benchmarks remain open.
 - [ ] Preserve YOLO and RT-DETR training configs while making epochs, freeze schedule, batch size, seed, preprocessing, and image size explicit.

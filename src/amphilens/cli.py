@@ -185,22 +185,41 @@ if typer is not None:
         device: str = typer.Option("auto", "--device"),
         model_id: str | None = typer.Option(None, "--model-id"),
         run_id: str | None = typer.Option(None, "--run-id"),
+        registry_dir: Path | None = typer.Option(None, "--registry-dir"),
+        preprocessing: str = typer.Option("{}", "--preprocessing"),
     ):
         """Run a compatible detector and persist resumable prediction artifacts."""
         store = ProjectStore(project_dir)
         manifest = store.load_manifest()
         resolved_model_id = model_id or checkpoint.stem
+        try:
+            preprocessing_config = json.loads(preprocessing)
+        except json.JSONDecodeError as exc:
+            raise ValueError("--preprocessing must be a JSON object") from exc
+        if not isinstance(preprocessing_config, dict):
+            raise ValueError("--preprocessing must be a JSON object")
+        checkpoint_manifest = None
+        if registry_dir is not None:
+            checkpoint_manifest = ModelRegistry(registry_dir).resolve(
+                resolved_model_id,
+                architecture=architecture,
+                classes=manifest.classes,
+                preprocessing=preprocessing_config,
+            )
         detector = load_detector(
             checkpoint,
             architecture=architecture,
             classes=manifest.classes,
             model_id=resolved_model_id,
+            checkpoint_manifest=checkpoint_manifest,
+            preprocessing=preprocessing_config,
         )
         config = InferenceConfig(
             model_id=resolved_model_id,
             image_size=image_size,
             confidence=confidence,
             device=device,
+            preprocessing=str(preprocessing_config.get("name", "none")),
             run_id=run_id or f"predict-{resolved_model_id}",
         )
         summary = run_resumable_inference(

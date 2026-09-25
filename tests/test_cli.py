@@ -289,3 +289,95 @@ def test_checkpoint_registry_commands_persist_compatibility_metadata(tmp_path: P
     inspected = runner.invoke(app, ["checkpoint", "inspect", str(registry), "fixture-yolo"])
     assert inspected.exit_code == 0, inspected.stdout
     assert '"architecture": "yolo"' in inspected.stdout
+
+
+def test_predict_can_enforce_registry_compatibility(monkeypatch, tmp_path: Path):
+    images = tmp_path / "images"
+    images.mkdir()
+    (images / "camera.jpg").write_bytes(b"fixture")
+    project = tmp_path / "project"
+    registry = tmp_path / "registry"
+    checkpoint = tmp_path / "fixture.pt"
+    checkpoint.write_bytes(b"fixture-weights")
+    runner = CliRunner()
+    assert (
+        runner.invoke(
+            app,
+            [
+                "project",
+                "create",
+                str(project),
+                "--image-root",
+                str(images),
+                "--class-name",
+                "toad",
+            ],
+        ).exit_code
+        == 0
+    )
+    assert (
+        runner.invoke(
+            app,
+            [
+                "checkpoint",
+                "register",
+                str(registry),
+                str(checkpoint),
+                "--model-id",
+                "fixture",
+                "--architecture",
+                "yolo",
+                "--class-name",
+                "toad",
+                "--preprocessing",
+                '{"name":"none"}',
+            ],
+        ).exit_code
+        == 0
+    )
+
+    class Detector:
+        model_id = "fixture"
+
+        def predict(self, image_paths, config):
+            for path in image_paths:
+                yield DetectionRecord(
+                    image_path=str(path),
+                    image_id=path.name,
+                    class_id=0,
+                    class_name="toad",
+                    confidence=0.9,
+                    bbox_xyxy=[1, 1, 5, 5],
+                    image_width=10,
+                    image_height=10,
+                    model_id="fixture",
+                    run_id=config.run_id,
+                )
+
+    observed = {}
+
+    def fake_load_detector(path, **kwargs):
+        observed.update(kwargs)
+        return Detector()
+
+    monkeypatch.setattr(cli_module, "load_detector", fake_load_detector)
+    result = runner.invoke(
+        app,
+        [
+            "predict",
+            str(project),
+            str(checkpoint),
+            "--architecture",
+            "yolo",
+            "--output-dir",
+            str(tmp_path / "output"),
+            "--model-id",
+            "fixture",
+            "--registry-dir",
+            str(registry),
+            "--preprocessing",
+            '{"name":"none"}',
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert observed["checkpoint_manifest"].model_id == "fixture"
