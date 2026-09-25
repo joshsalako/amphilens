@@ -63,11 +63,12 @@ Checkpoint history currently pushed to `origin/main`:
 - [x] Add `project create/inspect`, `predict`, and CVAT export/import CLI workflows over shared services.
 - [x] Add `active-learn` CLI workflow with PPAL calibration/feature inputs and auditable queue artifacts.
 - [x] Add guided Streamlit workflows for environment, project creation, prediction, and Hybrid PPAL queue selection.
+- [x] Expose advanced prediction and PPAL controls for device, preprocessing label, run identity, seed, pool multiplier, class priority, and sampling ratios.
 - [x] Add JSON and Markdown prediction reports and the `report` CLI command.
 - [x] Add serializable `JobSpec`/`JobStatus` contracts and a local execution backend.
 - [x] Add CPU/CUDA Dockerfiles, Docker Compose reference deployment, and deployment documentation.
 - [x] Implement environment diagnostics, Typer CLI shell, and Streamlit shell.
-- [x] Verify the current suite: 42 tests passing with CLI dependencies, including PPAL artifacts, reports, UI helpers, deployment-contract coverage, manifest/artifact hardening, CVAT integrity checks, detector contracts, Faster R-CNN training, and checkpoint registry workflows.
+- [x] Verify the current suite: 43 tests passing with CLI dependencies, including PPAL artifacts, reports, UI helpers, deployment-contract coverage, manifest/artifact hardening, CVAT integrity checks, detector contracts, Faster R-CNN training, checkpoint registry workflows, and guided UI controls.
 - [x] Add Apache-2.0 license, changelog, security/privacy note, code of conduct, and GitHub Actions CI for supported Python versions.
 
 Current verification command (the local equivalent of the CI dependency-light job):

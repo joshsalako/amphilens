@@ -144,7 +144,10 @@ Detector backends are selected explicitly from checkpoint metadata. A bare check
 
 ## Active learning
 
-The default strategy is Hybrid PPAL:
+The guided UI exposes confidence threshold, image size, device, preprocessing
+label, run ID, annotation budget, seed, candidate-pool multiplier, class
+priority, and uncertain/certain/random ratios. The default strategy is Hybrid
+PPAL:
 
 ```text
 validation calibration -> PPAL class difficulty -> DCUS uncertainty -> CCMS diversity

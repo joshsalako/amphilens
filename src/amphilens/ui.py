@@ -66,6 +66,9 @@ def _render_project(st):
     )
     confidence = st.slider("Confidence threshold", 0.0, 1.0, 0.25, 0.01)
     image_size = st.number_input("Image size", min_value=32, value=640, step=32)
+    device = st.selectbox("Device", ["auto", "cpu", "cuda"])
+    preprocessing = st.text_input("Preprocessing label", value="none")
+    run_id = st.text_input("Run ID", value=f"predict-{Path(checkpoint).stem or 'model'}")
     if st.button("Run prediction", type="primary"):
         try:
             model_id = Path(checkpoint).stem
@@ -76,7 +79,9 @@ def _render_project(st):
                 model_id=model_id,
                 image_size=int(image_size),
                 confidence=confidence,
-                run_id=f"predict-{model_id}",
+                preprocessing=preprocessing.strip() or "none",
+                device=device,
+                run_id=run_id.strip() or f"predict-{model_id}",
             )
             summary = run_resumable_inference(
                 detector, iter_images(manifest.image_roots), config, output_dir
@@ -102,10 +107,26 @@ def _render_active_learning(st):
     features = st.text_input("Feature JSON")
     output = st.text_input("Queue output folder", value="./amphilens-project/annotations/cycle-0")
     budget = st.number_input("Annotation budget", min_value=1, value=100, step=1)
+    seed = st.number_input("Selection seed", min_value=0, value=42, step=1)
+    pool_multiplier = st.number_input("Candidate pool multiplier", min_value=1, value=200, step=1)
+    uncertain_ratio = st.slider("Uncertain ratio", 0.0, 1.0, 0.4, 0.05)
+    certain_ratio = st.slider("Certain ratio", 0.0, 1.0, 0.5, 0.05)
+    random_ratio = st.slider("Random ratio", 0.0, 1.0, 0.1, 0.05)
+    priority_class = st.text_input("Priority class (optional)")
+    priority_weight = st.number_input("Priority-class weight", min_value=0.0, value=1.0, step=0.1)
     if st.button("Select annotation queue", type="primary"):
         try:
             selected_calibration = PPALCalibration(**json.loads(Path(calibration).read_text()))
-            selected_config = HybridPPALConfig(budget=int(budget))
+            selected_config = HybridPPALConfig(
+                budget=int(budget),
+                pool_multiplier=int(pool_multiplier),
+                uncertain_ratio=uncertain_ratio,
+                certain_ratio=certain_ratio,
+                random_ratio=random_ratio,
+                seed=int(seed),
+                priority_class=priority_class.strip() or None,
+                priority_weight=priority_weight,
+            )
             selected = HybridPPALStrategy(selected_config).select(
                 read_predictions_csv(Path(predictions)),
                 selected_calibration,
