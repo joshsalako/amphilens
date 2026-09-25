@@ -23,6 +23,7 @@
 - Missing calibration evidence fails clearly; an uncalibrated fallback is explicit advanced behavior and is recorded in run metadata.
 - Checkpoints are reusable only with compatible architecture, ordered classes, preprocessing, input size, and recorded provenance.
 - Core imports must work without CUDA, PyTorch, Ultralytics, Streamlit, or CVAT installed.
+- The managed CVAT path is an optional, pinned integration; the portable file exchange remains the dependency-light fallback.
 - Do not commit datasets, weights, generated predictions, caches, virtual environments, or credentials.
 - Use focused tests before behavior changes and run the complete suite at every checkpoint.
 
@@ -53,6 +54,7 @@ Checkpoint history currently pushed to `origin/main`:
 - `8af82af` guided advanced controls
 - `46e6712` persisted run metadata and artifact indexing
 - `fa27b51` registry-enforced prediction compatibility
+- `9ceedf2` implementation checkpoint and plan-history update
 
 ## Completed implementation slices
 
@@ -85,6 +87,7 @@ Current verification command (the local equivalent of the CI dependency-light jo
 ```bash
 PYTHONPATH=src UV_CACHE_DIR=/private/tmp/amphilens-uv-cache \
   uv run --with pytest --with pillow --with typer --no-project pytest -q
+```
 
 Latest verification on 2026-09-25:
 
@@ -92,12 +95,11 @@ Latest verification on 2026-09-25:
 - `uv build` produced `dist/amphilens-0.1.0-py3-none-any.whl` and
   `dist/amphilens-0.1.0.tar.gz`.
 - Both artifacts imported as version `0.1.0` from isolated virtual environments.
-- The final tree was clean on `main`, tracking `origin/main` at `fa27b51`.
+- The final tree was clean on `main`, tracking `origin/main` at `9ceedf2`.
 - `gh auth status` confirmed active account `joshsalako` with HTTPS `repo` and
   `workflow` scopes.
 - Optional PyTorch, torchvision, Ultralytics, Streamlit, and CUDA runtime
   execution remains outside this dependency-light verification boundary.
-```
 
 ## Remaining tasks
 
@@ -163,21 +165,31 @@ Remote verification: `origin` is `https://github.com/joshsalako/amphilens.git`; 
 - [x] Add task-level manifest validation before export/import.
 - [x] Add stable image IDs independent of filenames and preserve relative plus absolute source references where possible.
 - [x] Add import validation for unknown classes, duplicate annotation IDs, invalid boxes, image dimension mismatches, and missing images.
-- [ ] Add optional CVAT REST integration only after file-based exchange is stable; credentials must never enter project manifests.
-- [ ] Add a user guide with the exact CVAT export, annotation, export, and import steps.
+- [ ] Add the managed CVAT adapter using the official `cvat-sdk`, not interactive subprocess parsing, with an optional `cvat-cli` diagnostic fallback.
+- [ ] Create or reuse one CVAT project per AmphiLens project and one task per active-learning cycle; derive the exact ordered label schema from `ProjectManifest` and fail on class drift.
+- [ ] Add idempotent task creation and persisted `server_url`, project/task/job IDs, selection hash, server/client versions, and cycle state; recover an interrupted upload or Continue action without duplicate tasks.
+- [ ] Add one-button lifecycle services: create/upload/open, status/ready check, export, validate, import, merge into an immutable dataset snapshot, and hand off to the next training cycle.
+- [ ] Treat CVAT job/task completion as the default readiness gate. Empty boxes on a reviewed image remain valid negatives; an empty or partial task is blocked unless an explicit advanced partial-import override is recorded.
+- [ ] Add safe credential handling through environment/keychain configuration; tokens never enter project or run manifests, logs, CSVs, or URLs.
+- [ ] Keep the portable file exchange as a fully supported fallback and document exact CVAT manual recovery steps.
+- [ ] Add a pinned CVAT contract test against CVAT Community `v2.76.0` and `cvat-sdk==2.76.0`; verify local images, labels, export, status, provenance, retry, and class/dimension/box failures.
 
 ### Task 6: Build the guided CLI and Streamlit workflow — in progress
 
 - [x] Add CLI commands: `app`, `doctor`, `project create`, `project inspect`, `predict`, `active-learn`, `checkpoint register/list/inspect`, `cvat export`, `cvat import`, and `report`.
 - [x] Keep CLI and UI on shared services; no duplicate business logic.
 - [x] Add a guided wizard for image roots, classes, base model, output location, prediction, and PPAL queue steps.
+- [ ] Add **Send to CVAT**, **Open CVAT**, **Refresh status**, and **Continue cycle** actions over the managed CVAT service; the UI must show task URL, status, annotation count, selected-image count, and the exact blocking reason.
 - [ ] Add advanced panels for all documented model, preprocessing, threshold, PPAL, and training controls.
 - [ ] Show actionable failures for missing GPU, missing calibration, incompatible checkpoint, invalid annotation, and insufficient disk.
 - [ ] Add UI smoke tests for project creation, diagnostics, configuration validation, and artifact download.
 
 ### Task 7: Package and release quality
 
-- [ ] Add lockable development environments for supported Python versions.
+- [ ] Add one supported release profile first: Python 3.11 with a committed lockfile; avoid claiming every Python minor has equivalent ML/CVAT coverage.
+- [ ] Pin the managed CVAT compatibility profile to CVAT Community `v2.76.0`, `cvat-sdk==2.76.0`, and `cvat-cli==2.76.0`; pin matched PyTorch/torchvision and tested Ultralytics versions in the lockfile and container images.
+- [ ] Keep unpinned or broad dependency ranges only for source-level library compatibility; release and Docker instructions must install from the lockfile.
+- [ ] Add CPU inference and GPU fine-tuning smoke tests using the same lockfile, with optional newer-version checks separated from the supported release gate.
 - [x] Add CI with Ruff linting, Pytest coverage, import-without-ML-dependencies check, and package build verification.
 - [x] Add a changelog, security/privacy note, code of conduct, and license file.
 - [x] Add a release checklist.
@@ -191,6 +203,7 @@ Remote verification: `origin` is `https://github.com/joshsalako/amphilens.git`; 
 - [x] Implement a local backend as the reference implementation.
 - [x] Add Docker CPU inference image and CUDA training image foundations.
 - [x] Add Docker Compose single-machine deployment with local volumes and documented privacy boundaries.
+- [ ] Add a reference local CVAT Community `v2.76.0` Compose profile and an AmphiLens app profile with a tested network/volume boundary; do not silently upload data to an external CVAT server.
 - [ ] Add SSH and Slurm adapters for institutional GPUs.
 - [ ] Add provider-neutral remote worker protocol with resumable uploads/downloads, logs, checkpoint artifacts, and job cancellation.
 - [ ] Only then evaluate hosted deployment with API, queue, workers, metadata database, object storage, authentication, and multi-user isolation.
@@ -217,7 +230,8 @@ Changes to these interfaces require updating the design specification, migration
 - A clean CPU environment can install the core/CLI and run `amphilens doctor`.
 - A user can create a project without editing Python code or machine-specific configuration.
 - A compatible checkpoint can run inference and produce stable CSV plus provenance/evidence artifacts.
-- A user can export a review subset to CVAT, annotate it, import it, and preserve source mappings.
+- A user can click one action to create a correctly labelled CVAT cycle, open it, annotate/save, click Continue, and have AmphiLens verify readiness, import validated annotations, preserve source mappings, merge a new dataset snapshot, and continue training without duplicate tasks or artifacts.
+- The portable CVAT file exchange still works when managed credentials or a CVAT server are unavailable.
 - Default Hybrid PPAL stops when calibration evidence is missing and produces reproducible selections when evidence is present.
 - Checkpoints can be resumed/reused only when compatibility metadata matches.
 - The three detector backends share one tested interface; unsupported runtime dependencies fail with actionable messages.
@@ -243,15 +257,18 @@ Before every checkpoint: run the complete test command, inspect `git diff --chec
 
 - **Ruling:** Keep `wlt-app` separate from `wtl-detection` — this preserves paper reproducibility while allowing product interfaces and paths to evolve.
 - **Ruling:** Use local browser UI first — it protects camera-trap privacy and avoids making cloud storage/GPU billing a v1 prerequisite.
-- **Ruling:** Use CVAT file exchange before REST integration — it keeps the first annotation contract portable and credential-free.
+- **Ruling:** Keep portable CVAT file exchange as the baseline, then add managed CVAT through the official SDK — this preserves offline/recovery workflows while making one-button status, retries, and provenance dependable.
+- **Ruling:** Use one CVAT project per AmphiLens project and one task per active-learning cycle — this gives the user a stable label schema and an auditable task history without mixing cycles.
+- **Ruling:** Treat CVAT completion plus an exportable annotation payload as the Continue readiness gate — absence of boxes alone cannot distinguish a valid negative from an unreviewed image.
+- **Ruling:** Pin the first managed profile to Python 3.11 and the CVAT 2.76.0 release family — the server, SDK, and CLI are published with matching version numbers, and the remaining ML stack will be locked only after the project’s CPU/GPU smoke tests.
 - **Ruling:** Require calibration in default Hybrid PPAL — silent AP/hard-coded fallbacks are not dependable for new taxa or domains.
 - **Ruling:** Support all three detector families behind adapters — this preserves the paper’s architecture comparison while keeping the engine model-independent.
 - **Ruling:** Repository publication is performed only through the verified `joshsalako` identity and the requested `origin` remote.
 
 ## Next immediate work
 
-1. Harden manifest schemas, atomic artifact indexing, and recovery for interrupted writes.
-2. Add deeper CVAT validation for unknown classes, duplicate IDs, dimensions, and missing images.
-3. Complete detector backend contract coverage and decide the stable Faster R-CNN training dataset interface.
-4. Add advanced Streamlit controls and explicit failure guidance for calibration, checkpoints, GPU, and disk.
-5. Keep this plan and the checkpoint history current after each coherent implementation slice.
+1. Complete the remaining manifest validation and recovery edge cases.
+2. Implement the pinned managed CVAT service and its contract tests against CVAT Community v2.76.0.
+3. Add the CLI/UI one-button create, open, Continue, merge, and resume lifecycle over that service.
+4. Lock and smoke-test the Python 3.11 CPU/GPU dependency profile, then add the pinned CVAT Compose reference.
+5. Complete detector training/evaluation gates and keep this plan and checkpoint history current after each coherent implementation slice.

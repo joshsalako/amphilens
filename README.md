@@ -36,7 +36,8 @@ The production training and remote-execution workflows are being built increment
 - CPU: supported for inference;
 - CUDA GPU: recommended for large-pool inference and fine-tuning;
 - disk space for image pools, checkpoints, and derived evidence;
-- CVAT for external annotation workflows.
+- CVAT for external annotation workflows. The portable exchange works offline;
+  the managed one-button workflow is being added against a pinned CVAT profile.
 
 GPU support is optional. AmphiLens will not upload camera-trap data in local mode.
 
@@ -115,7 +116,7 @@ Registration records the SHA-256 hash, ordered classes, preprocessing, domain,
 license, and optional model-card link. A later load can reject a tampered or
 incompatible checkpoint before importing the ML runtime.
 
-Export and import an annotation task:
+Export and import an annotation task through the portable, credential-free exchange:
 
 ```bash
 amphilens cvat export ./my-project/artifacts/predict-yolo/predictions.csv ./my-project/annotations/cycle-0 \
@@ -134,6 +135,16 @@ an artifact index, and checkpoints. Resumable prediction folders include
 `run.json`, progress, JSONL, stable CSV, and summary outputs. Original image
 roots remain outside the project and are never copied unless an annotation
 exchange explicitly requires a review subset.
+
+The planned managed CVAT workflow will create or reuse one CVAT project per
+AmphiLens project and one task per active-learning cycle, upload the selected
+images with the exact project classes, and persist the task URL and IDs. After
+annotation, **Continue** will verify CVAT readiness, export and validate the
+labels, merge them into a new immutable dataset snapshot, and continue
+training. The first supported integration profile is Python 3.11 with CVAT
+Community `v2.76.0`, `cvat-sdk==2.76.0`, and `cvat-cli==2.76.0`; it is not yet
+implemented in the current release. See the implementation plan for the
+idempotency, credential, partial-annotation, and recovery rules.
 
 ## Python API
 
