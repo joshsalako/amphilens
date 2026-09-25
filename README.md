@@ -1,73 +1,169 @@
 # AmphiLens
 
 AmphiLens is a local browser app for finding amphibians and other wildlife in
-camera-trap images. It helps a conservation or ecology team:
+camera-trap images. It helps conservation and ecology teams:
 
-- scan a large image collection with a detection model;
-- find the images that are most useful to label;
-- improve the model with a small amount of human annotation; and
+- find animals in large image collections;
+- select useful images for human review;
+- improve a model with a small amount of annotation; and
 - download predictions, reports, and review images.
 
-It is designed to work with sensitive wildlife data on the user's own
-computer. A GPU is helpful for large collections and model training, but is
-not required for basic inference.
+Your images stay on your computer unless you deliberately send a review queue
+to a CVAT server.
 
-## How it works
+## What the app does
 
 ```mermaid
 flowchart LR
-    A[Camera-trap images] --> B[AmphiLens browser app]
+    A[Camera-trap images] --> B[AmphiLens app]
     B --> C[Base model finds likely animals]
-    C --> D[AmphiLens selects useful images to review]
-    D --> E[Human checks selected images in CVAT]
-    E --> F[AmphiLens improves the model]
+    C --> D[Useful images selected for review]
+    D --> E[Human annotation in CVAT]
+    E --> F[Model improves]
     F --> G[Predictions and reports]
     C --> G
 ```
 
-The selection step is the active-learning method described in the research
-paper. It reduces the amount of annotation needed when the new images are
-similar to the model's training domain.
+The active-learning step is based on the
+[research paper](https://openreview.net/pdf?id=0YnE65NGna). It is most useful
+when the new images are similar to the model's training domain.
 
-## Run the app
+## 1. Install AmphiLens
 
-AmphiLens runs locally on your computer. `uv` is the recommended installer
-because this repository includes a lockfile with the tested dependency
-resolution.
+The supported first-release environment is Python 3.11. `uv` is recommended
+because this project includes a lockfile with the tested dependency versions.
 
-The supported first-release environment is Python 3.11. A committed
-`uv.lock` records the reproducible dependency resolution.
-
-### Recommended: install with uv
+Open a terminal and move to the folder where you downloaded or cloned the
+project. Replace the example path with your own location:
 
 ```bash
-cd /Users/joshua/Downloads/wlt-app
+cd /path/to/amphilens
 uv python install 3.11
-uv sync --locked --python 3.11 \
-  --extra cli --extra ui --extra inference --extra training --extra cvat
-uv run --locked amphilens doctor
-uv run --locked amphilens app
-```
-
-The last command starts Streamlit. Open
-[http://localhost:8501](http://localhost:8501) if the browser does not open
-automatically. Use `uv run --locked amphilens app` rather than launching
-`src/amphilens/ui.py` directly; the CLI preserves the package context required
-by the browser app.
-
-The `cvat` extra is only needed for the managed **Send to CVAT** workflow. If
-you only need local inference and portable CVAT/YOLO ZIP import, use:
-
-```bash
 uv sync --locked --python 3.11 \
   --extra cli --extra ui --extra inference --extra training
 ```
 
-### CVAT credentials
+For the managed CVAT workflow, include the CVAT extra:
 
-Managed CVAT needs a CVAT server URL and a personal access token. Set them in
-the terminal before starting AmphiLens. This example prompts for the token so
-it is not written directly into shell history:
+```bash
+uv sync --locked --python 3.11 \
+  --extra cli --extra ui --extra inference --extra training --extra cvat
+```
+
+If `uv` is not available, use a normal Python virtual environment:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[cli,ui,inference,training]"
+```
+
+On Windows PowerShell:
+
+```powershell
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e ".[cli,ui,inference,training]"
+```
+
+## 2. Start the browser app
+
+Run:
+
+```bash
+uv run --locked amphilens doctor
+uv run --locked amphilens app
+```
+
+Open [http://localhost:8501](http://localhost:8501) if the browser does not
+open automatically.
+
+The **Environment** page shows whether the computer has the libraries, disk
+space, and GPU needed for the selected workflow.
+
+## 3. Create a project
+
+In the app:
+
+1. Open **Create project**.
+2. Choose the folder containing the camera-trap images.
+3. Enter the animals or organisms to detect, one class per line.
+4. Choose a project folder.
+5. Press **Create project**.
+
+The original image folder is never modified.
+
+## 4. Import existing annotations
+
+If you already labelled some images, open **Import initial dataset** and select
+an archive containing both images and annotations.
+
+Supported formats are:
+
+- CVAT for Images 1.1 ZIP;
+- COCO 1.0 ZIP; and
+- YOLO ZIP with `classes.txt` or `dataset.yaml`.
+
+Then:
+
+1. Select the project folder.
+2. Select the annotation ZIP file.
+3. Add a class mapping only if the archive names differ from your project names.
+4. Press **Import initial dataset**.
+
+AmphiLens checks image files, dimensions, classes, and bounding boxes. Images
+with no boxes are kept as reviewed negatives. The imported dataset becomes an
+immutable snapshot.
+
+## 5. Choose the model and image settings
+
+The first supported model choices are:
+
+- **YOLO26-L** — the default AmphiLens model;
+- **RT-DETR-L**; and
+- **Faster R-CNN with ResNet-50 FPN v2**.
+
+For each project, choose:
+
+- maximum image dimension, default `640`;
+- grayscale conversion, on by default;
+- CLAHE, off for generic projects and on for the paper-aligned preset;
+- confidence threshold; and
+- CPU or CUDA device.
+
+Images are resized without enlarging them, aspect ratio is preserved, and
+grayscale images are replicated into three channels. If CLAHE is enabled,
+resizing happens first to reduce processing time. These choices are saved in
+the project and run metadata.
+
+## 6. Train a model or find animals
+
+Use **Train model** when you have imported labelled data. The initial imported
+images are all used for training. AmphiLens does not invent a validation split;
+until you provide a separate validation dataset, results say:
+`evaluation: not evaluated`.
+
+Use **Find animals** to run a selected base model or trained checkpoint over
+an unlabeled image folder.
+
+## 7. Improve the model with active learning
+
+After inference:
+
+1. Open **Active learning queue**.
+2. Provide the prediction, calibration, and feature files.
+3. Choose the number of images to review.
+4. Press **Select annotation queue**.
+5. Open **CVAT cycle** and select the generated `selection_queue.csv`.
+6. Press **Send to CVAT**.
+7. Press **Open CVAT**, annotate and save every selected image.
+8. Return to AmphiLens and press **Refresh status**.
+9. When all CVAT jobs are complete, press **Continue cycle**.
+10. Select the new immutable snapshot on **Train model** and provide the
+    parent checkpoint manifest to continue training.
+
+For managed CVAT, set the server URL and token before starting the app. The
+token is read only while the app is running:
 
 ```bash
 export CVAT_URL="http://localhost:8080"
@@ -78,101 +174,32 @@ export CVAT_TOKEN
 uv run --locked amphilens app
 ```
 
-AmphiLens reads these values only while the app is running. It does not write
-the token to project files, manifests, logs, CSV files, URLs, or Git. Remove it
-from the current shell after closing the app with `unset CVAT_TOKEN`.
+If CVAT is unavailable, use the portable CVAT or YOLO ZIP export/import
+workflow instead.
 
-If CVAT is unavailable, leave the credentials unset and use the portable ZIP
-import/export workflow instead.
+## 8. Download the results
 
-### Alternative: pip installation
+AmphiLens can produce:
 
-If `uv` is not available, the package can also be installed with pip:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -e ".[cli,ui,inference,training,cvat]"
-amphilens app
-```
-
-On Windows PowerShell:
-
-```powershell
-py -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -e ".[cli,ui,inference,training,cvat]"
-amphilens app
-```
-
-The Streamlit messages about installing `streamlit skills` and `watchdog` are
-optional recommendations, not required for AmphiLens. The watchdog package
-can improve file-watching performance on some systems.
-
-## Use the browser app
-
-1. Check the environment and available hardware.
-2. Create a project and choose the folder containing the camera-trap images.
-3. Choose the wildlife classes, model, maximum image dimension, grayscale, and
-   optional CLAHE settings.
-4. If you already have labels, import a CVAT-for-Images or YOLO ZIP. The
-   archive must include its images.
-5. Train the initial model, or run the selected base model directly.
-6. Review the active-learning queue and annotate the selected images in CVAT.
-7. On **CVAT cycle**, press **Send to CVAT**, open the task, annotate and save,
-   then return and press **Continue cycle**. AmphiLens checks completion,
-   downloads the annotations, and merges a new dataset snapshot.
-8. Select the new snapshot on **Train model** to continue from the parent
-   checkpoint.
-9. Download the predictions CSV, report, and visual evidence.
-
-AmphiLens keeps source images unchanged. By default it downsizes only images
-larger than 640 pixels on their longest side, preserves aspect ratio, converts
-to three-channel grayscale, and leaves CLAHE off for generic projects. Every
-choice is saved with the project and run.
-
-For managed CVAT, install the pinned integration and set the server credentials
-in the terminal before launching the app:
-
-```bash
-python -m pip install -e ".[cli,ui,inference,training,cvat]"
-export CVAT_URL=http://localhost:8080
-export CVAT_TOKEN='your-token-from-a-secret-store'
-amphilens app
-```
-
-The token is used only by the running process and is never saved by AmphiLens.
-If CVAT is unavailable, export/import a portable CVAT or YOLO ZIP instead.
-
-## What you get
-
-- A CSV containing image names, detected classes, confidence scores, and
-  bounding boxes.
-- A human-readable report and optional images with detection boxes drawn on
-  them.
-- A reproducible record of the model, settings, source images, and outputs.
-- Reusable model checkpoints when fine-tuning is enabled.
+- a CSV of image names, classes, confidence scores, and bounding boxes;
+- a human-readable report;
+- visual evidence images with detection boxes; and
+- model checkpoints with configuration and provenance metadata.
 
 ## Hardware
 
-CPU inference works for small or moderate collections. A CUDA GPU is strongly
-recommended for fine-tuning and large collections. The app's **Environment**
-page and `amphilens doctor` show the installed libraries, GPU status, and free
-disk space before a run.
+CPU inference works for small and moderate collections. A CUDA GPU is strongly
+recommended for fine-tuning and large collections. Model weights are downloaded
+when first needed and are not included in the Python package.
 
-## Learn more
+## More information
 
-- [Research paper: Annotation-Efficient Object Detection of Endangered Western Leopard Toads](https://openreview.net/pdf?id=0YnE65NGna)
+- [Training and active learning](docs/training.md)
+- [Deployment options](docs/deployment.md)
 - [Technical overview](docs/technical-overview.md)
-- [Local and Docker deployment](docs/deployment.md)
-- [Fine-tuning notes](docs/training.md)
+- [Release checklist](docs/release-checklist.md)
 - [Contributor guide](CONTRIBUTING.md)
-
-## Privacy and scope
-
-In local mode, AmphiLens does not upload images. The project is broader than
-Western Leopard Toads: it can support amphibians and other organisms when a
-compatible model and labelled examples are available.
+- [Research paper](https://openreview.net/pdf?id=0YnE65NGna)
 
 ## License
 

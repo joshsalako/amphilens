@@ -1,64 +1,89 @@
-# AmphiLens deployment
+# Deployment
 
-## Local Python mode
+## 1. Choose where AmphiLens will run
 
-Local mode is the primary v1 deployment. It keeps camera-trap images, annotations, checkpoints, and predictions on the user's machine or institutional workstation.
+AmphiLens is local-first. Use one of these options:
 
-```bash
-python -m pip install -e ".[cli,ui,inference]"
-amphilens doctor
-amphilens app
-```
+1. **Local Python** for the normal browser workflow.
+2. **Docker Compose** for a repeatable local machine setup.
+3. **A future remote worker** for institutional or cloud GPUs.
 
-Use a CUDA-enabled Python environment for large-pool inference and training. The core package does not install CUDA automatically because PyTorch wheels depend on the host operating system and driver.
+The first release does not provide a hosted multi-user service.
 
-The supported v1 release profile is Python 3.11. The `inference` extra includes
-Pillow, NumPy, OpenCV, PyTorch, torchvision, and Ultralytics. The `training`
-extra adds PyYAML. OpenCV is needed when CLAHE is enabled. Run `amphilens doctor`
-before the first project to see which optional runtime pieces are available.
+## 2. Run locally with Python
 
-For the reproducible release profile, use the committed `uv.lock` rather than
-floating dependency resolution:
+The supported release profile is Python 3.11. From your AmphiLens checkout:
 
 ```bash
-uv sync --frozen --extra cli --extra ui --extra inference --extra training
+uv sync --locked --python 3.11 \
+  --extra cli --extra ui --extra inference --extra training
+uv run --locked amphilens doctor
+uv run --locked amphilens app
 ```
 
-The lockfile records the tested package resolution. CPU and CUDA PyTorch wheels
-remain platform-specific; select the lockfile environment that matches the
-host before starting a long training run.
+The committed `uv.lock` keeps the tested dependency resolution reproducible.
+The core package does not install CUDA automatically because PyTorch wheels and
+drivers depend on the host operating system.
 
-For managed CVAT compatibility, use the pinned CVAT Community `v2.76.0`
-profile with `cvat-sdk==2.76.0` and `cvat-cli==2.76.0`. Portable ZIP exchange
-does not require a CVAT server or CVAT credentials.
+## 3. Decide whether you need a GPU
 
-Managed CVAT reads `CVAT_URL` and `CVAT_TOKEN` from the process environment.
-The token is not accepted in project files or command-line output. The app
-uploads selected local images to the configured server only after the user
-presses **Send to CVAT**. Use the portable exchange when images must remain
-entirely local.
+- CPU inference is supported for small and moderate collections.
+- A CUDA GPU is recommended for large image pools and fine-tuning.
+- Use `amphilens doctor` before starting a project.
+- Do not treat a GPU as proof that a model is suitable for a new wildlife
+  domain; evaluate the model on representative data.
 
-## Docker Compose reference deployment
+## 4. Connect to CVAT
 
-The CPU service runs the local Streamlit UI with explicit project and model volumes:
+Install the managed CVAT extra when you want the one-button workflow:
+
+```bash
+uv sync --locked --python 3.11 \
+  --extra cli --extra ui --extra inference --extra training --extra cvat
+```
+
+Set the CVAT server and token in the process environment:
+
+```bash
+export CVAT_URL="http://localhost:8080"
+read -r -s CVAT_TOKEN
+export CVAT_TOKEN
+uv run --locked amphilens app
+```
+
+The supported managed profile uses CVAT Community `v2.76.0`,
+`cvat-sdk==2.76.0`, and `cvat-cli==2.76.0`. AmphiLens uploads images only when
+the user presses **Send to CVAT**. The token is not written to project files,
+manifests, logs, CSV files, URLs, or Git.
+
+If images must remain entirely local, use the portable CVAT or YOLO ZIP
+exchange instead.
+
+## 5. Run with Docker Compose
+
+The CPU service runs the local Streamlit app and mounts project and model
+folders from the host:
 
 ```bash
 mkdir -p projects models
 docker compose up --build amphilens
 ```
 
-Open `http://localhost:8501`. The Compose file does not expose image data to a remote service; the mounted directories remain local to the host.
+Open [http://localhost:8501](http://localhost:8501). The mounted folders stay
+on the host; the Compose file does not upload them to a remote service.
 
-The CUDA service is an execution foundation for a configured NVIDIA host:
+For a configured NVIDIA host, run the CUDA foundation:
 
 ```bash
 docker compose --profile cuda run --rm amphilens-cuda doctor
 ```
 
-Training images should be pinned to a tested CUDA/PyTorch combination before use in production. Do not treat a successful container build as evidence that a model is scientifically suitable for a new domain.
+The Docker images are foundations. Pin and test the CUDA/PyTorch combination
+for the target machine before production training.
 
-## Future remote execution
+## 6. Future remote execution
 
-Remote execution will submit a serializable `JobSpec` containing project reference, model reference, configuration, code version, and input references. Workers return a `JobStatus` and an `ArtifactBundle` containing logs, predictions, checkpoints, metrics, and hashes.
-
-The planned order is local process → SSH/Slurm → Docker worker → provider-neutral cloud worker. Object storage, queues, metadata databases, authentication, and multi-user isolation belong to the hosted phase, not the local v1 contract.
+Remote execution will use the same project and artifact contracts through SSH,
+Slurm, Docker workers, and provider-neutral cloud workers. Hosted deployment
+will require separate APIs, queues, object storage, authentication, and
+multi-user isolation; those components are not part of local v1.

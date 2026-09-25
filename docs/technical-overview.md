@@ -4,7 +4,7 @@ This page contains implementation and reproducibility details that are not
 needed for a first-time user. Start with the [README](../README.md) if you
 only want to run the browser app.
 
-## Current architecture
+## 1. Current architecture
 
 AmphiLens is a local-first Python package with a Streamlit browser interface
 and a Typer command-line interface. Both use the same services:
@@ -27,7 +27,7 @@ and a Typer command-line interface. Both use the same services:
 The package keeps source images untouched. Derived files are written to the
 project's artifact directories and retain mappings back to their source files.
 
-## Dataset import and preprocessing
+## 2. Dataset import and preprocessing
 
 An initial labelled dataset is optional for prediction but required for
 fine-tuning. Supported archives must include image files. The importer checks
@@ -46,7 +46,7 @@ original image dimensions before they are written to CSV. The exact structured
 configuration and fingerprint are recorded in project, run, dataset, and
 checkpoint metadata.
 
-## Active-learning method
+## 3. Active-learning method
 
 The default sequence is:
 
@@ -64,7 +64,7 @@ The implementation follows the method in the
 while keeping paths, classes, checkpoints, and configuration independent of a
 single wildlife species or dataset.
 
-## Command-line workflows
+## 4. Command-line workflows
 
 The browser app is the recommended interface. The CLI is useful for repeatable
 or unattended runs:
@@ -120,7 +120,7 @@ amphilens train ./my-project --output-dir ./my-project/checkpoints/cycle-0 \
   --model-preset yolo26-l --max-dimension 640
 ```
 
-## CVAT exchange and managed integration
+## 5. CVAT exchange and managed integration
 
 The current portable exchange writes:
 
@@ -162,7 +162,7 @@ The portable exchange remains the recovery path when CVAT is unavailable or
 credentials cannot be used. AmphiLens never deletes CVAT projects or tasks
 automatically.
 
-## Project outputs
+## 6. Project outputs
 
 Projects contain a manifest, run records, annotations, artifacts, an artifact
 index, and checkpoints. Prediction runs can include:
@@ -178,7 +178,7 @@ preprocessing, thresholds, image size, seed, software version, parent
 checkpoint, and output paths. Checkpoints are reusable only when their
 compatibility metadata matches the new project.
 
-## Python API
+## 7. Python API
 
 ```python
 from amphilens import InferenceConfig, ProjectManifest, ProjectStore
@@ -193,7 +193,7 @@ store.create(manifest)
 run = store.start_run(InferenceConfig(model_id="wlt-yolo", confidence=0.25))
 ```
 
-## Development and verification
+## 8. Development and verification
 
 Install the optional development dependencies and run the test suite:
 

@@ -4,7 +4,7 @@
 
 **Goal:** Build AmphiLens as a local-first Python package and browser application for reproducible wildlife camera-trap inference, Hybrid PPAL active learning, CVAT annotation exchange, checkpoint reuse, and future local/remote execution.
 
-**Canonical project:** `/Users/joshua/Downloads/wlt-app`
+**Canonical project:** the AmphiLens checkout on the user's machine
 
 **Scientific reference:** `/Users/joshua/Downloads/wtl-detection` (read-only reference for this product task)
 
