@@ -9,6 +9,7 @@ from .core import (
     ProjectStore,
     RunManifest,
 )
+from .runs import RunSummary, run_resumable_inference
 
 __all__ = [
     "CheckpointManifest",
@@ -18,7 +19,8 @@ __all__ = [
     "ProjectManifest",
     "ProjectStore",
     "RunManifest",
+    "RunSummary",
+    "run_resumable_inference",
 ]
 
 __version__ = "0.1.0"
-

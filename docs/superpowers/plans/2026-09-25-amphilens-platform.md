@@ -45,8 +45,10 @@ GitHub CLI inspection on 2026-09-25 reported invalid tokens for both `joshDrio` 
 - [x] Implement COCO/CVAT and YOLO exchange with deterministic flat filenames and source mappings.
 - [x] Implement checkpoint-aware training orchestration and checkpoint manifests.
 - [x] Implement a filesystem model registry with atomic metadata writes and checkpoint hash validation.
+- [x] Implement resumable per-image inference artifacts, failure records, stable CSV output, and run summaries.
+- [x] Make Hybrid PPAL class-aware before filling the remaining budget with diversity selection.
 - [x] Implement environment diagnostics, Typer CLI shell, and Streamlit shell.
-- [x] Verify the current dependency-light suite: 10 tests passing, including CVAT and YOLO round trips.
+- [x] Verify the current dependency-light suite: 14 tests passing, including CVAT/YOLO round trips, resumable inference, and class-aware PPAL.
 
 Current verification command:
 
@@ -96,23 +98,23 @@ Remote verification: `origin` is `https://github.com/joshsalako/amphilens.git`; 
 - [ ] Preserve YOLO and RT-DETR training configs while making epochs, freeze schedule, batch size, seed, preprocessing, and image size explicit.
 - [ ] Add `best.pt`, `last.pt`, checkpoint manifest, training log, and metrics artifact handling for every cycle.
 
-### Task 3: Finish production inference and reporting
+### Task 3: Finish production inference and reporting — in progress
 
-- [ ] Add streamed/batched inference with persisted per-batch progress and resume support.
+- [x] Add per-image inference with persisted progress, failure records, and resume support.
 - [ ] Add corrupt-image handling that records failures instead of producing fake detections.
 - [ ] Add summary reports containing image counts, detection counts, class counts, skipped files, runtime, model, and configuration.
 - [ ] Add optional CSV, JSONL, annotated-image, and HTML/Markdown report outputs.
 - [ ] Add tests proving reruns do not duplicate rows or overwrite prior run artifacts.
 - [ ] Add representative CPU benchmark and GPU benchmark scripts; publish measured hardware tiers rather than guessed requirements.
 
-### Task 4: Make Hybrid PPAL paper-faithful and generic
+### Task 4: Make Hybrid PPAL paper-faithful and generic — in progress
 
 - [ ] Compare `ppal_instance_difficulty`, class-weight calculation, DCUS ratios, and CCMS selection against controlled reference values from the paper/research repository.
 - [ ] Add validation-evidence ingestion from labeled predictions and holdout annotations.
-- [ ] Require calibration evidence for every selected class in default mode.
+- [x] Require calibration evidence for every selected class in default mode.
 - [ ] Add advanced controls for `xi`, `alpha`, `beta`, pool multiplier, uncertain/certain/random ratios, target class, priority weight, seed, and diversity feature backend.
 - [ ] Add reproducible selection artifacts containing all candidate scores, selected rows, reason, seed, calibration source, and feature-model metadata.
-- [ ] Add tests for class coverage, deterministic selection, missing calibration, missing features, small pools, zero detections, and budget larger than the pool.
+- [x] Add tests for class coverage, missing calibration, missing features, and budgeted selection.
 
 ### Task 5: Complete CVAT workflow
 

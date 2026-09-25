@@ -209,6 +209,13 @@ class DetectionRecord:
             "preprocessing": self.preprocessing or "",
         }
 
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "DetectionRecord":
+        return cls(**data)
+
 
 @dataclass(slots=True)
 class ModelManifest:

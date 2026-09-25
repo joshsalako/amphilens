@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-import random
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Iterable
@@ -159,11 +158,16 @@ class HybridPPALStrategy:
         if not pool:
             return []
 
-        rng = random.Random(self.config.seed)
         chosen: list[tuple[str, str, float, str]] = []
         remaining = list(pool)
-        first = remaining.pop(0)
-        chosen.append((*first, "hybrid_ppal:d cus_uncertainty".replace(" ", "")))
+        available_by_class: dict[str, tuple[str, str, float]] = {}
+        for candidate in pool:
+            available_by_class.setdefault(candidate[1], candidate)
+        for candidate in sorted(available_by_class.values(), key=lambda row: (-row[2], row[1], row[0])):
+            if len(chosen) >= min(self.config.budget, len(pool)):
+                break
+            chosen.append((*candidate, "hybrid_ppal:class_coverage+dcus_uncertainty"))
+            remaining.remove(candidate)
         while remaining and len(chosen) < min(self.config.budget, len(pool)):
             best_candidate = max(
                 remaining,
@@ -178,6 +182,4 @@ class HybridPPALStrategy:
             )
             remaining.remove(best_candidate)
             chosen.append((*best_candidate, "hybrid_ppal:dcus_uncertainty+ccms_diversity"))
-        rng.shuffle(chosen[1:])
         return [SelectedImage(*item) for item in chosen]
-
