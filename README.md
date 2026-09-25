@@ -123,7 +123,11 @@ Create a human-readable report from predictions:
 amphilens report ./my-project/artifacts/predict-yolo/predictions.csv ./my-project/artifacts/predict-yolo/report
 ```
 
-The project directory contains a manifest, run records, annotations, artifacts, and checkpoints. Original image roots remain outside the project and are never copied unless an annotation exchange explicitly requires a review subset.
+The project directory contains a manifest, run records, annotations, artifacts,
+an artifact index, and checkpoints. Resumable prediction folders include
+`run.json`, progress, JSONL, stable CSV, and summary outputs. Original image
+roots remain outside the project and are never copied unless an annotation
+exchange explicitly requires a review subset.
 
 ## Python API
 

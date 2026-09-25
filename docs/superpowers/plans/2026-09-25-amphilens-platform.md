@@ -68,7 +68,7 @@ Checkpoint history currently pushed to `origin/main`:
 - [x] Add serializable `JobSpec`/`JobStatus` contracts and a local execution backend.
 - [x] Add CPU/CUDA Dockerfiles, Docker Compose reference deployment, and deployment documentation.
 - [x] Implement environment diagnostics, Typer CLI shell, and Streamlit shell.
-- [x] Verify the current suite: 43 tests passing with CLI dependencies, including PPAL artifacts, reports, UI helpers, deployment-contract coverage, manifest/artifact hardening, CVAT integrity checks, detector contracts, Faster R-CNN training, checkpoint registry workflows, and guided UI controls.
+- [x] Verify the current suite: 44 tests passing with CLI dependencies, including PPAL artifacts, reports, UI helpers, deployment-contract coverage, manifest/artifact hardening, CVAT integrity checks, detector contracts, Faster R-CNN training, checkpoint registry workflows, guided UI controls, and run-artifact indexing.
 - [x] Add Apache-2.0 license, changelog, security/privacy note, code of conduct, and GitHub Actions CI for supported Python versions.
 
 Current verification command (the local equivalent of the CI dependency-light job):
@@ -122,10 +122,10 @@ Remote verification: `origin` is `https://github.com/joshsalako/amphilens.git`; 
 ### Task 3: Finish production inference and reporting — in progress
 
 - [x] Add per-image inference with persisted progress, failure records, and resume support.
-- [ ] Add corrupt-image handling that records failures instead of producing fake detections.
+- [x] Add corrupt-image handling that records failures instead of producing fake detections.
 - [x] Add summary reports containing image counts, detection counts, class counts, models, runs, and confidence summary.
 - [x] Add JSON and Markdown report outputs; CSV, JSONL, and overlays remain separate artifacts.
-- [ ] Add tests proving reruns do not duplicate rows or overwrite prior run artifacts.
+- [x] Add tests proving reruns do not duplicate rows or overwrite prior run artifacts.
 - [ ] Add representative CPU benchmark and GPU benchmark scripts; publish measured hardware tiers rather than guessed requirements.
 
 ### Task 4: Make Hybrid PPAL paper-faithful and generic — in progress

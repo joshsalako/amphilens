@@ -123,6 +123,59 @@ def test_predict_command_runs_project_images(monkeypatch, tmp_path: Path):
     assert (tmp_path / "artifacts" / "predictions.csv").is_file()
 
 
+def test_predict_indexes_artifacts_when_output_is_inside_project(monkeypatch, tmp_path: Path):
+    images = tmp_path / "images"
+    images.mkdir()
+    (images / "camera.jpg").write_bytes(b"fixture")
+    project = tmp_path / "project"
+    runner = CliRunner()
+    created = runner.invoke(
+        app,
+        ["project", "create", str(project), "--image-root", str(images), "--class-name", "toad"],
+    )
+    assert created.exit_code == 0, created.stdout
+
+    class Detector:
+        model_id = "fixture"
+
+        def predict(self, image_paths, config):
+            for path in image_paths:
+                yield DetectionRecord(
+                    image_path=str(path),
+                    image_id=path.name,
+                    class_id=0,
+                    class_name="toad",
+                    confidence=0.9,
+                    bbox_xyxy=[1, 1, 5, 5],
+                    image_width=10,
+                    image_height=10,
+                    model_id="fixture",
+                    run_id=config.run_id,
+                )
+
+    monkeypatch.setattr(cli_module, "load_detector", lambda *args, **kwargs: Detector())
+    output = project / "artifacts" / "predict"
+    result = runner.invoke(
+        app,
+        [
+            "predict",
+            str(project),
+            str(tmp_path / "model.pt"),
+            "--architecture",
+            "yolo",
+            "--output-dir",
+            str(output),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    index = json.loads((project / "artifacts" / "index.json").read_text())
+    assert {item["artifact_type"] for item in index["artifacts"]} >= {
+        "run-manifest",
+        "predictions-csv",
+        "run-summary",
+    }
+
+
 def test_active_learn_command_writes_ppal_queue(tmp_path: Path):
     predictions = tmp_path / "predictions.csv"
     records = []

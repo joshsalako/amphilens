@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,9 +11,11 @@ from pathlib import Path
 from .core import (
     DetectionRecord,
     InferenceConfig,
+    RunManifest,
     SourceCollisionError,
     atomic_write_json,
     read_json,
+    utc_now,
 )
 from .inference import write_predictions_csv
 
@@ -26,6 +29,7 @@ class RunSummary:
     detection_count: int
     predictions_csv: Path
     summary_json: Path
+    run_manifest: Path
 
 
 def _load_jsonl(path: Path) -> list[DetectionRecord]:
@@ -50,6 +54,20 @@ def run_resumable_inference(
         if artifact == path or (path.is_dir() and artifact.is_relative_to(path)):
             raise SourceCollisionError(f"Inference artifact directory overlaps source: {artifact}")
     artifact.mkdir(parents=True, exist_ok=True)
+    if not config.run_id:
+        config.run_id = f"run-{uuid.uuid4().hex[:12]}"
+    run_manifest_path = artifact / "run.json"
+    if run_manifest_path.is_file():
+        run_manifest = RunManifest.from_dict(read_json(run_manifest_path))
+        if (
+            run_manifest.run_id != config.run_id
+            or run_manifest.config.get("model_id") != config.model_id
+        ):
+            raise ValueError("Existing run metadata belongs to a different run or model")
+    else:
+        run_manifest = RunManifest.create("inference", config.to_dict())
+        run_manifest.run_id = config.run_id
+        atomic_write_json(run_manifest_path, run_manifest.to_dict())
     progress_path = artifact / "progress.json"
     records_path = artifact / "predictions.jsonl"
     progress = {
@@ -103,6 +121,9 @@ def run_resumable_inference(
         "predictions_csv": str(predictions_csv),
     }
     summary_path = artifact / "summary.json"
+    run_manifest.status = "completed" if not failures else "completed_with_failures"
+    run_manifest.finished_at = utc_now()
+    atomic_write_json(run_manifest_path, run_manifest.to_dict())
     atomic_write_json(summary_path, summary)
     return RunSummary(
         run_id=config.run_id,
@@ -112,4 +133,5 @@ def run_resumable_inference(
         detection_count=len(records),
         predictions_csv=predictions_csv,
         summary_json=summary_path,
+        run_manifest=run_manifest_path,
     )

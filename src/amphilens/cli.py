@@ -37,6 +37,27 @@ def _require_typer():
         raise RuntimeError("The CLI requires the 'cli' extra: pip install 'amphilens[cli]'")
 
 
+def _register_run_artifacts(store: ProjectStore, summary, output_dir: Path) -> None:
+    """Index run outputs when the caller placed them inside the project."""
+    output = output_dir.expanduser().resolve()
+    if not (output == store.root or output.is_relative_to(store.root)):
+        return
+    artifacts = (
+        (summary.run_manifest, "run-manifest"),
+        (summary.predictions_csv, "predictions-csv"),
+        (summary.summary_json, "run-summary"),
+        (output / "progress.json", "run-progress"),
+        (output / "predictions.jsonl", "predictions-jsonl"),
+    )
+    for path, artifact_type in artifacts:
+        if path.is_file():
+            store.register_artifact(
+                path,
+                artifact_type=artifact_type,
+                producer_run=summary.run_id,
+            )
+
+
 if typer is not None:
     app = typer.Typer(help="Reproducible wildlife camera-trap detection.")
     project_app = typer.Typer(help="Create and inspect portable projects.")
@@ -146,7 +167,8 @@ if typer is not None:
     @app.command()
     def images(project_dir: Path):
         """List image files recorded by a project manifest."""
-        manifest = ProjectStore(project_dir).load_manifest()
+        store = ProjectStore(project_dir)
+        manifest = store.load_manifest()
         for path in iter_images(manifest.image_roots):
             typer.echo(path)
 
@@ -165,7 +187,8 @@ if typer is not None:
         run_id: str | None = typer.Option(None, "--run-id"),
     ):
         """Run a compatible detector and persist resumable prediction artifacts."""
-        manifest = ProjectStore(project_dir).load_manifest()
+        store = ProjectStore(project_dir)
+        manifest = store.load_manifest()
         resolved_model_id = model_id or checkpoint.stem
         detector = load_detector(
             checkpoint,
@@ -183,6 +206,7 @@ if typer is not None:
         summary = run_resumable_inference(
             detector, iter_images(manifest.image_roots), config, output_dir
         )
+        _register_run_artifacts(store, summary, output_dir)
         typer.echo(
             json.dumps(
                 {
