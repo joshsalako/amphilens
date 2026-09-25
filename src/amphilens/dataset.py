@@ -137,11 +137,14 @@ class DatasetManifest:
     source_archive_sha256: str
     created_at: str = field(default_factory=_now)
     parent_snapshot: str | None = None
+    source_provenance: dict[str, Any] = field(default_factory=dict)
     schema_version: int = 1
 
     def validate(self) -> None:
         if not self.snapshot_id.strip() or self.schema_version != 1:
             raise ValidationError("Unsupported or missing dataset snapshot metadata")
+        if not isinstance(self.source_provenance, dict):
+            raise ValidationError("Dataset source provenance must be an object")
         classes = _classes(self.classes)
         image_ids = [image.image_id for image in self.images]
         paths = [image.relative_path for image in self.images]
@@ -167,6 +170,7 @@ class DatasetManifest:
             "source_archive_sha256": self.source_archive_sha256,
             "created_at": self.created_at,
             "parent_snapshot": self.parent_snapshot,
+            "source_provenance": dict(self.source_provenance),
         }
 
     @classmethod
@@ -180,6 +184,7 @@ class DatasetManifest:
             source_archive_sha256=str(data.get("source_archive_sha256", "")),
             created_at=str(data.get("created_at", _now())),
             parent_snapshot=data.get("parent_snapshot"),
+            source_provenance=dict(data.get("source_provenance", {})),
             schema_version=int(data.get("schema_version", 0)),
         )
         manifest.validate()
@@ -263,6 +268,7 @@ class DatasetImporter:
         *,
         classes: Iterable[str],
         class_mapping: dict[str, str] | None = None,
+        source_provenance: dict[str, Any] | None = None,
     ) -> DatasetSnapshot:
         archive = Path(archive_path).expanduser().resolve()
         if not archive.is_file() or archive.suffix.lower() != ".zip":
@@ -294,6 +300,7 @@ class DatasetImporter:
             images=manifest_images,
             source_archive=archive.name,
             source_archive_sha256=_sha256(archive),
+            source_provenance=dict(source_provenance or {}),
         )
         atomic_write_json(target / "manifest.json", manifest.to_dict())
         return DatasetSnapshot(target, manifest)

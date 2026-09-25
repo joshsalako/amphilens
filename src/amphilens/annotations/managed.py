@@ -20,7 +20,53 @@ def _now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+@dataclass(frozen=True, slots=True)
+class CVATTaskSummary:
+    task_id: str
+    name: str
+    size: int | None = None
+    status: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True, slots=True)
+class CVATProjectSummary:
+    project_id: str
+    name: str
+    labels: list[str]
+    tasks: list[CVATTaskSummary] = field(default_factory=list)
+
+    @property
+    def task_count(self) -> int:
+        return len(self.tasks)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "project_id": self.project_id,
+            "name": self.name,
+            "labels": list(self.labels),
+            "task_count": self.task_count,
+            "tasks": [task.to_dict() for task in self.tasks],
+        }
+
+
 class CVATTransport(Protocol):
+    def list_projects(self) -> list[CVATProjectSummary]: ...
+
+    def get_project(self, project_id: str) -> CVATProjectSummary: ...
+
+    def list_project_tasks(self, project_id: str) -> list[CVATTaskSummary]: ...
+
+    def export_project(
+        self,
+        project_id: str,
+        destination: str | Path,
+        *,
+        include_images: bool = True,
+    ) -> Path: ...
+
     def ensure_project(self, name: str, labels: list[str]) -> str: ...
 
     def create_task(
@@ -50,6 +96,7 @@ class CVATSdkTransport:
         self.server_url = (server_url or os.environ.get("CVAT_URL", "")).rstrip("/")
         self.token = token or os.environ.get("CVAT_TOKEN")
         self.export_format = export_format
+        self.client_version = self._version()
         if not self.server_url:
             raise ValidationError("CVAT server URL is required (use --server-url or CVAT_URL)")
         if not self.token:
@@ -78,6 +125,81 @@ class CVATSdkTransport:
             return f"cvat-sdk=={importlib.metadata.version('cvat-sdk')}"
         except importlib.metadata.PackageNotFoundError:
             return "cvat-sdk (version unavailable)"
+
+    @staticmethod
+    def _status_value(value: Any) -> str | None:
+        if value is None:
+            return None
+        return str(getattr(value, "value", value)).lower()
+
+    @classmethod
+    def _task_summary(cls, task: Any) -> CVATTaskSummary:
+        size = getattr(task, "size", None)
+        try:
+            size = int(size) if size is not None else None
+        except (TypeError, ValueError):
+            size = None
+        return CVATTaskSummary(
+            task_id=str(task.id),
+            name=str(getattr(task, "name", task.id)),
+            size=size,
+            status=cls._status_value(getattr(task, "status", None)),
+        )
+
+    @classmethod
+    def _project_summary(cls, project: Any) -> CVATProjectSummary:
+        labels = [str(label.name) for label in project.get_labels()]
+        tasks = [cls._task_summary(task) for task in project.get_tasks()]
+        return CVATProjectSummary(
+            project_id=str(project.id),
+            name=str(project.name),
+            labels=labels,
+            tasks=tasks,
+        )
+
+    def list_projects(self) -> list[CVATProjectSummary]:
+        with self._client() as client:
+            return [self._project_summary(project) for project in client.projects.list()]
+
+    def get_project(self, project_id: str) -> CVATProjectSummary:
+        try:
+            resolved_id = int(project_id)
+        except (TypeError, ValueError) as exc:
+            raise ValidationError(f"CVAT project ID must be an integer: {project_id!r}") from exc
+        with self._client() as client:
+            return self._project_summary(client.projects.retrieve(resolved_id))
+
+    def list_project_tasks(self, project_id: str) -> list[CVATTaskSummary]:
+        return self.get_project(project_id).tasks
+
+    def export_project(
+        self,
+        project_id: str,
+        destination: str | Path,
+        *,
+        include_images: bool = True,
+    ) -> Path:
+        _, _, _, location = self._load_sdk()
+        target = Path(destination).expanduser().resolve()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            resolved_id = int(project_id)
+        except (TypeError, ValueError) as exc:
+            raise ValidationError(f"CVAT project ID must be an integer: {project_id!r}") from exc
+        with self._client() as client:
+            project = client.projects.retrieve(resolved_id)
+            exported = project.export_dataset(
+                self.export_format,
+                target,
+                include_images=include_images,
+                location=location.LOCAL,
+            )
+        result = Path(exported).expanduser().resolve() if exported else target
+        if not result.is_file():
+            raise ValidationError(
+                f"CVAT project export did not create the expected archive: {result}"
+            )
+        return result
 
     def ensure_project(self, name: str, labels: list[str]) -> str:
         _, models, _, _ = self._load_sdk()

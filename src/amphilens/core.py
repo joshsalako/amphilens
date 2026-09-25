@@ -687,6 +687,7 @@ class ProjectStore:
         archive_path: str | Path,
         *,
         class_mapping: dict[str, str] | None = None,
+        source_provenance: dict[str, Any] | None = None,
     ):
         """Import an initial CVAT/COCO/YOLO archive under this project."""
         from .dataset import DatasetImporter
@@ -696,6 +697,24 @@ class ProjectStore:
             archive_path,
             self.root / "datasets" / "incoming",
             classes=manifest.classes,
+            class_mapping=class_mapping,
+            source_provenance=source_provenance,
+        )
+
+    def import_cvat_project(
+        self,
+        project_id: str,
+        *,
+        class_mapping: dict[str, str] | None = None,
+        server_url: str | None = None,
+    ):
+        """Import a complete existing CVAT project through the CVAT API."""
+        from .annotations.initial import CVATProjectImportService
+        from .annotations.managed import CVATSdkTransport
+
+        transport = CVATSdkTransport(server_url=server_url)
+        return CVATProjectImportService(self, transport).import_project(
+            project_id,
             class_mapping=class_mapping,
         )
 
