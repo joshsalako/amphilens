@@ -28,7 +28,7 @@
 
 ## Current repository state
 
-`wlt-app` was initially empty and has no writable Git metadata in the current managed workspace. `git init` failed with `Operation not permitted` when trying to create `.git`; Git checkpointing and remote setup therefore remain pending an environment with writable Git metadata or an approved elevated command.
+`wlt-app` was initially empty and required an elevated local Git initialization because the managed workspace rejected `.git` writes. Git is now initialized on `main`, the requested `origin` is configured, and the first checkpoint is pushed.
 
 GitHub CLI inspection on 2026-09-25 reported invalid tokens for both `joshDrio` and `joshsalako`. `gh auth switch` alone will not work until the `joshsalako` account is authenticated again.
 
@@ -44,6 +44,7 @@ GitHub CLI inspection on 2026-09-25 reported invalid tokens for both `joshDrio` 
 - [x] Implement PPAL calibration, class-aware Hybrid PPAL selection, uncertainty scoring, and feature-based diversity selection contracts.
 - [x] Implement COCO/CVAT and YOLO exchange with deterministic flat filenames and source mappings.
 - [x] Implement checkpoint-aware training orchestration and checkpoint manifests.
+- [x] Implement a filesystem model registry with atomic metadata writes and checkpoint hash validation.
 - [x] Implement environment diagnostics, Typer CLI shell, and Streamlit shell.
 - [x] Verify the current dependency-light suite: 10 tests passing, including CVAT and YOLO round trips.
 
@@ -56,28 +57,29 @@ PYTHONPATH=src UV_CACHE_DIR=/private/tmp/amphilens-uv-cache \
 
 ## Remaining tasks
 
-### Task 0: Establish Git checkpointing and GitHub remote
+### Task 0: Establish Git checkpointing and GitHub remote — complete
 
-- [ ] Obtain writable Git metadata for `wlt-app`, or run the local Git commands with approved elevation.
-- [ ] Run `git init -b main` if the repository is still uninitialized.
-- [ ] Confirm the working tree excludes `.venv`, caches, weights, and generated artifacts.
-- [ ] Add the requested remote:
+- [x] Obtain writable Git metadata for `wlt-app` with approved elevation.
+- [x] Run `git init -b main`.
+- [x] Confirm the working tree excludes `.venv`, caches, weights, and generated artifacts.
+- [x] Add the requested remote:
 
 ```bash
 git remote add origin https://github.com/joshsalako/amphilens.git
 git branch -M main
 ```
 
-- [ ] Re-authenticate GitHub CLI as `joshsalako` using the interactive `gh auth login -h github.com` flow if the existing token is invalid.
-- [ ] Verify `gh auth status` shows `joshsalako` active before any push.
-- [ ] Create the first checkpoint commit containing the foundation, docs, tests, and this plan.
-- [ ] Push only after local verification:
+- [x] Switch GitHub CLI to `joshsalako`; `gh auth status` confirms a valid active token with `repo` and `workflow` scopes.
+- [x] Create the first checkpoint commit containing the foundation, docs, tests, and this plan: `9195577`.
+- [x] Push after local verification:
 
 ```bash
 git push -u origin main
 ```
 
-### Task 1: Harden core contracts and artifact storage
+Remote verification: `origin` is `https://github.com/joshsalako/amphilens.git`; `main` tracks `origin/main`.
+
+### Task 1: Harden core contracts and artifact storage — in progress
 
 - [ ] Add schema version migrations for project, run, and checkpoint manifests.
 - [ ] Add atomic JSON writes and recovery for interrupted writes.
@@ -207,4 +209,3 @@ Before every checkpoint: run the complete test command, inspect `git diff --chec
 2. Re-run the full test suite and add `git diff --check` once Git is available.
 3. Harden manifests/artifacts and add the model registry.
 4. Update this plan after that slice before continuing.
-

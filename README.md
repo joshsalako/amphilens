@@ -69,7 +69,7 @@ Inspect the environment and recorded images:
 ```bash
 amphilens doctor
 amphilens images ./my-project
-amphilens app-ui
+amphilens app
 ```
 
 The project directory contains a manifest, run records, annotations, artifacts, and checkpoints. Original image roots remain outside the project and are never copied unless an annotation exchange explicitly requires a review subset.
@@ -148,4 +148,3 @@ The starting method is based on:
 > Joshua Salako, Kim Gordon, and Lorène Jeantet. *Annotation-Efficient Object Detection of Endangered Western Leopard Toads in Camera Trap Imagery for Assessing Wildlife Tunnel Use.*
 
 The reproduction repository is maintained separately at `/Users/joshua/Downloads/wtl-detection` in this workspace.
-

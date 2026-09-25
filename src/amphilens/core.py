@@ -227,6 +227,16 @@ class ModelManifest:
             raise ValidationError("Model id and architecture are required")
         _validate_classes(self.classes)
 
+    def to_dict(self) -> dict[str, Any]:
+        self.validate()
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ModelManifest":
+        manifest = cls(**data)
+        manifest.validate()
+        return manifest
+
 
 @dataclass(slots=True)
 class CheckpointManifest:
@@ -344,4 +354,3 @@ def iter_images(roots: Iterable[str | Path]) -> list[Path]:
         elif path.is_dir():
             paths.update(item for item in path.rglob("*") if item.is_file() and item.suffix.lower() in extensions)
     return sorted(paths)
-

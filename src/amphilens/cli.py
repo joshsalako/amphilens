@@ -41,7 +41,7 @@ if typer is not None:
         ProjectStore(project_dir).create(manifest)
         typer.echo(f"Created project at {project_dir.resolve()}")
 
-    @app.command()
+    @app.command("app")
     def app_ui():
         """Launch the local browser application."""
         ui_path = Path(__file__).with_name("ui.py")
@@ -63,4 +63,3 @@ else:
 
     def main():
         _require_typer()
-
