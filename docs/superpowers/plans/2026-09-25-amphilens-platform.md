@@ -67,7 +67,7 @@ Checkpoint history currently pushed to `origin/main`:
 - [x] Add serializable `JobSpec`/`JobStatus` contracts and a local execution backend.
 - [x] Add CPU/CUDA Dockerfiles, Docker Compose reference deployment, and deployment documentation.
 - [x] Implement environment diagnostics, Typer CLI shell, and Streamlit shell.
-- [x] Verify the current suite: 33 tests passing with CLI dependencies, including PPAL artifacts, reports, UI helpers, deployment-contract coverage, manifest/artifact hardening, and CVAT integrity checks.
+- [x] Verify the current suite: 38 tests passing with CLI dependencies, including PPAL artifacts, reports, UI helpers, deployment-contract coverage, manifest/artifact hardening, CVAT integrity checks, and detector contracts.
 - [x] Add Apache-2.0 license, changelog, security/privacy note, code of conduct, and GitHub Actions CI for supported Python versions.
 
 Current verification command (the local equivalent of the CI dependency-light job):
@@ -112,8 +112,8 @@ Remote verification: `origin` is `https://github.com/joshsalako/amphilens.git`; 
 ### Task 2: Complete model registry and detector contracts
 
 - [ ] Add `ModelRegistry` and `ModelManifest` persistence with model-card links, license, domain, class order, preprocessing, and checkpoint hash.
-- [ ] Add `load_detector()` compatibility checks before loading any checkpoint.
-- [ ] Add backend contract tests covering empty predictions, confidence filtering, image dimensions, device selection, and malformed checkpoints.
+- [x] Add `load_detector()` compatibility checks before loading any checkpoint when a checkpoint manifest is supplied.
+- [x] Add backend contract tests covering empty predictions, confidence filtering, image dimensions, device selection, and malformed checkpoints.
 - [ ] Complete the Faster R-CNN training adapter using a stable dataset/trainer interface rather than importing hard-coded research paths.
 - [ ] Preserve YOLO and RT-DETR training configs while making epochs, freeze schedule, batch size, seed, preprocessing, and image size explicit.
 - [ ] Add `best.pt`, `last.pt`, checkpoint manifest, training log, and metrics artifact handling for every cycle.

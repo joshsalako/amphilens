@@ -10,9 +10,8 @@ build/
 *.egg-info/
 .streamlit/
 .amphilens/
-models/
+/models/
 artifacts/
 *.pt
 *.pth
 *.onnx
-
