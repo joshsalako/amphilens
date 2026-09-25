@@ -1,3 +1,6 @@
+import runpy
+from pathlib import Path
+
 import pytest
 
 from amphilens.ui import parse_class_mapping, parse_classes, preprocessing_from_controls
@@ -26,3 +29,11 @@ def test_parse_class_mapping_requires_object_json():
     assert parse_class_mapping('{"WLT": "toad"}') == {"WLT": "toad"}
     with pytest.raises(ValueError, match="JSON object"):
         parse_class_mapping('["toad"]')
+
+
+def test_streamlit_script_can_load_ui_with_no_package_context():
+    script = Path(__file__).parents[1] / "src" / "amphilens" / "ui.py"
+
+    namespace = runpy.run_path(str(script), run_name="amphilens_ui_script")
+
+    assert namespace["parse_classes"]("toad") == ["toad"]

@@ -6,7 +6,16 @@ import csv
 import json
 import os
 import re
+import sys
 from pathlib import Path
+
+# Streamlit executes the file passed to ``streamlit run`` as a script. Ensure
+# relative imports still resolve when the CLI points at this source file.
+if __package__ in {None, ""}:  # pragma: no cover - exercised by Streamlit
+    _source_root = Path(__file__).resolve().parents[1]
+    if str(_source_root) not in sys.path:
+        sys.path.insert(0, str(_source_root))
+    __package__ = "amphilens"
 
 from .models import ModelCatalog
 from .preprocessing import PreprocessingConfig

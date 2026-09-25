@@ -31,33 +31,83 @@ similar to the model's training domain.
 
 ## Run the app
 
-AmphiLens currently runs locally from a Python environment. Copy these
-commands into a terminal.
+AmphiLens runs locally on your computer. `uv` is the recommended installer
+because this repository includes a lockfile with the tested dependency
+resolution.
 
 The supported first-release environment is Python 3.11. A committed
-`uv.lock` records the reproducible dependency resolution; ordinary `pip`
-installation is provided below for the simplest start.
+`uv.lock` records the reproducible dependency resolution.
 
-### macOS or Linux
+### Recommended: install with uv
+
+```bash
+cd /Users/joshua/Downloads/wlt-app
+uv python install 3.11
+uv sync --locked --python 3.11 \
+  --extra cli --extra ui --extra inference --extra training --extra cvat
+uv run --locked amphilens doctor
+uv run --locked amphilens app
+```
+
+The last command starts Streamlit. Open
+[http://localhost:8501](http://localhost:8501) if the browser does not open
+automatically. Use `uv run --locked amphilens app` rather than launching
+`src/amphilens/ui.py` directly; the CLI preserves the package context required
+by the browser app.
+
+The `cvat` extra is only needed for the managed **Send to CVAT** workflow. If
+you only need local inference and portable CVAT/YOLO ZIP import, use:
+
+```bash
+uv sync --locked --python 3.11 \
+  --extra cli --extra ui --extra inference --extra training
+```
+
+### CVAT credentials
+
+Managed CVAT needs a CVAT server URL and a personal access token. Set them in
+the terminal before starting AmphiLens. This example prompts for the token so
+it is not written directly into shell history:
+
+```bash
+export CVAT_URL="http://localhost:8080"
+printf "CVAT token: "
+read -r -s CVAT_TOKEN
+printf "\n"
+export CVAT_TOKEN
+uv run --locked amphilens app
+```
+
+AmphiLens reads these values only while the app is running. It does not write
+the token to project files, manifests, logs, CSV files, URLs, or Git. Remove it
+from the current shell after closing the app with `unset CVAT_TOKEN`.
+
+If CVAT is unavailable, leave the credentials unset and use the portable ZIP
+import/export workflow instead.
+
+### Alternative: pip installation
+
+If `uv` is not available, the package can also be installed with pip:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e ".[cli,ui,inference]"
+python -m pip install -e ".[cli,ui,inference,training,cvat]"
 amphilens app
 ```
 
-### Windows PowerShell
+On Windows PowerShell:
 
 ```powershell
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install -e ".[cli,ui,inference]"
+python -m pip install -e ".[cli,ui,inference,training,cvat]"
 amphilens app
 ```
 
-The app runs on your computer. Open [http://localhost:8501](http://localhost:8501)
-if the browser does not open automatically.
+The Streamlit messages about installing `streamlit skills` and `watchdog` are
+optional recommendations, not required for AmphiLens. The watchdog package
+can improve file-watching performance on some systems.
 
 ## Use the browser app
 
