@@ -24,9 +24,9 @@ This repository contains the first dependency-light foundation:
 - paper-compatible PPAL calibration and Hybrid PPAL selection contracts;
 - PPAL validation-match ingestion and auditable selection queue artifacts;
 - COCO/CVAT and YOLO annotation exchange with deterministic source mappings;
-- a Typer CLI, Streamlit shell, and environment diagnostics.
+- a Typer CLI, guided Streamlit workflows, and environment diagnostics.
 
-The UI orchestration, remote execution, and full production training workflows are being built incrementally. Faster R-CNN inference is supported through the optional ML adapter; its training path remains explicitly guarded until the dataset-specific trainer contract is completed.
+The full production training workflows and remote execution are being built incrementally. Faster R-CNN inference is supported through the optional ML adapter; its training path remains explicitly guarded until the dataset-specific trainer contract is completed. Streamlit UI smoke tests require the optional `ui` extra and are not run in the dependency-light suite.
 
 ## Requirements
 

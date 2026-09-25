@@ -58,6 +58,35 @@ def write_predictions_csv(records: Iterable[DetectionRecord], output: str | Path
     return destination
 
 
+def read_predictions_csv(path: str | Path) -> list[DetectionRecord]:
+    source = Path(path).expanduser().resolve()
+    records = []
+    with source.open(newline="", encoding="utf-8") as handle:
+        for row in csv.DictReader(handle):
+            records.append(
+                DetectionRecord(
+                    image_path=row["image_path"],
+                    image_id=row["image_id"],
+                    class_id=int(row["class_id"]),
+                    class_name=row["class_name"],
+                    confidence=float(row["confidence"]) if row.get("confidence") else None,
+                    bbox_xyxy=[
+                        float(row["bbox_xmin"]),
+                        float(row["bbox_ymin"]),
+                        float(row["bbox_xmax"]),
+                        float(row["bbox_ymax"]),
+                    ],
+                    image_width=int(row["image_width"]),
+                    image_height=int(row["image_height"]),
+                    model_id=row.get("model_id", "csv-import"),
+                    run_id=row.get("run_id", "csv-import"),
+                    cycle=int(row["cycle"]) if row.get("cycle") else None,
+                    preprocessing=row.get("preprocessing") or None,
+                )
+            )
+    return records
+
+
 def write_overlays(records: Iterable[DetectionRecord], output_dir: str | Path) -> list[Path]:
     try:
         from PIL import Image, ImageDraw
@@ -83,4 +112,3 @@ def write_overlays(records: Iterable[DetectionRecord], output_dir: str | Path) -
         image.save(output)
         outputs.append(output)
     return outputs
-

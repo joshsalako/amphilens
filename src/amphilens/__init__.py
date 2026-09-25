@@ -10,6 +10,7 @@ from .core import (
     RunManifest,
 )
 from .runs import RunSummary, run_resumable_inference
+from .inference import read_predictions_csv
 from .execution import JobHandle, JobSpec, JobStatus, LocalExecutionBackend
 from .curation import write_selection_artifacts
 from .reporting import write_report
@@ -24,6 +25,7 @@ __all__ = [
     "RunManifest",
     "RunSummary",
     "run_resumable_inference",
+    "read_predictions_csv",
     "JobHandle",
     "JobSpec",
     "JobStatus",

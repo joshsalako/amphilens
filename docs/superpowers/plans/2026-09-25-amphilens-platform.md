@@ -49,11 +49,12 @@ GitHub CLI inspection on 2026-09-25 reported invalid tokens for both `joshDrio` 
 - [x] Make Hybrid PPAL class-aware before filling the remaining budget with diversity selection.
 - [x] Add `project create/inspect`, `predict`, and CVAT export/import CLI workflows over shared services.
 - [x] Add `active-learn` CLI workflow with PPAL calibration/feature inputs and auditable queue artifacts.
+- [x] Add guided Streamlit workflows for environment, project creation, prediction, and Hybrid PPAL queue selection.
 - [x] Add JSON and Markdown prediction reports and the `report` CLI command.
 - [x] Add serializable `JobSpec`/`JobStatus` contracts and a local execution backend.
 - [x] Add CPU/CUDA Dockerfiles, Docker Compose reference deployment, and deployment documentation.
 - [x] Implement environment diagnostics, Typer CLI shell, and Streamlit shell.
-- [x] Verify the current suite: 25 tests passing with CLI dependencies, including PPAL artifacts, reports, and deployment-contract coverage.
+- [x] Verify the current suite: 26 tests passing with CLI dependencies, including PPAL artifacts, reports, UI helpers, and deployment-contract coverage.
 
 Current verification command:
 
@@ -132,8 +133,8 @@ Remote verification: `origin` is `https://github.com/joshsalako/amphilens.git`; 
 ### Task 6: Build the guided CLI and Streamlit workflow — in progress
 
 - [x] Add CLI commands: `app`, `doctor`, `project create`, `project inspect`, `predict`, `active-learn`, `cvat export`, `cvat import`, and `report`.
-- [ ] Keep CLI and UI on shared services; no duplicate business logic.
-- [ ] Add a guided wizard for image roots, classes, base model, preset, output location, and review/export steps.
+- [x] Keep CLI and UI on shared services; no duplicate business logic.
+- [x] Add a guided wizard for image roots, classes, base model, output location, prediction, and PPAL queue steps.
 - [ ] Add advanced panels for all documented model, preprocessing, threshold, PPAL, and training controls.
 - [ ] Show actionable failures for missing GPU, missing calibration, incompatible checkpoint, invalid annotation, and insufficient disk.
 - [ ] Add UI smoke tests for project creation, diagnostics, configuration validation, and artifact download.

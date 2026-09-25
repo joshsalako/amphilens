@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import csv
 import subprocess
 import sys
 from pathlib import Path
@@ -20,7 +19,7 @@ from .active_learning import HybridPPALConfig, HybridPPALStrategy, PPALCalibrati
 from .core import DetectionRecord
 from .core import InferenceConfig
 from .curation import write_selection_artifacts
-from .inference import write_predictions_csv
+from .inference import read_predictions_csv, write_predictions_csv
 from .models import load_detector
 from .reporting import write_report
 from .runs import run_resumable_inference
@@ -152,29 +151,7 @@ if typer is not None:
         typer.echo(json.dumps({name: str(path) for name, path in artifacts.items()}, indent=2))
 
     def _records_from_csv(path: Path) -> list[DetectionRecord]:
-        records = []
-        with path.open(newline="", encoding="utf-8") as handle:
-            for row in csv.DictReader(handle):
-                records.append(
-                    DetectionRecord(
-                        image_path=row["image_path"],
-                        image_id=row["image_id"],
-                        class_id=int(row["class_id"]),
-                        class_name=row["class_name"],
-                        confidence=float(row["confidence"]) if row.get("confidence") else None,
-                        bbox_xyxy=[
-                            float(row["bbox_xmin"]),
-                            float(row["bbox_ymin"]),
-                            float(row["bbox_xmax"]),
-                            float(row["bbox_ymax"]),
-                        ],
-                        image_width=int(row["image_width"]),
-                        image_height=int(row["image_height"]),
-                        model_id=row.get("model_id", "csv-import"),
-                        run_id=row.get("run_id", "csv-import"),
-                    )
-                )
-        return records
+        return read_predictions_csv(path)
 
     @cvat_app.command("export")
     def cvat_export(
