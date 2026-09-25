@@ -13,6 +13,14 @@ from .core import (
     atomic_write_json,
 )
 from .curation import write_selection_artifacts
+from .dataset import (
+    DatasetAnnotation,
+    DatasetImage,
+    DatasetImporter,
+    DatasetManifest,
+    DatasetMerger,
+    DatasetSnapshot,
+)
 from .execution import JobHandle, JobSpec, JobStatus, LocalExecutionBackend
 from .inference import read_predictions_csv
 from .preprocessing import PreprocessedImage, PreprocessingConfig, PreprocessingService
@@ -39,6 +47,12 @@ __all__ = [
     "write_selection_artifacts",
     "write_report",
     "atomic_write_json",
+    "DatasetAnnotation",
+    "DatasetImage",
+    "DatasetImporter",
+    "DatasetManifest",
+    "DatasetMerger",
+    "DatasetSnapshot",
     "PreprocessedImage",
     "PreprocessingConfig",
     "PreprocessingService",

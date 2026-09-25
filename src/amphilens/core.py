@@ -591,7 +591,7 @@ class ProjectStore:
                         f"Project output {candidate} overlaps source image root {root}"
                     )
         self.root.mkdir(parents=True, exist_ok=True)
-        for directory in ("runs", "artifacts", "checkpoints", "annotations"):
+        for directory in ("runs", "artifacts", "checkpoints", "annotations", "datasets"):
             (self.root / directory).mkdir(exist_ok=True)
         atomic_write_json(self.root / "manifest.json", manifest.to_dict())
 
@@ -671,6 +671,48 @@ class ProjectStore:
         if len({item.relative_path for item in records}) != len(records):
             raise ValidationError("Artifact index contains duplicate paths")
         return sorted(records, key=lambda item: item.relative_path)
+
+    def import_dataset(
+        self,
+        archive_path: str | Path,
+        *,
+        class_mapping: dict[str, str] | None = None,
+    ):
+        """Import an initial CVAT/COCO/YOLO archive under this project."""
+        from .dataset import DatasetImporter
+
+        manifest = self.load_manifest()
+        return DatasetImporter().import_archive(
+            archive_path,
+            self.root / "datasets" / "incoming",
+            classes=manifest.classes,
+            class_mapping=class_mapping,
+        )
+
+    def merge_dataset_snapshot(self, incoming, parent=None):
+        """Merge an annotated snapshot into a new immutable project snapshot."""
+        from .dataset import DatasetMerger, DatasetSnapshot
+
+        incoming_snapshot = (
+            incoming if isinstance(incoming, DatasetSnapshot) else DatasetSnapshot.load(incoming)
+        )
+        if parent is None:
+            snapshots = sorted(
+                path
+                for path in (self.root / "datasets").glob("*")
+                if path.is_dir() and (path / "manifest.json").is_file()
+            )
+            if not snapshots:
+                raise ValidationError("No parent dataset snapshot is available")
+            parent = DatasetSnapshot.load(snapshots[-1])
+        parent_snapshot = (
+            parent if isinstance(parent, DatasetSnapshot) else DatasetSnapshot.load(parent)
+        )
+        return DatasetMerger().merge(
+            parent_snapshot,
+            incoming_snapshot,
+            self.root / "datasets" / "merged",
+        )
 
 
 def iter_images(roots: Iterable[str | Path]) -> list[Path]:
