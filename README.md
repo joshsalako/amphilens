@@ -73,6 +73,22 @@ amphilens images ./my-project
 amphilens app
 ```
 
+Run a registered-compatible checkpoint over a project image pool:
+
+```bash
+amphilens predict ./my-project /path/to/model.pt \
+  --architecture yolo \
+  --output-dir ./my-project/artifacts/predict-yolo
+```
+
+Export and import an annotation task:
+
+```bash
+amphilens cvat export ./my-project/artifacts/predict-yolo/predictions.csv ./my-project/annotations/cycle-0 \
+  --class-name toad --class-name other_amphibian
+amphilens cvat import ./my-project/annotations/cycle-0 ./my-project/artifacts/cycle-0-annotations.csv
+```
+
 The project directory contains a manifest, run records, annotations, artifacts, and checkpoints. Original image roots remain outside the project and are never copied unless an annotation exchange explicitly requires a review subset.
 
 ## Python API

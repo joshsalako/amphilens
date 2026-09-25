@@ -28,7 +28,14 @@ def _mapped_name(source: Path, used: set[str]) -> str:
 def export_cvat(
     records: Iterable[DetectionRecord], output_dir: str | Path, *, classes: list[str]
 ) -> Path:
-    rows = list(records)
+    rows = sorted(
+        list(records),
+        key=lambda record: (
+            str(Path(record.image_path).expanduser().resolve()),
+            record.class_id,
+            tuple(record.bbox_xyxy),
+        ),
+    )
     destination = Path(output_dir).expanduser().resolve()
     destination.mkdir(parents=True, exist_ok=True)
     images_dir = destination / "images"
@@ -130,13 +137,14 @@ def import_cvat(task_dir: str | Path) -> list[DetectionRecord]:
 def export_yolo(
     records: Iterable[DetectionRecord], output_dir: str | Path, *, classes: list[str]
 ) -> Path:
-    destination = export_cvat(records, output_dir, classes=classes)
+    rows = list(records)
+    destination = export_cvat(rows, output_dir, classes=classes)
     labels_dir = destination / "labels"
     labels_dir.mkdir(exist_ok=True)
     manifest = json.loads((destination / "manifest.json").read_text())
     image_map = {item["source_path"]: item for item in manifest["images"]}
     grouped: dict[str, list[DetectionRecord]] = {}
-    for record in records:
+    for record in rows:
         grouped.setdefault(str(Path(record.image_path).expanduser().resolve()), []).append(record)
     class_ids = {name: index for index, name in enumerate(classes)}
     for source_path, source_records in grouped.items():
@@ -177,6 +185,18 @@ def import_yolo(task_dir: str | Path) -> list[DetectionRecord]:
                 raise ValidationError(f"Invalid YOLO annotation line: {line}")
             class_id, center_x, center_y, box_width, box_height = parts
             class_index = int(class_id)
+            normalized = [float(center_x), float(center_y), float(box_width), float(box_height)]
+            if any(value < 0 or value > 1 for value in normalized):
+                raise ValidationError("YOLO normalized coordinates must be between 0 and 1")
+            if (
+                float(center_x) - float(box_width) / 2 < 0
+                or float(center_y) - float(box_height) / 2 < 0
+                or float(center_x) + float(box_width) / 2 > 1
+                or float(center_y) + float(box_height) / 2 > 1
+            ):
+                raise ValidationError("YOLO normalized bounding box must remain within the image")
+            if class_index < 0 or class_index >= len(classes):
+                raise ValidationError(f"Unknown YOLO class id: {class_index}")
             width, height = int(image["width"]), int(image["height"])
             center_x, center_y = float(center_x) * width, float(center_y) * height
             box_width, box_height = float(box_width) * width, float(box_height) * height

@@ -32,6 +32,7 @@ training = [
   "pyyaml>=6.0",
 ]
 dev = [
+  "amphilens[cli,inference]",
   "pytest>=8.0",
   "pytest-cov>=5.0",
   "ruff>=0.6",
@@ -57,4 +58,3 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
-
