@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -57,7 +58,14 @@ def train_and_register(
     output = Path(output_dir).expanduser().resolve()
     output.mkdir(parents=True, exist_ok=True)
     training_config = config.to_dict()
-    training_config["preprocessing"] = preprocessing
+    preprocessing_data = (
+        preprocessing.to_dict()
+        if isinstance(preprocessing, PreprocessingConfig)
+        else dict(preprocessing)
+        if isinstance(preprocessing, dict)
+        else PreprocessingConfig.from_any(preprocessing).to_dict()
+    )
+    training_config["preprocessing"] = preprocessing_data
     checkpoint = (
         Path(
             detector.train(
@@ -70,17 +78,34 @@ def train_and_register(
         .expanduser()
         .resolve()
     )
+    best_checkpoint = output / "best.pt"
+    if checkpoint != best_checkpoint:
+        shutil.copy2(checkpoint, best_checkpoint)
+    last_checkpoint = output / "last.pt"
+    source_last = checkpoint.parent / "last.pt"
+    if not last_checkpoint.is_file():
+        shutil.copy2(source_last if source_last.is_file() else best_checkpoint, last_checkpoint)
+    metrics_path = output / "metrics.json"
+    if not metrics_path.is_file():
+        atomic_write_json(
+            metrics_path,
+            {
+                "evaluation": config.evaluation,
+                "status": "not provided by detector adapter",
+                "checkpoint": str(best_checkpoint),
+            },
+        )
     manifest = CheckpointManifest.create(
-        checkpoint,
+        best_checkpoint,
         model_id=detector.model_id,
         architecture=detector.architecture,
         classes=detector.classes,
-        preprocessing=preprocessing,
+        preprocessing=preprocessing_data,
         parent_checkpoint=resume_from.checkpoint_path if resume_from else None,
         training_config=training_config,
     )
     atomic_write_json(output / "checkpoint.json", manifest.to_dict())
-    return TrainingResult(checkpoint=checkpoint, manifest=manifest)
+    return TrainingResult(checkpoint=best_checkpoint, manifest=manifest)
 
 
 def train_snapshot_and_register(

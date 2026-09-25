@@ -21,6 +21,12 @@ For managed CVAT compatibility, use the pinned CVAT Community `v2.76.0`
 profile with `cvat-sdk==2.76.0` and `cvat-cli==2.76.0`. Portable ZIP exchange
 does not require a CVAT server or CVAT credentials.
 
+Managed CVAT reads `CVAT_URL` and `CVAT_TOKEN` from the process environment.
+The token is not accepted in project files or command-line output. The app
+uploads selected local images to the configured server only after the user
+presses **Send to CVAT**. Use the portable exchange when images must remain
+entirely local.
+
 ## Docker Compose reference deployment
 
 The CPU service runs the local Streamlit UI with explicit project and model volumes:

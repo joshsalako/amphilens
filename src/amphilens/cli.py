@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -14,6 +15,7 @@ except ImportError:  # pragma: no cover - exercised only in minimal installs
 
 from .active_learning import HybridPPALConfig, HybridPPALStrategy, PPALCalibration
 from .annotations.cvat import export_cvat, import_cvat
+from .annotations.managed import CVATSdkTransport, ManagedCVATCycleService, selection_hash
 from .core import (
     CheckpointManifest,
     DetectionRecord,
@@ -372,6 +374,59 @@ if typer is not None:
         """Import a CVAT task into the stable AmphiLens CSV schema."""
         write_predictions_csv(import_cvat(task_dir), output_csv)
         typer.echo(f"Imported annotations to {output_csv.resolve()}")
+
+    def _managed_service(project_dir: Path, server_url: str | None):
+        """Build a managed CVAT service without placing the token in arguments or output."""
+        transport = CVATSdkTransport(server_url=server_url, token=os.environ.get("CVAT_TOKEN"))
+        return ManagedCVATCycleService(
+            ProjectStore(project_dir), transport, server_url=transport.server_url
+        )
+
+    @cvat_app.command("managed-start")
+    def cvat_managed_start(
+        project_dir: Path,
+        cycle: int = typer.Option(..., "--cycle"),
+        image: list[Path] = typer.Option(..., "--image"),
+        server_url: str | None = typer.Option(None, "--server-url"),
+    ):
+        """Create or resume one correctly labelled CVAT task for a queue."""
+        paths = [item.expanduser().resolve() for item in image]
+        service = _managed_service(project_dir, server_url)
+        manifest = service.start(
+            cycle=cycle,
+            image_paths=paths,
+            selection_hash=selection_hash(paths),
+        )
+        typer.echo(json.dumps(manifest.to_dict(), indent=2))
+
+    @cvat_app.command("managed-status")
+    def cvat_managed_status(
+        project_dir: Path,
+        cycle: int = typer.Option(..., "--cycle"),
+        server_url: str | None = typer.Option(None, "--server-url"),
+    ):
+        """Refresh and print the managed CVAT task status."""
+        manifest = _managed_service(project_dir, server_url).refresh(cycle)
+        typer.echo(json.dumps(manifest.to_dict(), indent=2))
+
+    @cvat_app.command("managed-continue")
+    def cvat_managed_continue(
+        project_dir: Path,
+        cycle: int = typer.Option(..., "--cycle"),
+        server_url: str | None = typer.Option(None, "--server-url"),
+    ):
+        """Export a completed CVAT task and merge it into a new dataset snapshot."""
+        service = _managed_service(project_dir, server_url)
+        snapshot = service.continue_cycle(cycle)
+        typer.echo(
+            json.dumps(
+                {
+                    "snapshot": str(snapshot.root),
+                    "manifest": snapshot.manifest.to_dict(),
+                },
+                indent=2,
+            )
+        )
 
     def main():
         app()

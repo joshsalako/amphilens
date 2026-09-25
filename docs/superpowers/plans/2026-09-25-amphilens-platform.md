@@ -165,12 +165,12 @@ Remote verification: `origin` is `https://github.com/joshsalako/amphilens.git`; 
 - [x] Add task-level manifest validation before export/import.
 - [x] Add stable image IDs independent of filenames and preserve relative plus absolute source references where possible.
 - [x] Add import validation for unknown classes, duplicate annotation IDs, invalid boxes, image dimension mismatches, and missing images.
-- [ ] Add the managed CVAT adapter using the official `cvat-sdk`, not interactive subprocess parsing, with an optional `cvat-cli` diagnostic fallback.
-- [ ] Create or reuse one CVAT project per AmphiLens project and one task per active-learning cycle; derive the exact ordered label schema from `ProjectManifest` and fail on class drift.
-- [ ] Add idempotent task creation and persisted `server_url`, project/task/job IDs, selection hash, server/client versions, and cycle state; recover an interrupted upload or Continue action without duplicate tasks.
-- [ ] Add one-button lifecycle services: create/upload/open, status/ready check, export, validate, import, merge into an immutable dataset snapshot, and hand off to the next training cycle.
-- [ ] Treat CVAT job/task completion as the default readiness gate. Empty boxes on a reviewed image remain valid negatives; an empty or partial task is blocked unless an explicit advanced partial-import override is recorded.
-- [ ] Add safe credential handling through environment/keychain configuration; tokens never enter project or run manifests, logs, CSVs, or URLs.
+- [x] Add the managed CVAT adapter using the official `cvat-sdk`, not interactive subprocess parsing, with an optional `cvat-cli` diagnostic fallback.
+- [x] Create or reuse one CVAT project per AmphiLens project and one task per active-learning cycle; derive the exact ordered label schema from `ProjectManifest` and fail on class drift.
+- [x] Add idempotent task creation and persisted `server_url`, project/task/job IDs, selection hash, selected source paths, client version, and cycle state; recover an interrupted upload or Continue action without duplicate tasks.
+- [x] Add one-button lifecycle services: create/upload/open, status/ready check, export, validate, import, merge into an immutable dataset snapshot, and hand off to the next training cycle.
+- [x] Treat CVAT job/task completion as the default readiness gate. Empty boxes on a reviewed image remain valid negatives; an empty or partial task is blocked.
+- [x] Add safe credential handling through environment configuration; tokens never enter project or run manifests, logs, CSVs, or URLs.
 - [ ] Keep the portable file exchange as a fully supported fallback and document exact CVAT manual recovery steps.
 - [ ] Add a pinned CVAT contract test against CVAT Community `v2.76.0` and `cvat-sdk==2.76.0`; verify local images, labels, export, status, provenance, retry, and class/dimension/box failures.
 
@@ -179,7 +179,7 @@ Remote verification: `origin` is `https://github.com/joshsalako/amphilens.git`; 
 - [x] Add CLI commands: `app`, `doctor`, `project create`, `project inspect`, `predict`, `active-learn`, `checkpoint register/list/inspect`, `cvat export`, `cvat import`, and `report`.
 - [x] Keep CLI and UI on shared services; no duplicate business logic.
 - [x] Add a guided wizard for image roots, classes, base model, output location, prediction, and PPAL queue steps.
-- [ ] Add **Send to CVAT**, **Open CVAT**, **Refresh status**, and **Continue cycle** actions over the managed CVAT service; the UI must show task URL, status, annotation count, selected-image count, and the exact blocking reason.
+- [x] Add **Send to CVAT**, **Open CVAT**, **Refresh status**, and **Continue cycle** actions over the managed CVAT service; the UI shows task URL, status, annotation count, selected-image count, and the exact blocking reason.
 - [ ] Add advanced panels for all documented model, preprocessing, threshold, PPAL, and training controls.
 - [ ] Show actionable failures for missing GPU, missing calibration, incompatible checkpoint, invalid annotation, and insufficient disk.
 - [ ] Add UI smoke tests for project creation, diagnostics, configuration validation, and artifact download.
@@ -304,3 +304,10 @@ The current dependency-light verification boundary is the complete Pytest
 suite with Pillow/Typer, Ruff, and `git diff --check`; the CLAHE path was also
 exercised with the installed OpenCV runtime. ML model downloads and GPU tests
 remain release-gate checks rather than being implied by the fixture suite.
+
+The managed CVAT slice is now implemented over `cvat-sdk==2.76.0` and
+`cvat-cli==2.76.0`: the SDK transport, idempotent cycle manifest, readiness
+gate, validated export/import, immutable merge, CLI commands, and Streamlit
+actions are covered by fake-SDK and managed-cycle tests. A live CVAT Community
+server contract test remains a release-gate check because no server is
+available in the dependency-light test environment.

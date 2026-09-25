@@ -107,3 +107,19 @@ checkpoint is described as scientifically evaluated.
 An explicit `device: cuda` request fails if CUDA is unavailable. `device:
 auto` uses CUDA when available and otherwise uses CPU, which is useful for
 small smoke tests but not a substitute for production training benchmarks.
+
+## Managed CVAT cycle
+
+For a queue produced by active learning, open **CVAT cycle** in the browser
+app, select the `selection_queue.csv`, and press **Send to CVAT**. AmphiLens
+creates the correctly labelled task, shows **Open CVAT**, and records the task
+ID so a browser refresh does not create a duplicate. Set `CVAT_URL` and
+`CVAT_TOKEN` before starting the app; the token is not stored.
+
+Annotate and save every image in CVAT. Return to AmphiLens, press **Refresh
+status**, and then **Continue cycle** once the task is completed. AmphiLens
+downloads the CVAT-for-Images archive, validates classes, dimensions, image
+files, and boxes, and creates a new immutable merged snapshot. Select that
+snapshot on **Train model** and resume from the parent checkpoint. The
+portable ZIP import/export workflow remains available if the managed server is
+not reachable.

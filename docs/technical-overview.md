@@ -21,8 +21,8 @@ and a Typer command-line interface. Both use the same services:
   visual evidence.
 - `amphilens.active_learning` implements the default Hybrid PPAL selection
   workflow.
-- `amphilens.annotations` provides portable CVAT/COCO/YOLO exchange and is the
-  boundary for the planned managed CVAT adapter.
+- `amphilens.annotations` provides portable CVAT/COCO/YOLO exchange and the
+  optional managed CVAT SDK transport.
 
 The package keeps source images untouched. Derived files are written to the
 project's artifact directories and retain mappings back to their source files.
@@ -130,12 +130,37 @@ The current portable exchange writes:
 - `classes.txt`; and
 - YOLO labels and `dataset.yaml` when YOLO exchange is requested.
 
-The planned managed workflow will use the official CVAT SDK with a pinned
-compatibility profile. It will create one CVAT project per AmphiLens project
-and one task per active-learning cycle, then persist the CVAT IDs and selection
-hash. A Continue action will check readiness, export annotations, validate
-classes/dimensions/boxes, merge a new immutable dataset snapshot, and resume
-training. Credentials will stay outside project and run manifests.
+The managed workflow uses the official `cvat-sdk==2.76.0` profile. It creates
+or reuses one CVAT project per AmphiLens project, creates one task per
+active-learning cycle, uploads the selected local images with the exact ordered
+project label schema, and persists the CVAT IDs, task URL, selected source
+paths, selection hash, and client version. Repeating **Send to CVAT** for the
+same cycle is idempotent; a different selection is rejected rather than
+creating a second task.
+
+Set `CVAT_URL` and `CVAT_TOKEN` in the process environment. The token is never
+written to a project manifest, log, URL, or command output. **Refresh status**
+only makes **Continue cycle** available after every CVAT job is completed. An
+empty box list is valid for an image that was reviewed as a negative, but an
+uncompleted or partial job is blocked. Continue exports a `CVAT for images 1.1`
+ZIP, validates it through the same importer as initial data, and creates a new
+immutable merged snapshot. The Train model page can then resume from the
+parent checkpoint using that newest snapshot.
+
+The CLI equivalent is:
+
+```bash
+export CVAT_URL=http://localhost:8080
+export CVAT_TOKEN='read-from-your-secret-store'
+amphilens cvat managed-start ./my-project --cycle 0 \
+  --image /data/queue/camera_001.jpg --image /data/queue/camera_002.jpg
+amphilens cvat managed-status ./my-project --cycle 0
+amphilens cvat managed-continue ./my-project --cycle 0
+```
+
+The portable exchange remains the recovery path when CVAT is unavailable or
+credentials cannot be used. AmphiLens never deletes CVAT projects or tasks
+automatically.
 
 ## Project outputs
 

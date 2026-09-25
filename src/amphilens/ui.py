@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import csv
 import json
+import os
 import re
 from pathlib import Path
 
@@ -315,6 +317,85 @@ def _render_active_learning(st):
             st.error(str(exc))
 
 
+def _read_queue_paths(queue_or_folder: str) -> list[Path]:
+    source = Path(queue_or_folder).expanduser().resolve()
+    if source.is_dir():
+        from .core import iter_images
+
+        return iter_images([source])
+    if source.is_file() and source.suffix.lower() == ".csv":
+        with source.open(newline="", encoding="utf-8") as handle:
+            rows = csv.DictReader(handle)
+            if not rows.fieldnames or "image_path" not in rows.fieldnames:
+                raise ValueError("Selection CSV must contain an image_path column")
+            return [Path(row["image_path"]).expanduser().resolve() for row in rows]
+    raise ValueError("Choose an image folder or selection_queue.csv")
+
+
+def _render_managed_cvat(st):
+    from .annotations.managed import CVATSdkTransport, ManagedCVATCycleService, selection_hash
+    from .core import ProjectStore
+
+    st.header("6. Send a queue to CVAT")
+    st.write(
+        "AmphiLens can create the CVAT project and task for you. Annotate there, "
+        "save your work, then return here and press Continue."
+    )
+    project_dir = st.text_input("Project folder", value="./amphilens-project", key="cvat-project")
+    server_url = st.text_input(
+        "CVAT server URL", value=os.environ.get("CVAT_URL", "http://localhost:8080")
+    )
+    st.caption(
+        "Set CVAT_TOKEN in the terminal before starting the app; it is never saved in the project."
+    )
+    cycle = st.number_input("Active-learning cycle", min_value=0, value=0, step=1)
+    queue = st.text_input(
+        "Selection queue CSV or folder",
+        value="./amphilens-project/annotations/cycle-0/selection_queue.csv",
+    )
+    try:
+        paths = _read_queue_paths(queue)
+        st.info(f"Selected images: {len(paths)}")
+    except Exception as exc:  # noqa: BLE001 - shown as an actionable UI message
+        paths = []
+        st.warning(str(exc))
+
+    def service():
+        transport = CVATSdkTransport(server_url=server_url or None)
+        return ManagedCVATCycleService(
+            ProjectStore(project_dir), transport, server_url=transport.server_url
+        )
+
+    start, refresh, continue_button = st.columns(3)
+    if start.button("Send to CVAT", type="primary", disabled=not paths):
+        try:
+            manifest = service().start(
+                cycle=int(cycle), image_paths=paths, selection_hash=selection_hash(paths)
+            )
+            st.success("CVAT task is ready for annotation")
+            st.json(manifest.to_dict())
+            if manifest.task_url:
+                st.link_button("Open CVAT", manifest.task_url)
+        except Exception as exc:  # noqa: BLE001 - shown as an actionable UI error
+            st.error(str(exc))
+    if refresh.button("Refresh status"):
+        try:
+            manifest = service().refresh(int(cycle))
+            st.info(f"Status: {manifest.state}; annotations: {manifest.annotation_count}")
+            st.write(f"Selected images: {len(manifest.selected_images)}")
+            if manifest.task_url:
+                st.link_button("Open CVAT", manifest.task_url)
+        except Exception as exc:  # noqa: BLE001 - shown as an actionable UI error
+            st.error(str(exc))
+    if continue_button.button("Continue cycle"):
+        try:
+            snapshot = service().continue_cycle(int(cycle))
+            st.success("CVAT annotations imported into a new immutable dataset snapshot")
+            st.json(snapshot.manifest.to_dict())
+        except Exception as exc:  # noqa: BLE001 - shown as an actionable UI error
+            st.error(str(exc))
+
+
 def main():
     try:
         import streamlit as st
@@ -333,6 +414,7 @@ def main():
             "Train model",
             "Find animals",
             "Active learning queue",
+            "CVAT cycle",
         ],
     )
     if page == "Environment":
@@ -345,8 +427,10 @@ def main():
         _render_train(st)
     elif page == "Find animals":
         _render_predict(st)
-    else:
+    elif page == "Active learning queue":
         _render_active_learning(st)
+    else:
+        _render_managed_cvat(st)
 
 
 if __name__ == "__main__":

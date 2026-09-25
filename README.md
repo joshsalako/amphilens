@@ -65,13 +65,30 @@ if the browser does not open automatically.
    archive must include its images.
 5. Train the initial model, or run the selected base model directly.
 6. Review the active-learning queue and annotate the selected images in CVAT.
-7. Import the completed annotations and train the next cycle.
-8. Download the predictions CSV, report, and visual evidence.
+7. On **CVAT cycle**, press **Send to CVAT**, open the task, annotate and save,
+   then return and press **Continue cycle**. AmphiLens checks completion,
+   downloads the annotations, and merges a new dataset snapshot.
+8. Select the new snapshot on **Train model** to continue from the parent
+   checkpoint.
+9. Download the predictions CSV, report, and visual evidence.
 
 AmphiLens keeps source images unchanged. By default it downsizes only images
 larger than 640 pixels on their longest side, preserves aspect ratio, converts
 to three-channel grayscale, and leaves CLAHE off for generic projects. Every
 choice is saved with the project and run.
+
+For managed CVAT, install the pinned integration and set the server credentials
+in the terminal before launching the app:
+
+```bash
+python -m pip install -e ".[cli,ui,inference,training,cvat]"
+export CVAT_URL=http://localhost:8080
+export CVAT_TOKEN='your-token-from-a-secret-store'
+amphilens app
+```
+
+The token is used only by the running process and is never saved by AmphiLens.
+If CVAT is unavailable, export/import a portable CVAT or YOLO ZIP instead.
 
 ## What you get
 

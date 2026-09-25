@@ -33,6 +33,9 @@ def test_training_registers_reusable_checkpoint_manifest(tmp_path: Path):
     )
 
     assert result.checkpoint.is_file()
+    assert (tmp_path / "cycle-0" / "best.pt").is_file()
+    assert (tmp_path / "cycle-0" / "last.pt").is_file()
+    assert (tmp_path / "cycle-0" / "metrics.json").is_file()
     assert result.manifest.architecture == "yolo"
     saved = json.loads((tmp_path / "cycle-0" / "checkpoint.json").read_text())
     assert saved["training_config"]["seed"] == 17
