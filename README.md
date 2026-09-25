@@ -150,6 +150,8 @@ The engine is designed around an execution-backend interface. The roadmap is:
 
 The project format and artifact contracts remain stable across these modes.
 
+See [`docs/deployment.md`](docs/deployment.md) for the local, Docker Compose, CUDA, and future remote-execution paths.
+
 ## Development
 
 Run the tests with the dependency-light isolated command:

@@ -1,0 +1,34 @@
+services:
+  amphilens:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.cpu
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./projects:/projects
+      - ./models:/models
+    environment:
+      AMPHILENS_PROJECT_ROOT: /projects
+      AMPHILENS_MODEL_ROOT: /models
+    restart: unless-stopped
+
+  amphilens-cuda:
+    profiles: ["cuda"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.cuda
+    volumes:
+      - ./projects:/projects
+      - ./models:/models
+    environment:
+      AMPHILENS_PROJECT_ROOT: /projects
+      AMPHILENS_MODEL_ROOT: /models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+

@@ -48,8 +48,10 @@ GitHub CLI inspection on 2026-09-25 reported invalid tokens for both `joshDrio` 
 - [x] Implement resumable per-image inference artifacts, failure records, stable CSV output, and run summaries.
 - [x] Make Hybrid PPAL class-aware before filling the remaining budget with diversity selection.
 - [x] Add `project create/inspect`, `predict`, and CVAT export/import CLI workflows over shared services.
+- [x] Add serializable `JobSpec`/`JobStatus` contracts and a local execution backend.
+- [x] Add CPU/CUDA Dockerfiles, Docker Compose reference deployment, and deployment documentation.
 - [x] Implement environment diagnostics, Typer CLI shell, and Streamlit shell.
-- [x] Verify the current suite: 19 tests passing with CLI dependencies, including CVAT/YOLO round trips, resumable inference, and class-aware PPAL.
+- [x] Verify the current suite: 20 tests passing with CLI dependencies, including execution and deployment-contract coverage.
 
 Current verification command:
 
@@ -143,12 +145,12 @@ Remote verification: `origin` is `https://github.com/joshsalako/amphilens.git`; 
 - [ ] Verify PyPI name availability and package/trademark naming before publishing.
 - [ ] Build a source distribution and wheel; install both into clean environments.
 
-### Task 8: Docker and remote execution roadmap
+### Task 8: Docker and remote execution roadmap — in progress
 
-- [ ] Define `JobSpec`, `JobHandle`, `ArtifactBundle`, and `ExecutionBackend` interfaces without changing local project contracts.
-- [ ] Implement a local backend as the reference implementation.
-- [ ] Add Docker CPU inference image and CUDA training image with pinned dependency environments.
-- [ ] Add Docker Compose single-machine deployment with local volumes and documented privacy boundaries.
+- [x] Define `JobSpec`, `JobHandle`, `JobStatus`, and `ExecutionBackend` interfaces without changing local project contracts.
+- [x] Implement a local backend as the reference implementation.
+- [x] Add Docker CPU inference image and CUDA training image foundations.
+- [x] Add Docker Compose single-machine deployment with local volumes and documented privacy boundaries.
 - [ ] Add SSH and Slurm adapters for institutional GPUs.
 - [ ] Add provider-neutral remote worker protocol with resumable uploads/downloads, logs, checkpoint artifacts, and job cancellation.
 - [ ] Only then evaluate hosted deployment with API, queue, workers, metadata database, object storage, authentication, and multi-user isolation.

@@ -10,6 +10,7 @@ from .core import (
     RunManifest,
 )
 from .runs import RunSummary, run_resumable_inference
+from .execution import JobHandle, JobSpec, JobStatus, LocalExecutionBackend
 
 __all__ = [
     "CheckpointManifest",
@@ -21,6 +22,10 @@ __all__ = [
     "RunManifest",
     "RunSummary",
     "run_resumable_inference",
+    "JobHandle",
+    "JobSpec",
+    "JobStatus",
+    "LocalExecutionBackend",
 ]
 
 __version__ = "0.1.0"
