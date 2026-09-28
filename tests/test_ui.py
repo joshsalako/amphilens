@@ -4,11 +4,15 @@ from pathlib import Path
 import pytest
 
 from amphilens.annotations.managed import CVATProjectSummary, CVATTaskSummary
+from amphilens.core import ProjectManifest, ProjectStore
 from amphilens.ui import (
+    active_project_path,
+    choose_local_folder,
     cvat_project_choices,
     parse_class_mapping,
     parse_classes,
     preprocessing_from_controls,
+    set_active_project,
 )
 
 
@@ -57,3 +61,22 @@ def test_streamlit_script_can_load_ui_with_no_package_context():
     namespace = runpy.run_path(str(script), run_name="amphilens_ui_script")
 
     assert namespace["parse_classes"]("toad") == ["toad"]
+
+
+def test_active_project_helpers_store_resolved_folder(tmp_path):
+    source = tmp_path / "images"
+    source.mkdir()
+    (source / "image.jpg").write_bytes(b"fixture")
+    project_dir = tmp_path / "project"
+    ProjectStore(project_dir).create(ProjectManifest.create("study", [source], ["toad"]))
+    state = {}
+
+    set_active_project(state, project_dir)
+
+    assert active_project_path(state) == project_dir.resolve()
+
+
+def test_choose_local_folder_returns_normalized_selection(tmp_path):
+    selected = choose_local_folder(ask_directory=lambda **_: str(tmp_path / "chosen"))
+
+    assert selected == (tmp_path / "chosen").resolve()

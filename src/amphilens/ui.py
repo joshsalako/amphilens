@@ -17,6 +17,14 @@ if __package__ in {None, ""}:  # pragma: no cover - exercised by Streamlit
         sys.path.insert(0, str(_source_root))
     __package__ = "amphilens"
 
+from .locations import (
+    ProjectLocationError,
+    default_projects_root,
+    find_source_checkout,
+    open_project,
+    relocate_project,
+    validate_new_project_path,
+)
 from .models import ModelCatalog
 from .preprocessing import PreprocessingConfig
 
@@ -62,6 +70,87 @@ def preprocessing_from_controls(
     )
 
 
+ACTIVE_PROJECT_KEY = "amphilens-active-project"
+OPEN_PROJECT_INPUT_KEY = "amphilens-open-project-input"
+CREATE_PROJECT_INPUT_KEY = "amphilens-create-project-input"
+
+
+def active_project_path(state) -> Path | None:
+    """Return the resolved project folder stored in a Streamlit-like state mapping."""
+    value = state.get(ACTIVE_PROJECT_KEY)
+    return Path(value).expanduser().resolve() if value else None
+
+
+def set_active_project(state, project_dir: str | Path):
+    """Validate and store the active project, returning its filesystem store."""
+    store = open_project(project_dir)
+    state[ACTIVE_PROJECT_KEY] = str(store.root)
+    return store
+
+
+def clear_active_project(state) -> None:
+    state.pop(ACTIVE_PROJECT_KEY, None)
+
+
+def choose_local_folder(
+    *,
+    initial_dir: str | Path | None = None,
+    ask_directory=None,
+) -> Path | None:
+    """Open a local folder dialog, returning ``None`` when unavailable or cancelled."""
+    if ask_directory is None:
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+        except ImportError:
+            return None
+
+        try:
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)
+            ask_directory = filedialog.askdirectory
+        except Exception:  # noqa: BLE001 - headless hosts use the path fallback
+            return None
+        try:
+            selected = ask_directory(
+                title="Choose an AmphiLens project folder",
+                initialdir=str(Path(initial_dir).expanduser()) if initial_dir else None,
+            )
+        finally:
+            root.destroy()
+    else:
+        selected = ask_directory(
+            title="Choose an AmphiLens project folder",
+            initialdir=str(Path(initial_dir).expanduser()) if initial_dir else None,
+        )
+    return Path(selected).expanduser().resolve() if selected else None
+
+
+def _folder_input(st, *, label: str, state_key: str, default: str = "") -> str:
+    if state_key not in st.session_state:
+        st.session_state[state_key] = default
+    value = st.text_input(label, key=state_key)
+    if st.button("Choose folder", key=f"{state_key}-choose"):
+        selected = choose_local_folder(initial_dir=value or None)
+        if selected:
+            st.session_state[state_key] = str(selected)
+            st.rerun()
+    return value
+
+
+def _active_store(st):
+    project_dir = active_project_path(st.session_state)
+    if project_dir is None:
+        st.info("Create or open a project before using this workflow.")
+        return None
+    try:
+        return open_project(project_dir)
+    except ProjectLocationError as exc:
+        st.error(str(exc))
+        return None
+
+
 def _snapshot_paths(project_dir: str | Path) -> list[Path]:
     root = Path(project_dir).expanduser().resolve() / "datasets"
     return sorted(
@@ -88,14 +177,20 @@ def _render_environment(st):
 def _render_create_project(st):
     from .core import ProjectConfig, ProjectManifest, ProjectStore
 
-    st.header("1. Create or open a project")
+    st.header("1. Create a project")
     st.write(
-        "Choose the folder with your camera-trap images and describe the animals you want to find."
+        "Choose your camera-trap images and describe the animals you want to find. "
+        "Project data is stored outside the AmphiLens source folder."
     )
     name = st.text_input("Project name", value="amphilens-project")
     image_root = st.text_input("Unlabelled image folder")
     class_text = st.text_area("Classes to detect", value="toad\nother_amphibian")
-    project_dir = st.text_input("AmphiLens project folder", value="./amphilens-project")
+    project_dir = _folder_input(
+        st,
+        label="Project folder",
+        state_key=CREATE_PROJECT_INPUT_KEY,
+        default=str(default_projects_root() / "amphilens-project"),
+    )
     catalog = ModelCatalog()
     preset_id = st.selectbox("Default model", [item.model_id for item in catalog.list()], index=0)
     max_dimension = st.number_input("Maximum image dimension", min_value=32, value=640, step=32)
@@ -113,9 +208,70 @@ def _render_create_project(st):
                 preprocessing=preprocessing,
             )
             manifest = ProjectManifest.create(name, [image_root], classes, project_config=config)
-            ProjectStore(project_dir).create(manifest)
-            st.success(f"Created {Path(project_dir).resolve()}")
+            destination = validate_new_project_path(
+                project_dir, source_checkout=find_source_checkout()
+            )
+            ProjectStore(destination).create(manifest)
+            set_active_project(st.session_state, destination)
+            st.success(f"Created {destination}")
             st.json(manifest.to_dict())
+        except Exception as exc:  # noqa: BLE001 - shown as an actionable UI error
+            st.error(str(exc))
+
+
+def _render_open_project(st):
+    st.header("1. Open a project")
+    st.write("Choose a folder containing an AmphiLens `manifest.json` file.")
+    project_dir = _folder_input(
+        st,
+        label="Existing project folder",
+        state_key=OPEN_PROJECT_INPUT_KEY,
+    )
+    if st.button("Open project", type="primary", disabled=not project_dir.strip()):
+        try:
+            store = set_active_project(st.session_state, project_dir)
+            st.success(f"Opened {store.root}")
+            st.json(store.load_manifest().to_dict())
+        except Exception as exc:  # noqa: BLE001 - shown as an actionable UI error
+            st.error(str(exc))
+
+    if not project_dir.strip():
+        return
+    try:
+        candidate = open_project(project_dir)
+    except ProjectLocationError:
+        return
+    checkout = find_source_checkout()
+    inside_checkout = bool(
+        checkout and (candidate.root == checkout or checkout in candidate.root.parents)
+    )
+    if not inside_checkout:
+        return
+
+    st.warning(
+        "This project is inside the AmphiLens source checkout and may appear as Git changes. "
+        "Move it to the user-project folder."
+    )
+    destination = _folder_input(
+        st,
+        label="Safe destination folder",
+        state_key="amphilens-migrate-project-input",
+        default=str(default_projects_root() / candidate.root.name),
+    )
+    confirm = st.checkbox(
+        "I understand that the verified move will remove the original folder.",
+        key="amphilens-migrate-project-confirm",
+    )
+    if st.button("Move and remove original", disabled=not confirm):
+        try:
+            moved = relocate_project(
+                candidate.root,
+                destination,
+                remove_source=True,
+                source_checkout=checkout,
+            )
+            set_active_project(st.session_state, moved)
+            st.success(f"Moved project to {moved}")
         except Exception as exc:  # noqa: BLE001 - shown as an actionable UI error
             st.error(str(exc))
 
@@ -123,14 +279,15 @@ def _render_create_project(st):
 def _render_import_dataset(st):
     from .annotations.initial import CVATProjectImportService
     from .annotations.managed import CVATSdkTransport
-    from .core import ProjectStore
 
     st.header("2. Import your initial annotations")
     st.write(
         "Select an existing CVAT project through its API, or provide a local "
         "CVAT/COCO/YOLO ZIP. AmphiLens keeps the source and creates an immutable snapshot."
     )
-    project_dir = st.text_input("Project folder", value="./amphilens-project", key="import-project")
+    store = _active_store(st)
+    if store is None:
+        return
     source = st.radio(
         "Annotation source",
         ["CVAT project", "Local archive"],
@@ -142,7 +299,7 @@ def _render_import_dataset(st):
         archive = st.text_input("CVAT, COCO, or YOLO ZIP file")
         if st.button("Import initial dataset", type="primary"):
             try:
-                snapshot = ProjectStore(project_dir).import_dataset(
+                snapshot = store.import_dataset(
                     archive, class_mapping=parse_class_mapping(mapping)
                 )
                 st.success(f"Imported {len(snapshot.manifest.images)} reviewed images")
@@ -161,7 +318,7 @@ def _render_import_dataset(st):
         try:
             transport = CVATSdkTransport(server_url=server_url or None)
             projects = CVATProjectImportService(
-                ProjectStore(project_dir), transport
+                store, transport
             ).list_projects()
             st.session_state["amphilens-initial-cvat-projects"] = projects
             st.success(f"Found {len(projects)} CVAT projects")
@@ -180,7 +337,7 @@ def _render_import_dataset(st):
         try:
             transport = CVATSdkTransport(server_url=server_url or None)
             snapshot = CVATProjectImportService(
-                ProjectStore(project_dir), transport
+                store, transport
             ).import_project(
                 selected.project_id,
                 class_mapping=parse_class_mapping(mapping),
@@ -192,7 +349,6 @@ def _render_import_dataset(st):
 
 
 def _render_train(st):
-    from .core import ProjectStore
     from .dataset import DatasetSnapshot
     from .models import load_detector, load_preset_detector
     from .training import (
@@ -202,13 +358,11 @@ def _render_train(st):
     )
 
     st.header("3. Train or continue a model")
-    project_dir = st.text_input("Project folder", value="./amphilens-project", key="train-project")
-    try:
-        project = ProjectStore(project_dir).load_manifest()
-        snapshot_paths = _snapshot_paths(project_dir)
-    except Exception as exc:  # noqa: BLE001 - the form remains usable while paths are edited
-        st.info(f"Project not loaded: {exc}")
+    store = _active_store(st)
+    if store is None:
         return
+    project = store.load_manifest()
+    snapshot_paths = _snapshot_paths(store.root)
     if not snapshot_paths:
         st.warning("Import an initial CVAT or YOLO dataset before training.")
         return
@@ -226,7 +380,7 @@ def _render_train(st):
         key="train-resume-manifest",
     )
     output_dir = st.text_input(
-        "Training output folder", value=str(Path(project_dir) / "checkpoints" / "cycle-0")
+        "Training output folder", value=str(store.root / "checkpoints" / "cycle-0")
     )
     epochs = st.number_input("Training epochs", min_value=1, value=100, step=1)
     batch_size = st.number_input("Batch size", min_value=1, value=16, step=1)
@@ -282,20 +436,16 @@ def _render_train(st):
 
 
 def _render_predict(st):
-    from .core import InferenceConfig, ProjectStore, iter_images
+    from .core import InferenceConfig, iter_images
     from .models import load_detector, load_preset_detector
     from .reporting import write_report
     from .runs import run_resumable_inference
 
     st.header("4. Find animals and download results")
-    project_dir = st.text_input(
-        "Project folder", value="./amphilens-project", key="predict-project"
-    )
-    try:
-        project = ProjectStore(project_dir).load_manifest()
-    except Exception as exc:  # noqa: BLE001 - the form remains usable while paths are edited
-        st.info(f"Project not loaded: {exc}")
+    store = _active_store(st)
+    if store is None:
         return
+    project = store.load_manifest()
     image_root = st.text_input("Image folder to scan", value=project.image_roots[0])
     catalog = ModelCatalog()
     preset = catalog.get(
@@ -308,7 +458,7 @@ def _render_predict(st):
     )
     checkpoint = st.text_input("Checkpoint path (optional for official weights)")
     output_dir = st.text_input(
-        "Results folder", value=str(Path(project_dir) / "artifacts" / "prediction")
+        "Results folder", value=str(store.root / "artifacts" / "prediction")
     )
     confidence = st.slider("Minimum confidence", 0.0, 1.0, 0.25, 0.01)
     image_size = st.number_input("Detector input size", min_value=32, value=640, step=32)
@@ -365,10 +515,15 @@ def _render_active_learning(st):
 
     st.header("5. Active learning queue")
     st.write("AmphiLens samples difficult and diverse images for the next annotation cycle.")
+    store = _active_store(st)
+    if store is None:
+        return
     predictions = st.text_input("Prediction CSV")
     calibration = st.text_input("Calibration JSON")
     features = st.text_input("Feature JSON")
-    output = st.text_input("Queue output folder", value="./amphilens-project/annotations/cycle-0")
+    output = st.text_input(
+        "Queue output folder", value=str(store.root / "annotations" / "cycle-0")
+    )
     budget = st.number_input("Images to annotate", min_value=1, value=100, step=1)
     seed = st.number_input("Selection seed", min_value=0, value=42, step=1)
     pool_multiplier = st.number_input("Candidate pool multiplier", min_value=1, value=200, step=1)
@@ -421,14 +576,15 @@ def _read_queue_paths(queue_or_folder: str) -> list[Path]:
 
 def _render_managed_cvat(st):
     from .annotations.managed import CVATSdkTransport, ManagedCVATCycleService, selection_hash
-    from .core import ProjectStore
 
     st.header("6. Send a queue to CVAT")
     st.write(
         "AmphiLens can create the CVAT project and task for you. Annotate there, "
         "save your work, then return here and press Continue."
     )
-    project_dir = st.text_input("Project folder", value="./amphilens-project", key="cvat-project")
+    store = _active_store(st)
+    if store is None:
+        return
     server_url = st.text_input(
         "CVAT server URL", value=os.environ.get("CVAT_URL", "http://localhost:8080")
     )
@@ -438,7 +594,7 @@ def _render_managed_cvat(st):
     cycle = st.number_input("Active-learning cycle", min_value=0, value=0, step=1)
     queue = st.text_input(
         "Selection queue CSV or folder",
-        value="./amphilens-project/annotations/cycle-0/selection_queue.csv",
+        value=str(store.root / "annotations" / "cycle-0" / "selection_queue.csv"),
     )
     try:
         paths = _read_queue_paths(queue)
@@ -450,7 +606,7 @@ def _render_managed_cvat(st):
     def service():
         transport = CVATSdkTransport(server_url=server_url or None)
         return ManagedCVATCycleService(
-            ProjectStore(project_dir), transport, server_url=transport.server_url
+            store, transport, server_url=transport.server_url
         )
 
     start, refresh, continue_button = st.columns(3)
@@ -483,6 +639,18 @@ def _render_managed_cvat(st):
             st.error(str(exc))
 
 
+def _render_active_project_sidebar(st):
+    project_dir = active_project_path(st.session_state)
+    st.sidebar.subheader("Active project")
+    if project_dir is None:
+        st.sidebar.info("Create or open a project to begin.")
+        return
+    st.sidebar.code(str(project_dir), language=None)
+    if st.sidebar.button("Close active project"):
+        clear_active_project(st.session_state)
+        st.sidebar.success("Project closed")
+
+
 def main():
     try:
         import streamlit as st
@@ -492,11 +660,13 @@ def main():
     st.set_page_config(page_title="AmphiLens", page_icon="🐸", layout="wide")
     st.title("AmphiLens")
     st.caption("Find amphibians and other wildlife in camera-trap images")
+    _render_active_project_sidebar(st)
     page = st.sidebar.radio(
         "Workflow",
         [
             "Environment",
             "Create project",
+            "Open project",
             "Import initial dataset",
             "Train model",
             "Find animals",
@@ -508,6 +678,8 @@ def main():
         _render_environment(st)
     elif page == "Create project":
         _render_create_project(st)
+    elif page == "Open project":
+        _render_open_project(st)
     elif page == "Import initial dataset":
         _render_import_dataset(st)
     elif page == "Train model":
