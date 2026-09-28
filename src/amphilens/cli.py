@@ -29,6 +29,7 @@ from .curation import write_selection_artifacts
 from .dataset import DatasetSnapshot
 from .doctor import run_doctor
 from .inference import read_predictions_csv, write_predictions_csv
+from .locations import default_projects_root, relocate_project, validate_new_project_path
 from .models import ModelCatalog, load_detector, load_preset_detector
 from .preprocessing import PreprocessingConfig
 from .registry import ModelRegistry
@@ -88,8 +89,32 @@ if typer is not None:
     ):
         """Create a portable AmphiLens project directory."""
         manifest = ProjectManifest.create(name, image_root, class_name)
-        ProjectStore(project_dir).create(manifest)
-        typer.echo(f"Created project at {project_dir.resolve()}")
+        destination = validate_new_project_path(project_dir)
+        ProjectStore(destination).create(manifest)
+        typer.echo(f"Created project at {destination}")
+
+    @project_app.command("default-location")
+    def project_default_location():
+        """Print the default user directory for AmphiLens projects."""
+        typer.echo(default_projects_root())
+
+    @project_app.command("move")
+    def project_move(
+        source_dir: Path,
+        destination_dir: Path,
+        remove_source: bool = typer.Option(
+            False,
+            "--remove-source",
+            help="Remove the original only after the copied project is verified.",
+        ),
+    ):
+        """Verify and relocate a portable AmphiLens project."""
+        moved = relocate_project(
+            source_dir,
+            destination_dir,
+            remove_source=remove_source,
+        )
+        typer.echo(f"Moved project to {moved}")
 
     @project_app.command("inspect")
     def project_inspect(project_dir: Path):

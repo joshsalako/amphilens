@@ -45,6 +45,45 @@ def test_project_create_and_inspect_commands(tmp_path: Path):
     assert '"name": "demo"' in inspected.stdout
 
 
+def test_project_default_location_command_uses_user_data():
+    from amphilens.locations import default_projects_root
+
+    result = CliRunner().invoke(app, ["project", "default-location"])
+
+    assert result.exit_code == 0, result.stdout
+    assert result.stdout.strip() == str(default_projects_root())
+
+
+def test_project_move_command_verifies_and_removes_source(tmp_path: Path):
+    images = tmp_path / "images"
+    images.mkdir()
+    source = tmp_path / "old-project"
+    destination = tmp_path / "projects" / "study"
+    runner = CliRunner()
+    created = runner.invoke(
+        app,
+        [
+            "project",
+            "create",
+            str(source),
+            "--image-root",
+            str(images),
+            "--class-name",
+            "toad",
+        ],
+    )
+    assert created.exit_code == 0, created.stdout
+
+    result = runner.invoke(
+        app,
+        ["project", "move", str(source), str(destination), "--remove-source"],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert not source.exists()
+    assert (destination / "manifest.json").is_file()
+
+
 def test_dataset_import_command_creates_an_immutable_snapshot(tmp_path: Path):
     images = tmp_path / "images"
     images.mkdir()
