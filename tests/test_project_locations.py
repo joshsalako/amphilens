@@ -21,12 +21,12 @@ def _create_project(root: Path, source: Path) -> ProjectStore:
     return store
 
 
-def test_default_projects_root_is_user_data_not_current_directory(monkeypatch, tmp_path):
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "user-data"))
+def test_default_projects_root_is_downloads_not_current_directory(monkeypatch, tmp_path):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
 
     result = default_projects_root(platform_name="linux")
 
-    assert result == tmp_path / "user-data" / "AmphiLens" / "projects"
+    assert result == tmp_path / "Downloads" / "AmphiLens" / "projects"
     assert result != Path.cwd() / "amphilens-project"
 
 

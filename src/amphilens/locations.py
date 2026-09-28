@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import shutil
-import sys
 import tempfile
 from pathlib import Path
 
@@ -29,15 +27,9 @@ def _is_same_or_inside(path: Path, parent: Path) -> bool:
 
 
 def default_projects_root(platform_name: str | None = None) -> Path:
-    """Return the platform-appropriate user directory for AmphiLens projects."""
-    platform_name = platform_name or sys.platform
-    if platform_name.startswith("win"):
-        base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-    elif platform_name == "darwin":
-        base = Path.home() / "Library" / "Application Support"
-    else:
-        base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
-    return (base / "AmphiLens" / "projects").expanduser()
+    """Return the user Downloads directory for AmphiLens projects."""
+    del platform_name  # Retained for compatibility with existing callers.
+    return (Path.home() / "Downloads" / "AmphiLens" / "projects").expanduser()
 
 
 def find_source_checkout(start: str | Path | None = None) -> Path | None:
