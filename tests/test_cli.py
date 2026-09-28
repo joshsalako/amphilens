@@ -1,5 +1,6 @@
 import csv
 import json
+import shutil
 import zipfile
 from io import BytesIO
 from pathlib import Path
@@ -82,6 +83,35 @@ def test_project_move_command_verifies_and_removes_source(tmp_path: Path):
     assert result.exit_code == 0, result.stdout
     assert not source.exists()
     assert (destination / "manifest.json").is_file()
+
+
+def test_project_create_rejects_checkout_path_even_when_launched_elsewhere(
+    monkeypatch, tmp_path: Path
+):
+    images = tmp_path / "images"
+    images.mkdir()
+    checkout_project = Path(__file__).parents[1] / ".amphilens" / "test-project-location"
+    monkeypatch.chdir(tmp_path)
+
+    try:
+        result = CliRunner().invoke(
+            app,
+            [
+                "project",
+                "create",
+                str(checkout_project),
+                "--image-root",
+                str(images),
+                "--class-name",
+                "toad",
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert "source checkout" in str(result.exception)
+        assert not checkout_project.exists()
+    finally:
+        shutil.rmtree(checkout_project, ignore_errors=True)
 
 
 def test_dataset_import_command_creates_an_immutable_snapshot(tmp_path: Path):

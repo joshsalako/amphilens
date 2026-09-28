@@ -209,7 +209,7 @@ def _render_create_project(st):
             )
             manifest = ProjectManifest.create(name, [image_root], classes, project_config=config)
             destination = validate_new_project_path(
-                project_dir, source_checkout=find_source_checkout()
+                project_dir, source_checkout=find_source_checkout(Path(__file__))
             )
             ProjectStore(destination).create(manifest)
             set_active_project(st.session_state, destination)
@@ -241,7 +241,7 @@ def _render_open_project(st):
         candidate = open_project(project_dir)
     except ProjectLocationError:
         return
-    checkout = find_source_checkout()
+    checkout = find_source_checkout(Path(__file__))
     inside_checkout = bool(
         checkout and (candidate.root == checkout or checkout in candidate.root.parents)
     )

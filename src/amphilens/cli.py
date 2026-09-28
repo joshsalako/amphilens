@@ -29,7 +29,12 @@ from .curation import write_selection_artifacts
 from .dataset import DatasetSnapshot
 from .doctor import run_doctor
 from .inference import read_predictions_csv, write_predictions_csv
-from .locations import default_projects_root, relocate_project, validate_new_project_path
+from .locations import (
+    default_projects_root,
+    find_source_checkout,
+    relocate_project,
+    validate_new_project_path,
+)
 from .models import ModelCatalog, load_detector, load_preset_detector
 from .preprocessing import PreprocessingConfig
 from .registry import ModelRegistry
@@ -89,7 +94,9 @@ if typer is not None:
     ):
         """Create a portable AmphiLens project directory."""
         manifest = ProjectManifest.create(name, image_root, class_name)
-        destination = validate_new_project_path(project_dir)
+        destination = validate_new_project_path(
+            project_dir, source_checkout=find_source_checkout(Path(__file__))
+        )
         ProjectStore(destination).create(manifest)
         typer.echo(f"Created project at {destination}")
 
@@ -113,6 +120,7 @@ if typer is not None:
             source_dir,
             destination_dir,
             remove_source=remove_source,
+            source_checkout=find_source_checkout(Path(__file__)),
         )
         typer.echo(f"Moved project to {moved}")
 
