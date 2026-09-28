@@ -27,6 +27,7 @@ from .locations import (
 )
 from .models import ModelCatalog
 from .preprocessing import PreprocessingConfig
+from .state import UserStateError, UserStateStore
 
 
 def cvat_project_choices(projects):
@@ -71,6 +72,8 @@ def preprocessing_from_controls(
 
 
 ACTIVE_PROJECT_KEY = "amphilens-active-project"
+USER_STATE_STORE_KEY = "amphilens-user-state-store"
+PROJECT_RESTORE_MESSAGE_KEY = "amphilens-project-restore-message"
 OPEN_PROJECT_INPUT_KEY = "amphilens-open-project-input"
 CREATE_PROJECT_INPUT_KEY = "amphilens-create-project-input"
 
@@ -81,15 +84,60 @@ def active_project_path(state) -> Path | None:
     return Path(value).expanduser().resolve() if value else None
 
 
-def set_active_project(state, project_dir: str | Path):
+def _user_state_store(state, user_state: UserStateStore | None = None) -> UserStateStore:
+    if user_state is not None:
+        state[USER_STATE_STORE_KEY] = user_state
+        return user_state
+    existing = state.get(USER_STATE_STORE_KEY)
+    if isinstance(existing, UserStateStore):
+        return existing
+    created = UserStateStore()
+    state[USER_STATE_STORE_KEY] = created
+    return created
+
+
+def restore_active_project(
+    state, *, user_state: UserStateStore | None = None
+) -> Path | None:
+    """Restore and validate the last project once for a Streamlit session."""
+    if ACTIVE_PROJECT_KEY in state:
+        return active_project_path(state)
+    store = _user_state_store(state, user_state)
+    try:
+        remembered = store.last_active_project()
+    except UserStateError as exc:
+        store.clear()
+        state[PROJECT_RESTORE_MESSAGE_KEY] = str(exc)
+        return None
+    if remembered is None:
+        return None
+    try:
+        project = open_project(remembered)
+    except ProjectLocationError as exc:
+        store.clear()
+        state[PROJECT_RESTORE_MESSAGE_KEY] = (
+            f"The remembered project could not be opened and was forgotten: {exc}"
+        )
+        return None
+    state[ACTIVE_PROJECT_KEY] = str(project.root)
+    return project.root
+
+
+def set_active_project(
+    state, project_dir: str | Path, *, user_state: UserStateStore | None = None
+):
     """Validate and store the active project, returning its filesystem store."""
     store = open_project(project_dir)
     state[ACTIVE_PROJECT_KEY] = str(store.root)
+    _user_state_store(state, user_state).remember_project(store.root)
+    state.pop(PROJECT_RESTORE_MESSAGE_KEY, None)
     return store
 
 
-def clear_active_project(state) -> None:
+def clear_active_project(state, *, user_state: UserStateStore | None = None) -> None:
+    _user_state_store(state, user_state).clear()
     state.pop(ACTIVE_PROJECT_KEY, None)
+    state.pop(PROJECT_RESTORE_MESSAGE_KEY, None)
 
 
 def _folder_input(st, *, label: str, state_key: str, default: str = "") -> str:
@@ -599,6 +647,9 @@ def _render_managed_cvat(st):
 
 
 def _render_active_project_sidebar(st):
+    restore_message = st.session_state.pop(PROJECT_RESTORE_MESSAGE_KEY, None)
+    if restore_message:
+        st.sidebar.warning(restore_message)
     project_dir = active_project_path(st.session_state)
     st.sidebar.subheader("Active project")
     if project_dir is None:
@@ -619,6 +670,7 @@ def main():
     st.set_page_config(page_title="AmphiLens", page_icon="🐸", layout="wide")
     st.title("AmphiLens")
     st.caption("Find amphibians and other wildlife in camera-trap images")
+    restore_active_project(st.session_state)
     _render_active_project_sidebar(st)
     page = st.sidebar.radio(
         "Workflow",

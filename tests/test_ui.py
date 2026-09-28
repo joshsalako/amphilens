@@ -7,13 +7,16 @@ import pytest
 import amphilens.ui as ui
 from amphilens.annotations.managed import CVATProjectSummary, CVATTaskSummary
 from amphilens.core import ProjectManifest, ProjectStore
+from amphilens.state import UserStateStore
 from amphilens.ui import (
     _folder_input,
     active_project_path,
     cvat_project_choices,
+    clear_active_project,
     parse_class_mapping,
     parse_classes,
     preprocessing_from_controls,
+    restore_active_project,
     set_active_project,
 )
 
@@ -73,9 +76,40 @@ def test_active_project_helpers_store_resolved_folder(tmp_path):
     ProjectStore(project_dir).create(ProjectManifest.create("study", [source], ["toad"]))
     state = {}
 
-    set_active_project(state, project_dir)
+    set_active_project(state, project_dir, user_state=UserStateStore(tmp_path / "state.json"))
 
     assert active_project_path(state) == project_dir.resolve()
+
+
+def test_active_project_helpers_restore_and_clear_persisted_folder(tmp_path):
+    source = tmp_path / "images"
+    source.mkdir()
+    (source / "image.jpg").write_bytes(b"fixture")
+    project_dir = tmp_path / "project"
+    ProjectStore(project_dir).create(ProjectManifest.create("study", [source], ["toad"]))
+    user_state = UserStateStore(tmp_path / "state.json")
+    user_state.remember_project(project_dir)
+
+    state = {}
+    restored = restore_active_project(state, user_state=user_state)
+
+    assert restored == project_dir.resolve()
+    assert active_project_path(state) == project_dir.resolve()
+
+    clear_active_project(state, user_state=user_state)
+
+    assert active_project_path(state) is None
+    assert user_state.last_active_project() is None
+
+
+def test_restore_active_project_clears_missing_project(tmp_path):
+    user_state = UserStateStore(tmp_path / "state.json")
+    user_state.remember_project(tmp_path / "deleted-project")
+    state = {}
+
+    assert restore_active_project(state, user_state=user_state) is None
+    assert active_project_path(state) is None
+    assert user_state.last_active_project() is None
 
 
 def test_folder_input_uses_a_path_field_without_a_native_dialog():
