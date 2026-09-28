@@ -29,13 +29,21 @@ drivers depend on the host operating system.
 
 The source checkout is for AmphiLens code. Project folders contain generated
 datasets, annotations, checkpoints, predictions, and reports. New projects
-therefore default to the platform user-data directory, such as
-`~/Library/Application Support/AmphiLens/projects` on macOS, and the app
-rejects new locations inside the Git checkout.
+therefore default to `~/Downloads/AmphiLens/projects`, and the app rejects new
+locations inside the Git checkout.
 
 In the browser app, use **Create project** to enter a project path or **Open
 project** to enter a folder containing `manifest.json`. The app remembers the
-active project for the current session and uses it across all workflows.
+last active project in a small user-state file and restores it after a browser
+refresh when the project still validates. **Close active project** clears the
+remembered path.
+
+The state file contains only the project path. It does not contain CVAT tokens,
+images, model weights, or project configuration. Its platform locations are:
+
+1. macOS: `~/Library/Application Support/AmphiLens/state.json`;
+2. Linux: `~/.config/amphilens/state.json` or `$XDG_CONFIG_HOME/amphilens/state.json`;
+3. Windows: `%APPDATA%/AmphiLens/state.json`.
 
 For Docker, mount a host directory at `/projects` and select `/projects` in the
 app. This keeps project data on the host rather than inside a disposable

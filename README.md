@@ -70,8 +70,7 @@ python -m pip install -e ".[cli,ui,inference,training]"
 
 The AmphiLens checkout contains the application code. Your projects contain
 images, annotations, checkpoints, predictions, and reports, so they are stored
-separately by default in the platform's user-data folder (for example,
-`~/Library/Application Support/AmphiLens/projects` on macOS).
+separately by default in `~/Downloads/AmphiLens/projects`.
 
 When creating a project, enter another location in **Project folder path** if
 needed. AmphiLens blocks new project folders inside the source checkout so
@@ -80,6 +79,11 @@ generated files do not appear as Git changes.
 To use a project you created earlier, open **Open project**, enter its folder
 path, and press **Open project**. The selected project becomes active for
 importing, training, prediction, and CVAT workflows.
+
+AmphiLens remembers the last active project on this computer. Refreshing the
+browser keeps the project open when its folder is still valid. Use **Close
+active project** in the sidebar when you want to stop using it, then open
+another project.
 
 If an older project is already inside the source checkout, open it first and
 use **Move and remove original**. AmphiLens copies and verifies the project
@@ -164,6 +168,16 @@ Images are resized without enlarging them, aspect ratio is preserved, and
 grayscale images are replicated into three channels. If CLAHE is enabled,
 resizing happens first to reduce processing time. These choices are saved in
 the project and run metadata.
+
+When you train or find animals, AmphiLens loads these saved choices
+automatically. Open **Advanced run overrides** only when you intentionally want
+different settings for one run. Those changes are recorded for that run and do
+not change the project defaults.
+
+If you select a trained checkpoint with a compatible `checkpoint.json`, its
+model, classes, preprocessing, and detector input size take priority. AmphiLens
+locks those settings and stops before running if they are incompatible with the
+project.
 
 ## 7. Train a model or find animals
 

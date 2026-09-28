@@ -95,7 +95,24 @@ When CLAHE is enabled, the paper-aligned settings are `clip_limit=2.0` and an
 `(8, 8)` tile grid. Resizing happens before CLAHE to reduce processing time. A
 cache uses the source-image hash and preprocessing fingerprint.
 
-## 5. Train the initial model
+## 5. Configuration precedence
+
+AmphiLens stores the selected model and preprocessing settings in the project
+`manifest.json`. Refreshing the browser does not reset these values.
+
+1. A checkpoint with `checkpoint.json` supplies the authoritative model ID,
+   architecture, classes, preprocessing, and recorded detector input size.
+2. Otherwise, the active project configuration supplies the defaults.
+3. **Advanced run overrides** apply only to the current run and are recorded in
+   its metadata.
+4. Incompatible checkpoint overrides are rejected before output files are
+   created.
+
+Device and confidence threshold are runtime choices and can be changed for a
+run. A local checkpoint without a manifest remains usable with the project
+configuration, but AmphiLens warns that its metadata could not be verified.
+
+## 6. Train the initial model
 
 In the browser app:
 
@@ -125,7 +142,7 @@ amphilens train /path/to/my-project \
   --model-preset yolo26-l
 ```
 
-## 6. Run inference
+## 7. Run inference
 
 1. Open **Find animals**.
 2. Select the image folder to scan.
@@ -136,7 +153,7 @@ amphilens train /path/to/my-project \
 The output includes predictions CSV, reports, and optional visual evidence.
 Detection boxes are mapped back to the original image dimensions.
 
-## 7. Create an active-learning queue
+## 8. Create an active-learning queue
 
 1. Run inference on the unlabeled image folder.
 2. Open **Active learning queue**.
@@ -147,7 +164,7 @@ Detection boxes are mapped back to the original image dimensions.
 The default method is Hybrid PPAL. Missing calibration evidence is reported as
 an error rather than silently replaced with guessed values.
 
-## 8. Annotate a queue in CVAT
+## 9. Annotate a queue in CVAT
 
 For managed CVAT:
 
@@ -166,7 +183,7 @@ negative image; an incomplete task is blocked.
 Set `CVAT_URL` and `CVAT_TOKEN` before starting the app. The token is not
 stored in project files or manifests.
 
-## 9. Continue training
+## 10. Continue training
 
 1. Open **Train model**.
 2. Select the new merged snapshot.
@@ -178,7 +195,7 @@ The new checkpoint records the parent checkpoint and preserves the previous
 snapshot. Incompatible classes, architectures, or preprocessing settings fail
 before training starts.
 
-## 10. Evaluate honestly
+## 11. Evaluate honestly
 
 Training metrics currently describe training loss and explicitly report
 `evaluation: not evaluated` when no holdout dataset is supplied. Use a separate

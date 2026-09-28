@@ -35,21 +35,38 @@ project's artifact directories and retain mappings back to their source files.
 `ProjectStore` treats a project folder as a portable unit containing
 `manifest.json`, immutable dataset snapshots, run records, artifacts, and
 checkpoints. The browser app does not place this unit in the source checkout:
-new projects default to the platform user-data directory, and a new location
+new projects default to `~/Downloads/AmphiLens/projects`, and a new location
 inside the checkout is rejected.
 
-The Streamlit session stores one resolved active project path. **Create
-project** creates it, **Open project** validates it from `manifest.json`, and
-all import, training, prediction, and CVAT pages use that active store. The
-CLI remains path-explicit for reproducibility and provides `project move` for
-verified relocation.
+The Streamlit session uses one resolved active project path. **Create project**
+creates it, **Open project** validates it from `manifest.json`, and all import,
+training, prediction, and CVAT pages use that active store. The app also stores
+only the last active project path in a versioned user-state file:
+
+- macOS: `~/Library/Application Support/AmphiLens/state.json`;
+- Linux: `~/.config/amphilens/state.json` or `$XDG_CONFIG_HOME/amphilens/state.json`;
+- Windows: `%APPDATA%/AmphiLens/state.json`.
+
+The path is revalidated after a refresh. **Close active project** removes it
+from both the session and the user-state file. The CLI remains path-explicit
+for reproducibility and provides `project move` for verified relocation.
 
 Relocation copies the complete project to a new destination, compares file
 hashes, reloads the copied manifest, and only removes the original when the
 user explicitly requests it. Absolute source-image paths and provenance are
 preserved because source images are not moved.
 
-## 3. Dataset import and preprocessing
+## 3. Effective workflow configuration
+
+The shared configuration resolver uses the project manifest as the default for
+model preset, preprocessing, detector input size, confidence, device, and
+training settings. A checkpoint manifest takes priority for model identity,
+architecture, classes, preprocessing, and recorded input size. Explicit
+advanced overrides are run-scoped and are stored in run or checkpoint metadata;
+they never rewrite the project manifest. Widget keys include the project path
+and configuration identity so values cannot leak between projects.
+
+## 4. Dataset import and preprocessing
 
 An initial labelled dataset is optional for prediction but required for
 fine-tuning. Supported archives must include image files. The importer checks

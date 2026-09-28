@@ -10,7 +10,6 @@ from typing import Any
 
 from .core import atomic_write_json, read_json
 
-
 USER_STATE_SCHEMA_VERSION = 1
 
 

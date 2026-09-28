@@ -9,7 +9,7 @@ easy to create, open, and migrate projects through the local browser app.
 
 ### Task 1: Project-location contract
 
-Add a tested project-location contract: platform user-project defaults,
+Add a tested project-location contract: Downloads-based project defaults,
    source-checkout safety, manifest validation, and verified relocation.
 
 ### Task 2: Streamlit project lifecycle
@@ -28,14 +28,19 @@ suite, and commit the completed slices.
 
 ## Decisions
 
-- New projects default to the platform-appropriate AmphiLens user data folder.
+- New projects default to `~/Downloads/AmphiLens/projects`.
 - Custom locations are entered as paths so the UI works in local, Docker, and
   headless environments without desktop GUI dependencies.
 - New projects inside the source checkout are rejected.
 - Existing repository-local projects can be migrated by copy, verification,
   and explicit confirmation before removing the original.
-- Project loading is explicit; no global recent-project catalog is added in v1.
+- The app remembers only the last active project in a platform-standard,
+  versioned user-state file and validates it after refresh.
+- **Close active project** clears the session and remembered path; no global
+  recent-project catalog is added in v1.
 - External source-image paths remain unchanged when a project folder moves.
+- Project configuration remains in `manifest.json`; workflow overrides are
+  temporary and recorded in run/checkpoint metadata.
 
 ## Verification
 
