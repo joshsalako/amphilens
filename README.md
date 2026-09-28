@@ -73,13 +73,13 @@ images, annotations, checkpoints, predictions, and reports, so they are stored
 separately by default in the platform's user-data folder (for example,
 `~/Library/Application Support/AmphiLens/projects` on macOS).
 
-When creating a project, use **Project folder** to choose another location if
+When creating a project, enter another location in **Project folder path** if
 needed. AmphiLens blocks new project folders inside the source checkout so
 generated files do not appear as Git changes.
 
-To use a project you created earlier, open **Open project**, choose its folder,
-and press **Open project**. The selected project becomes active for importing,
-training, prediction, and CVAT workflows.
+To use a project you created earlier, open **Open project**, enter its folder
+path, and press **Open project**. The selected project becomes active for
+importing, training, prediction, and CVAT workflows.
 
 If an older project is already inside the source checkout, open it first and
 use **Move and remove original**. AmphiLens copies and verifies the project
@@ -106,9 +106,9 @@ space, and GPU needed for the selected workflow.
 In the app:
 
 1. Open **Create project**.
-2. Choose the folder containing the camera-trap images.
+2. Enter the path to the folder containing the camera-trap images.
 3. Enter the animals or organisms to detect, one class per line.
-4. Accept the safe default project folder or choose another folder.
+4. Accept the safe default project folder or enter another project path.
 5. Press **Create project**.
 
 The original image folder is never modified.

@@ -115,7 +115,7 @@ The user can begin in either of these ways:
 
 The user already has a small annotated CVAT project.
 
-1. Open **Create project**, choose the image folder and project folder, and
+1. Open **Create project**, enter the image and project folder paths, and
    define the ordered classes. Or open an existing AmphiLens project.
 2. Set `CVAT_URL` and `CVAT_TOKEN` before starting the app.
 3. Open **Import initial dataset** and choose **CVAT project**.

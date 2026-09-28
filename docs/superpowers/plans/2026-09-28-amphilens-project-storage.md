@@ -14,8 +14,8 @@ Add a tested project-location contract: platform user-project defaults,
 
 ### Task 2: Streamlit project lifecycle
 
-Add Streamlit create/open/active-project behavior and a local folder picker
-   with a path-entry fallback. Remove repeated repository-relative defaults.
+Add Streamlit create/open/active-project behavior with validated path-entry
+fields. Remove repeated repository-relative defaults.
 
 ### Task 3: CLI project locations
 
@@ -29,8 +29,8 @@ suite, and commit the completed slices.
 ## Decisions
 
 - New projects default to the platform-appropriate AmphiLens user data folder.
-- Custom locations use a native local folder dialog when available, with a
-  portable path input fallback.
+- Custom locations are entered as paths so the UI works in local, Docker, and
+  headless environments without desktop GUI dependencies.
 - New projects inside the source checkout are rejected.
 - Existing repository-local projects can be migrated by copy, verification,
   and explicit confirmation before removing the original.

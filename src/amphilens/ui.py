@@ -92,51 +92,10 @@ def clear_active_project(state) -> None:
     state.pop(ACTIVE_PROJECT_KEY, None)
 
 
-def choose_local_folder(
-    *,
-    initial_dir: str | Path | None = None,
-    ask_directory=None,
-) -> Path | None:
-    """Open a local folder dialog, returning ``None`` when unavailable or cancelled."""
-    if ask_directory is None:
-        try:
-            import tkinter as tk
-            from tkinter import filedialog
-        except ImportError:
-            return None
-
-        try:
-            root = tk.Tk()
-            root.withdraw()
-            root.attributes("-topmost", True)
-            ask_directory = filedialog.askdirectory
-        except Exception:  # noqa: BLE001 - headless hosts use the path fallback
-            return None
-        try:
-            selected = ask_directory(
-                title="Choose an AmphiLens project folder",
-                initialdir=str(Path(initial_dir).expanduser()) if initial_dir else None,
-            )
-        finally:
-            root.destroy()
-    else:
-        selected = ask_directory(
-            title="Choose an AmphiLens project folder",
-            initialdir=str(Path(initial_dir).expanduser()) if initial_dir else None,
-        )
-    return Path(selected).expanduser().resolve() if selected else None
-
-
 def _folder_input(st, *, label: str, state_key: str, default: str = "") -> str:
     if state_key not in st.session_state:
         st.session_state[state_key] = default
-    value = st.text_input(label, key=state_key)
-    if st.button("Choose folder", key=f"{state_key}-choose"):
-        selected = choose_local_folder(initial_dir=value or None)
-        if selected:
-            st.session_state[state_key] = str(selected)
-            st.rerun()
-    return value
+    return st.text_input(label, key=state_key)
 
 
 def _active_store(st):
@@ -179,15 +138,15 @@ def _render_create_project(st):
 
     st.header("1. Create a project")
     st.write(
-        "Choose your camera-trap images and describe the animals you want to find. "
+        "Enter your camera-trap image path and describe the animals you want to find. "
         "Project data is stored outside the AmphiLens source folder."
     )
     name = st.text_input("Project name", value="amphilens-project")
-    image_root = st.text_input("Unlabelled image folder")
+    image_root = st.text_input("Unlabelled image folder path")
     class_text = st.text_area("Classes to detect", value="toad\nother_amphibian")
     project_dir = _folder_input(
         st,
-        label="Project folder",
+        label="Project folder path",
         state_key=CREATE_PROJECT_INPUT_KEY,
         default=str(default_projects_root() / "amphilens-project"),
     )
@@ -221,10 +180,10 @@ def _render_create_project(st):
 
 def _render_open_project(st):
     st.header("1. Open a project")
-    st.write("Choose a folder containing an AmphiLens `manifest.json` file.")
+    st.write("Enter the path to a folder containing an AmphiLens `manifest.json` file.")
     project_dir = _folder_input(
         st,
-        label="Existing project folder",
+        label="Existing project folder path",
         state_key=OPEN_PROJECT_INPUT_KEY,
     )
     if st.button("Open project", type="primary", disabled=not project_dir.strip()):
@@ -254,7 +213,7 @@ def _render_open_project(st):
     )
     destination = _folder_input(
         st,
-        label="Safe destination folder",
+        label="Safe destination folder path",
         state_key="amphilens-migrate-project-input",
         default=str(default_projects_root() / candidate.root.name),
     )
@@ -522,7 +481,7 @@ def _render_active_learning(st):
     calibration = st.text_input("Calibration JSON")
     features = st.text_input("Feature JSON")
     output = st.text_input(
-        "Queue output folder", value=str(store.root / "annotations" / "cycle-0")
+        "Queue output folder path", value=str(store.root / "annotations" / "cycle-0")
     )
     budget = st.number_input("Images to annotate", min_value=1, value=100, step=1)
     seed = st.number_input("Selection seed", min_value=0, value=42, step=1)

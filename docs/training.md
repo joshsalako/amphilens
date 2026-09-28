@@ -8,7 +8,7 @@ The normative two-process reference is the
 
 1. Open **Create project** for a new project, or **Open project** for an
    existing folder containing `manifest.json`.
-2. Accept the safe user-project folder or choose another folder outside the
+2. Accept the safe user-project folder or enter another path outside the
    AmphiLens source checkout.
 3. Set the image folder and the classes you want to detect.
 4. Import an initial annotated dataset from an existing CVAT project or a

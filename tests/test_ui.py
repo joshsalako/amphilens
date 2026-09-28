@@ -1,13 +1,15 @@
+import inspect
 import runpy
 from pathlib import Path
 
 import pytest
 
+import amphilens.ui as ui
 from amphilens.annotations.managed import CVATProjectSummary, CVATTaskSummary
 from amphilens.core import ProjectManifest, ProjectStore
 from amphilens.ui import (
+    _folder_input,
     active_project_path,
-    choose_local_folder,
     cvat_project_choices,
     parse_class_mapping,
     parse_classes,
@@ -76,7 +78,28 @@ def test_active_project_helpers_store_resolved_folder(tmp_path):
     assert active_project_path(state) == project_dir.resolve()
 
 
-def test_choose_local_folder_returns_normalized_selection(tmp_path):
-    selected = choose_local_folder(ask_directory=lambda **_: str(tmp_path / "chosen"))
+def test_folder_input_uses_a_path_field_without_a_native_dialog():
+    class FakeStreamlit:
+        session_state = {}
 
-    assert selected == (tmp_path / "chosen").resolve()
+        def text_input(self, label, *, key):
+            assert label == "Project folder path"
+            return "/tmp/amphilens-project"
+
+        def button(self, *args, **kwargs):
+            raise AssertionError("path inputs must not render a native folder button")
+
+    value = _folder_input(
+        FakeStreamlit(),
+        label="Project folder path",
+        state_key="project-folder",
+    )
+
+    assert value == "/tmp/amphilens-project"
+
+
+def test_ui_contains_no_tkinter_or_native_window_code():
+    source = inspect.getsource(ui)
+
+    assert "tkinter" not in source
+    assert "tk.Tk" not in source

@@ -33,8 +33,8 @@ therefore default to the platform user-data directory, such as
 `~/Library/Application Support/AmphiLens/projects` on macOS, and the app
 rejects new locations inside the Git checkout.
 
-In the browser app, choose **Create project** to select a location or **Open
-project** to load a folder containing `manifest.json`. The app remembers the
+In the browser app, use **Create project** to enter a project path or **Open
+project** to enter a folder containing `manifest.json`. The app remembers the
 active project for the current session and uses it across all workflows.
 
 For Docker, mount a host directory at `/projects` and select `/projects` in the
