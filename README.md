@@ -66,7 +66,27 @@ py -m venv .venv
 python -m pip install -e ".[cli,ui,inference,training]"
 ```
 
-## 2. Start the browser app
+## 2. Keep project data separate from the source code
+
+The AmphiLens checkout contains the application code. Your projects contain
+images, annotations, checkpoints, predictions, and reports, so they are stored
+separately by default in the platform's user-data folder (for example,
+`~/Library/Application Support/AmphiLens/projects` on macOS).
+
+When creating a project, use **Project folder** to choose another location if
+needed. AmphiLens blocks new project folders inside the source checkout so
+generated files do not appear as Git changes.
+
+To use a project you created earlier, open **Open project**, choose its folder,
+and press **Open project**. The selected project becomes active for importing,
+training, prediction, and CVAT workflows.
+
+If an older project is already inside the source checkout, open it first and
+use **Move and remove original**. AmphiLens copies and verifies the project
+before removing the old folder. Your original camera-trap image folder is not
+moved.
+
+## 3. Start the browser app
 
 Run:
 
@@ -81,19 +101,19 @@ open automatically.
 The **Environment** page shows whether the computer has the libraries, disk
 space, and GPU needed for the selected workflow.
 
-## 3. Create a project
+## 4. Create a project
 
 In the app:
 
 1. Open **Create project**.
 2. Choose the folder containing the camera-trap images.
 3. Enter the animals or organisms to detect, one class per line.
-4. Choose a project folder.
+4. Accept the safe default project folder or choose another folder.
 5. Press **Create project**.
 
 The original image folder is never modified.
 
-## 4. Import existing annotations
+## 5. Import existing annotations
 
 If you already labelled some images, open **Import initial dataset**. You can
 choose the recommended direct CVAT workflow or use a local archive.
@@ -124,7 +144,7 @@ with no boxes are kept as reviewed negatives. The imported dataset becomes an
 immutable snapshot, including the CVAT project and task provenance when the
 API workflow is used.
 
-## 5. Choose the model and image settings
+## 6. Choose the model and image settings
 
 The first supported model choices are:
 
@@ -145,7 +165,7 @@ grayscale images are replicated into three channels. If CLAHE is enabled,
 resizing happens first to reduce processing time. These choices are saved in
 the project and run metadata.
 
-## 6. Train a model or find animals
+## 7. Train a model or find animals
 
 Use **Train model** when you have imported labelled data. The initial imported
 images are all used for training. AmphiLens does not invent a validation split;
@@ -155,7 +175,7 @@ until you provide a separate validation dataset, results say:
 Use **Find animals** to run a selected base model or trained checkpoint over
 an unlabeled image folder.
 
-## 7. Improve the model with active learning
+## 8. Improve the model with active learning
 
 After inference:
 
@@ -186,7 +206,7 @@ uv run --locked amphilens app
 If CVAT is unavailable, use the portable CVAT or YOLO ZIP export/import
 workflow instead.
 
-## 8. Download the results
+## 9. Download the results
 
 AmphiLens can produce:
 

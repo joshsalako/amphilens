@@ -10,6 +10,7 @@ This file applies to the entire `wlt-app` project. `wlt-app` is the product code
 - Write a focused failing test before production behavior, then run the full suite after each meaningful change.
 - Keep optional ML and UI dependencies lazy-loaded. The core project, manifests, CSV export, CVAT exchange, and diagnostics must remain importable without CUDA.
 - Preserve source images and source annotations. Every derived file must have an explicit output path, provenance, and stable mapping back to the source.
+- Keep user-owned project folders outside the source checkout by default. The UI and CLI must use the project-location safety contract, and relocation must verify copied hashes before any explicit source removal.
 - Do not hard-code machine-specific paths, camera names, WLT-only classes, or credentials.
 - Hybrid PPAL is the default active-learning strategy. Missing calibration evidence must be reported clearly; do not silently substitute hard-coded difficulty values.
 - Checkpoints are reusable only with compatible architecture, classes, preprocessing, and recorded provenance.

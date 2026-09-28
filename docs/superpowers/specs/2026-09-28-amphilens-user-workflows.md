@@ -21,6 +21,11 @@ learning process uses CVAT when human annotation is required.
 
 - **AmphiLens project:** records image roots, ordered classes, model settings,
   preprocessing, and reproducibility metadata.
+- **Project folder:** a user-owned folder containing the manifest, immutable
+  datasets, runs, artifacts, annotations, and checkpoints. New project folders
+  live outside the source checkout by default.
+- **Active project:** the project explicitly created or opened for the current
+  browser session. All workflow pages use this project until it is closed.
 - **Base model:** an official pretrained model, a paper-specific checkpoint, or
   a compatible local checkpoint used before project-specific training.
 - **Initial dataset:** the first labelled images used for fine-tuning. It may
@@ -55,19 +60,22 @@ predictions CSV, reports, and evidence images
 
 ### User steps
 
-1. Start AmphiLens and open **Create project** or an existing project.
-2. Select the folder containing the camera-trap images.
-3. Define the ordered organism classes, for example `toad`, `frog`, or
+1. Start AmphiLens.
+2. Open **Create project** for a new project, or **Open project** for an
+   existing folder containing `manifest.json`.
+3. Select the folder containing the camera-trap images when creating a new
+   project.
+4. Define the ordered organism classes, for example `toad`, `frog`, or
    `salamander`.
-4. Choose a pretrained model or compatible local checkpoint:
+5. Choose a pretrained model or compatible local checkpoint:
    - YOLO26-L;
    - RT-DETR-L;
    - Faster R-CNN with ResNet-50 FPN v2; or
    - a compatible user-supplied checkpoint.
-5. Configure maximum image dimension, grayscale, CLAHE, confidence threshold,
+6. Configure maximum image dimension, grayscale, CLAHE, confidence threshold,
    and CPU or CUDA execution.
-6. Open **Find animals** and press **Run detection**.
-7. Download or inspect the outputs.
+7. Open **Find animals** and press **Run detection**.
+8. Download or inspect the outputs.
 
 ### Outputs
 
@@ -107,7 +115,8 @@ The user can begin in either of these ways:
 
 The user already has a small annotated CVAT project.
 
-1. Create an AmphiLens project with the image folder and ordered classes.
+1. Open **Create project**, choose the image folder and project folder, and
+   define the ordered classes. Or open an existing AmphiLens project.
 2. Set `CVAT_URL` and `CVAT_TOKEN` before starting the app.
 3. Open **Import initial dataset** and choose **CVAT project**.
 4. Press **Connect to CVAT**.
@@ -215,6 +224,9 @@ different dataset or CVAT behavior.
 |---|---|---|
 | Check environment | **Environment** | `amphilens doctor` |
 | Create project | **Create project** | `amphilens project create` |
+| Open project | **Open project** | `amphilens project inspect PROJECT` |
+| Show safe project location | — | `amphilens project default-location` |
+| Move a project | **Move and remove original** | `amphilens project move SOURCE DESTINATION --remove-source` |
 | List CVAT projects | **Connect to CVAT** | `amphilens cvat projects` |
 | Import an existing CVAT project | **Import project** | `amphilens dataset import-cvat PROJECT --project-id ID` |
 | Import local annotations | **Local archive** | `amphilens dataset import PROJECT ARCHIVE.zip` |

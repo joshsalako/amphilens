@@ -6,11 +6,19 @@ The normative two-process reference is the
 
 ## 1. Prepare the project
 
-1. Create or open a project in the browser app.
-2. Set the image folder and the classes you want to detect.
-3. Import an initial annotated dataset from an existing CVAT project or a
+1. Open **Create project** for a new project, or **Open project** for an
+   existing folder containing `manifest.json`.
+2. Accept the safe user-project folder or choose another folder outside the
+   AmphiLens source checkout.
+3. Set the image folder and the classes you want to detect.
+4. Import an initial annotated dataset from an existing CVAT project or a
    local CVAT, COCO, or YOLO archive if labelled images are available.
-4. Confirm that the imported snapshot contains the expected images and classes.
+5. Confirm that the imported snapshot contains the expected images and classes.
+
+The project selected in **Open project** remains active for the rest of the
+browser session. If an old project is inside the source checkout, open it and
+use **Move and remove original**; AmphiLens verifies the copy before deleting
+the old project folder and does not move the source image folder.
 
 Initial imported images are all used for training. AmphiLens does not invent a
 validation split. Until a separate validation dataset is supplied, results say
@@ -104,15 +112,16 @@ software information.
 The CLI equivalent is:
 
 ```bash
-amphilens project create ./my-project \
+amphilens project default-location
+amphilens project create /path/to/my-project \
   --image-root /path/to/unlabelled-images \
   --class-name toad
 amphilens cvat projects
-amphilens dataset import-cvat ./my-project --project-id 17
+amphilens dataset import-cvat /path/to/my-project --project-id 17
 # Local archive fallback:
-# amphilens dataset import ./my-project /path/to/initial-cvat-or-yolo.zip
-amphilens train ./my-project \
-  --output-dir ./my-project/checkpoints/cycle-0 \
+# amphilens dataset import /path/to/my-project /path/to/initial-cvat-or-yolo.zip
+amphilens train /path/to/my-project \
+  --output-dir /path/to/my-project/checkpoints/cycle-0 \
   --model-preset yolo26-l
 ```
 

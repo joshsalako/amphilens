@@ -25,7 +25,36 @@ The committed `uv.lock` keeps the tested dependency resolution reproducible.
 The core package does not install CUDA automatically because PyTorch wheels and
 drivers depend on the host operating system.
 
-## 3. Decide whether you need a GPU
+## 3. Store projects outside the source checkout
+
+The source checkout is for AmphiLens code. Project folders contain generated
+datasets, annotations, checkpoints, predictions, and reports. New projects
+therefore default to the platform user-data directory, such as
+`~/Library/Application Support/AmphiLens/projects` on macOS, and the app
+rejects new locations inside the Git checkout.
+
+In the browser app, choose **Create project** to select a location or **Open
+project** to load a folder containing `manifest.json`. The app remembers the
+active project for the current session and uses it across all workflows.
+
+For Docker, mount a host directory at `/projects` and select `/projects` in the
+app. This keeps project data on the host rather than inside a disposable
+container layer.
+
+The CLI exposes the same policy:
+
+```bash
+amphilens project default-location
+amphilens project move /path/to/old-project /path/to/projects/study
+amphilens project move /path/to/old-project /path/to/projects/study \
+  --remove-source
+```
+
+`--remove-source` is explicit. Relocation verifies the copied file hashes and
+manifest before removing the old folder. Source image folders remain where
+they are.
+
+## 4. Decide whether you need a GPU
 
 - CPU inference is supported for small and moderate collections.
 - A CUDA GPU is recommended for large image pools and fine-tuning.
@@ -33,7 +62,7 @@ drivers depend on the host operating system.
 - Do not treat a GPU as proof that a model is suitable for a new wildlife
   domain; evaluate the model on representative data.
 
-## 4. Connect to CVAT
+## 5. Connect to CVAT
 
 Install the managed CVAT extra when you want the one-button workflow:
 
@@ -67,7 +96,7 @@ import.
 If images must remain entirely local, use the portable CVAT or YOLO ZIP
 exchange instead.
 
-## 5. Run with Docker Compose
+## 6. Run with Docker Compose
 
 The CPU service runs the local Streamlit app and mounts project and model
 folders from the host:
@@ -89,7 +118,7 @@ docker compose --profile cuda run --rm amphilens-cuda doctor
 The Docker images are foundations. Pin and test the CUDA/PyTorch combination
 for the target machine before production training.
 
-## 6. Future remote execution
+## 7. Future remote execution
 
 Remote execution will use the same project and artifact contracts through SSH,
 Slurm, Docker workers, and provider-neutral cloud workers. Hosted deployment

@@ -30,7 +30,26 @@ The complete user behavior is defined in the
 The package keeps source images untouched. Derived files are written to the
 project's artifact directories and retain mappings back to their source files.
 
-## 2. Dataset import and preprocessing
+## 2. Project location and lifecycle
+
+`ProjectStore` treats a project folder as a portable unit containing
+`manifest.json`, immutable dataset snapshots, run records, artifacts, and
+checkpoints. The browser app does not place this unit in the source checkout:
+new projects default to the platform user-data directory, and a new location
+inside the checkout is rejected.
+
+The Streamlit session stores one resolved active project path. **Create
+project** creates it, **Open project** validates it from `manifest.json`, and
+all import, training, prediction, and CVAT pages use that active store. The
+CLI remains path-explicit for reproducibility and provides `project move` for
+verified relocation.
+
+Relocation copies the complete project to a new destination, compares file
+hashes, reloads the copied manifest, and only removes the original when the
+user explicitly requests it. Absolute source-image paths and provenance are
+preserved because source images are not moved.
+
+## 3. Dataset import and preprocessing
 
 An initial labelled dataset is optional for prediction but required for
 fine-tuning. Supported archives must include image files. The importer checks
@@ -49,7 +68,7 @@ original image dimensions before they are written to CSV. The exact structured
 configuration and fingerprint are recorded in project, run, dataset, and
 checkpoint metadata.
 
-## 3. Active-learning method
+## 4. Active-learning method
 
 The default sequence is:
 
@@ -67,7 +86,7 @@ The implementation follows the method in the
 while keeping paths, classes, checkpoints, and configuration independent of a
 single wildlife species or dataset.
 
-## 4. Command-line workflows
+## 5. Command-line workflows
 
 The browser app is the recommended interface. The CLI is useful for repeatable
 or unattended runs:
@@ -75,11 +94,13 @@ or unattended runs:
 ```bash
 amphilens doctor
 amphilens app
-amphilens project-create ./my-project \
+amphilens project default-location
+amphilens project create /path/to/my-project \
   --image-root /path/to/camera-trap-images \
   --class-name toad \
   --name tunnel-study
-amphilens images ./my-project
+amphilens project inspect /path/to/my-project
+amphilens images /path/to/my-project
 ```
 
 Run prediction with a registered compatible checkpoint:
@@ -133,7 +154,7 @@ The local archive fallback remains available:
 amphilens dataset import ./my-project /path/to/initial-cvat-or-yolo.zip
 ```
 
-## 5. CVAT exchange and managed integration
+## 6. CVAT exchange and managed integration
 
 The current portable exchange writes:
 
@@ -183,7 +204,7 @@ The portable exchange remains the recovery path when CVAT is unavailable or
 credentials cannot be used. AmphiLens never deletes CVAT projects or tasks
 automatically.
 
-## 6. Project outputs
+## 7. Project outputs
 
 Projects contain a manifest, run records, annotations, artifacts, an artifact
 index, and checkpoints. Prediction runs can include:
@@ -199,7 +220,7 @@ preprocessing, thresholds, image size, seed, software version, parent
 checkpoint, and output paths. Checkpoints are reusable only when their
 compatibility metadata matches the new project.
 
-## 7. Python API
+## 8. Python API
 
 ```python
 from amphilens import InferenceConfig, ProjectManifest, ProjectStore
@@ -214,7 +235,7 @@ store.create(manifest)
 run = store.start_run(InferenceConfig(model_id="wlt-yolo", confidence=0.25))
 ```
 
-## 8. Development and verification
+## 9. Development and verification
 
 Install the optional development dependencies and run the test suite:
 
