@@ -1,6 +1,8 @@
 # Training and active learning
 
 This guide describes the normal workflow after the browser app is installed.
+The normative two-process reference is the
+[canonical user workflows](superpowers/specs/2026-09-28-amphilens-user-workflows.md).
 
 ## 1. Prepare the project
 

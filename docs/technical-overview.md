@@ -9,6 +9,9 @@ only want to run the browser app.
 AmphiLens is a local-first Python package with a Streamlit browser interface
 and a Typer command-line interface. Both use the same services:
 
+The complete user behavior is defined in the
+[canonical workflow specification](superpowers/specs/2026-09-28-amphilens-user-workflows.md).
+
 - `amphilens.core` stores project, run, model, checkpoint, and detection
   manifests.
 - `amphilens.models` provides explicit YOLO26-L, RT-DETR-L, and Faster R-CNN

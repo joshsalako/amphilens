@@ -24,6 +24,8 @@ planned detector-training and remote-execution feature is production ready.
   training workflows, and release automation.
 - Add direct CVAT project listing and whole-project initial dataset import
   through the pinned CVAT SDK, with immutable snapshots and provenance.
+- Add a canonical two-process workflow specification for prediction-only and
+  active-learning use.
 
 ## [0.1.0] - 2026-09-25
 

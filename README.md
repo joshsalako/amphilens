@@ -204,6 +204,7 @@ when first needed and are not included in the Python package.
 ## More information
 
 - [Training and active learning](docs/training.md)
+- [Canonical user workflows](docs/superpowers/specs/2026-09-28-amphilens-user-workflows.md)
 - [Deployment options](docs/deployment.md)
 - [Technical overview](docs/technical-overview.md)
 - [Release checklist](docs/release-checklist.md)

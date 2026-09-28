@@ -4,6 +4,9 @@
 
 AmphiLens is a local-first Python package and browser application for detecting amphibians and other organisms in camera-trap imagery. It brings the accepted WLT active-learning research workflow into a reusable, documented, and reproducible product for Nature Connect and the broader ecology community.
 
+The normative end-to-end user journeys are maintained in
+[`2026-09-28-amphilens-user-workflows.md`](2026-09-28-amphilens-user-workflows.md).
+
 ## Product contract
 
 - CPU inference is supported; GPU is recommended for large pools and fine-tuning.
