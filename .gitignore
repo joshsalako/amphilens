@@ -12,6 +12,7 @@ build/
 .agents/
 .claude/
 .amphilens/
+amphilens-project/
 /models/
 artifacts/
 *.pt
