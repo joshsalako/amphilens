@@ -342,6 +342,7 @@ class InferenceConfig:
     batch_size: int = 1
     device: str = "auto"
     run_id: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.model_id.strip():
@@ -580,7 +581,9 @@ class CheckpointManifest:
             )
         if self.classes != list(classes):
             raise UnsupportedCheckpointError("Checkpoint classes do not match the project classes")
-        if self.preprocessing != preprocessing:
+        if PreprocessingConfig.from_any(self.preprocessing).to_dict() != (
+            PreprocessingConfig.from_any(preprocessing).to_dict()
+        ):
             raise UnsupportedCheckpointError("Checkpoint preprocessing does not match the run")
 
 

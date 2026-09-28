@@ -71,6 +71,18 @@ def test_effective_configuration_uses_project_defaults_and_overrides(tmp_path: P
     assert effective.warnings == ()
 
 
+def test_effective_configuration_accepts_explicit_cli_model_identity(tmp_path: Path):
+    project = _project(tmp_path)
+
+    effective = resolve_effective_configuration(
+        project,
+        overrides={"model_id": "fixture", "architecture": "yolo"},
+    )
+
+    assert effective.model_id == "fixture"
+    assert effective.architecture == "yolo"
+
+
 def test_checkpoint_configuration_is_authoritative(tmp_path: Path):
     project = _project(
         tmp_path,

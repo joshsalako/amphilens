@@ -11,11 +11,12 @@ from amphilens.state import UserStateStore
 from amphilens.ui import (
     _folder_input,
     active_project_path,
-    cvat_project_choices,
     clear_active_project,
+    cvat_project_choices,
     parse_class_mapping,
     parse_classes,
     preprocessing_from_controls,
+    project_widget_key,
     restore_active_project,
     set_active_project,
 )
@@ -38,6 +39,18 @@ def test_ui_preprocessing_controls_build_reproducible_configuration():
     assert config.max_dimension == 320
     assert config.grayscale_enabled is False
     assert config.clahe_enabled is True
+
+
+def test_project_widget_keys_are_namespaced_by_project_and_configuration(tmp_path):
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+
+    assert project_widget_key(first, "study", "train-gray") != project_widget_key(
+        second, "study", "train-gray"
+    )
+    assert project_widget_key(first, "study", "train-gray") != project_widget_key(
+        first, "changed-study", "train-gray"
+    )
 
 
 def test_parse_class_mapping_requires_object_json():

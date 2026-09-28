@@ -26,6 +26,7 @@ class TrainingConfig:
     )
     freeze_strategy: str = "none"
     evaluation: str = "not evaluated"
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.epochs <= 0 or self.image_size <= 0 or self.batch_size <= 0:

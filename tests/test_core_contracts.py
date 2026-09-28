@@ -17,6 +17,7 @@ from amphilens.core import (
     UnsupportedCheckpointError,
     ValidationError,
 )
+from amphilens.preprocessing import PreprocessingConfig
 
 
 def test_project_store_creates_portable_manifest_and_run(tmp_path: Path):
@@ -37,6 +38,15 @@ def test_project_store_creates_portable_manifest_and_run(tmp_path: Path):
     assert run.run_id.startswith("run-")
     assert (tmp_path / "project" / "manifest.json").exists()
     assert (tmp_path / "project" / "runs" / run.run_id / "run.json").exists()
+
+
+def test_inference_config_preserves_effective_configuration_metadata():
+    config = InferenceConfig(
+        model_id="demo",
+        metadata={"effective_configuration": {"fingerprint": "abc123"}},
+    )
+
+    assert config.to_dict()["metadata"]["effective_configuration"]["fingerprint"] == "abc123"
 
 
 def test_project_store_rejects_source_output_collision(tmp_path: Path):
@@ -87,6 +97,24 @@ def test_checkpoint_compatibility_requires_matching_classes_and_architecture(tmp
         manifest.validate_compatibility(
             architecture="rtdetr", classes=["toad"], preprocessing={"name": "clahe"}
         )
+
+
+def test_checkpoint_compatibility_accepts_legacy_preprocessing_labels(tmp_path: Path):
+    checkpoint = tmp_path / "best.pt"
+    checkpoint.write_bytes(b"checkpoint")
+    manifest = CheckpointManifest.create(
+        checkpoint,
+        model_id="legacy",
+        architecture="yolo",
+        classes=["toad"],
+        preprocessing={"name": "none"},
+    )
+
+    manifest.validate_compatibility(
+        architecture="yolo",
+        classes=["toad"],
+        preprocessing=PreprocessingConfig().to_dict(),
+    )
 
 
 def test_unversioned_manifests_are_migrated_and_future_versions_fail(tmp_path: Path):

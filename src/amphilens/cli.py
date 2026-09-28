@@ -16,6 +16,7 @@ except ImportError:  # pragma: no cover - exercised only in minimal installs
 from .active_learning import HybridPPALConfig, HybridPPALStrategy, PPALCalibration
 from .annotations.cvat import export_cvat, import_cvat
 from .annotations.managed import CVATSdkTransport, ManagedCVATCycleService, selection_hash
+from .configuration import discover_checkpoint_manifest, resolve_effective_configuration
 from .core import (
     CheckpointManifest,
     DetectionRecord,
@@ -171,58 +172,97 @@ if typer is not None:
         project_dir: Path,
         output_dir: Path = typer.Option(..., "--output-dir"),
         snapshot: Path | None = typer.Option(None, "--snapshot"),
-        model_preset: str = typer.Option("yolo26-l", "--model-preset"),
+        model_preset: str | None = typer.Option(None, "--model-preset"),
         checkpoint: Path | None = typer.Option(None, "--checkpoint"),
-        epochs: int = typer.Option(100, "--epochs"),
-        batch_size: int = typer.Option(16, "--batch-size"),
-        max_dimension: int = typer.Option(640, "--max-dimension"),
-        grayscale: bool = typer.Option(True, "--grayscale/--no-grayscale"),
-        clahe: bool = typer.Option(False, "--clahe/--no-clahe"),
-        device: str = typer.Option("auto", "--device"),
+        epochs: int | None = typer.Option(None, "--epochs"),
+        batch_size: int | None = typer.Option(None, "--batch-size"),
+        max_dimension: int | None = typer.Option(None, "--max-dimension"),
+        grayscale: bool | None = typer.Option(None, "--grayscale/--no-grayscale"),
+        clahe: bool | None = typer.Option(None, "--clahe/--no-clahe"),
+        device: str | None = typer.Option(None, "--device"),
         resume_from: Path | None = typer.Option(None, "--resume-from"),
     ):
         """Fine-tune a catalog model from an imported immutable dataset snapshot."""
         store = ProjectStore(project_dir)
         project = store.load_manifest()
         selected_snapshot = DatasetSnapshot.load(snapshot) if snapshot else _latest_snapshot(store)
-        preset = ModelCatalog().get(model_preset)
-        preprocessing = PreprocessingConfig(
-            max_dimension=max_dimension,
-            grayscale_enabled=grayscale,
-            clahe_enabled=clahe,
-        )
         parent_manifest = load_checkpoint_manifest(resume_from) if resume_from else None
         if parent_manifest is not None:
             parent_checkpoint = Path(parent_manifest.checkpoint_path)
             if checkpoint is not None and checkpoint.expanduser().resolve() != parent_checkpoint:
                 raise ValueError("--checkpoint and --resume-from must refer to the same checkpoint")
             checkpoint = parent_checkpoint
+        checkpoint_manifest = parent_manifest or (
+            discover_checkpoint_manifest(checkpoint) if checkpoint is not None else None
+        )
+        overrides = {}
+        if model_preset is not None:
+            overrides["model_preset"] = model_preset
+        if epochs is not None:
+            overrides["epochs"] = epochs
+        if batch_size is not None:
+            overrides["batch_size"] = batch_size
+        if device is not None:
+            overrides["device"] = device
+        if max_dimension is not None or grayscale is not None or clahe is not None:
+            project_preprocessing = project.project_config.preprocessing
+            overrides["preprocessing"] = PreprocessingConfig(
+                max_dimension=(
+                    max_dimension
+                    if max_dimension is not None
+                    else project_preprocessing.max_dimension
+                ),
+                resize_enabled=project_preprocessing.resize_enabled,
+                resize_interpolation=project_preprocessing.resize_interpolation,
+                grayscale_enabled=(
+                    grayscale
+                    if grayscale is not None
+                    else project_preprocessing.grayscale_enabled
+                ),
+                clahe_enabled=(
+                    clahe if clahe is not None else project_preprocessing.clahe_enabled
+                ),
+                clahe_clip_limit=project_preprocessing.clahe_clip_limit,
+                clahe_tile_grid_size=project_preprocessing.clahe_tile_grid_size,
+                color_space=project_preprocessing.color_space,
+                compatibility_mode=project_preprocessing.compatibility_mode,
+            )
+        effective = resolve_effective_configuration(
+            project,
+            checkpoint_manifest=checkpoint_manifest,
+            checkpoint_path=checkpoint,
+            overrides=overrides,
+        )
         detector = (
             load_detector(
                 checkpoint,
-                architecture=preset.architecture,
-                classes=project.classes,
-                model_id=parent_manifest.model_id if parent_manifest else preset.model_id,
-                checkpoint_manifest=parent_manifest,
-                preprocessing=preprocessing.to_dict(),
+                architecture=effective.architecture,
+                classes=list(effective.classes),
+                model_id=effective.model_id,
+                checkpoint_manifest=checkpoint_manifest,
+                preprocessing=effective.preprocessing.to_dict(),
             )
             if checkpoint is not None
-            else load_preset_detector(preset, classes=project.classes)
+            else load_preset_detector(
+                ModelCatalog().get(effective.model_preset), classes=list(effective.classes)
+            )
         )
         result = train_snapshot_and_register(
             detector,
             snapshot=selected_snapshot,
             output_dir=output_dir,
             config=TrainingConfig(
-                epochs=epochs,
-                batch_size=batch_size,
-                image_size=project.project_config.image_size,
-                patience=project.project_config.patience,
-                seed=project.project_config.random_seed,
-                device=device,
-                preprocessing=preprocessing,
+                epochs=effective.epochs,
+                batch_size=effective.batch_size,
+                image_size=effective.image_size,
+                patience=effective.patience,
+                seed=effective.seed,
+                device=effective.device,
+                freeze_strategy=effective.freeze_strategy,
+                preprocessing=effective.preprocessing,
+                metadata={"effective_configuration": effective.to_dict()},
             ),
-            preprocessing=preprocessing,
+            preprocessing=effective.preprocessing,
             resume_from=parent_manifest,
         )
         typer.echo(
@@ -323,60 +363,103 @@ if typer is not None:
     def predict(
         project_dir: Path,
         checkpoint: Path,
-        architecture: str = typer.Option(
-            ..., "--architecture", help="yolo, rtdetr, or faster_rcnn"
+        architecture: str | None = typer.Option(
+            None, "--architecture", help="yolo, rtdetr, or faster_rcnn"
         ),
         output_dir: Path = typer.Option(..., "--output-dir"),
-        confidence: float = typer.Option(0.25, "--confidence"),
-        image_size: int = typer.Option(640, "--image-size"),
-        device: str = typer.Option("auto", "--device"),
+        confidence: float | None = typer.Option(None, "--confidence"),
+        image_size: int | None = typer.Option(None, "--image-size"),
+        device: str | None = typer.Option(None, "--device"),
         model_id: str | None = typer.Option(None, "--model-id"),
         run_id: str | None = typer.Option(None, "--run-id"),
         registry_dir: Path | None = typer.Option(None, "--registry-dir"),
-        preprocessing: str = typer.Option("{}", "--preprocessing"),
-        max_dimension: int = typer.Option(640, "--max-dimension"),
-        grayscale: bool = typer.Option(True, "--grayscale/--no-grayscale"),
-        clahe: bool = typer.Option(False, "--clahe/--no-clahe"),
+        preprocessing: str | None = typer.Option(None, "--preprocessing"),
+        max_dimension: int | None = typer.Option(None, "--max-dimension"),
+        grayscale: bool | None = typer.Option(None, "--grayscale/--no-grayscale"),
+        clahe: bool | None = typer.Option(None, "--clahe/--no-clahe"),
     ):
         """Run a compatible detector and persist resumable prediction artifacts."""
         store = ProjectStore(project_dir)
         manifest = store.load_manifest()
-        resolved_model_id = model_id or checkpoint.stem
         try:
-            preprocessing_config = json.loads(preprocessing)
+            preprocessing_override = json.loads(preprocessing) if preprocessing else None
         except json.JSONDecodeError as exc:
             raise ValueError("--preprocessing must be a JSON object") from exc
-        if not isinstance(preprocessing_config, dict):
+        if preprocessing_override is not None and not isinstance(preprocessing_override, dict):
             raise ValueError("--preprocessing must be a JSON object")
-        if not preprocessing_config:
-            preprocessing_config = PreprocessingConfig(
-                max_dimension=max_dimension,
-                grayscale_enabled=grayscale,
-                clahe_enabled=clahe,
-            ).to_dict()
-        checkpoint_manifest = None
+        overrides = {}
+        if architecture is not None:
+            overrides["architecture"] = architecture
+        if model_id is not None:
+            overrides["model_id"] = model_id
+        if confidence is not None:
+            overrides["confidence"] = confidence
+        if image_size is not None:
+            overrides["image_size"] = image_size
+        if device is not None:
+            overrides["device"] = device
+        if preprocessing_override is not None:
+            overrides["preprocessing"] = preprocessing_override
+        elif max_dimension is not None or grayscale is not None or clahe is not None:
+            project_preprocessing = manifest.project_config.preprocessing
+            overrides["preprocessing"] = PreprocessingConfig(
+                max_dimension=(
+                    max_dimension
+                    if max_dimension is not None
+                    else project_preprocessing.max_dimension
+                ),
+                resize_enabled=project_preprocessing.resize_enabled,
+                resize_interpolation=project_preprocessing.resize_interpolation,
+                grayscale_enabled=(
+                    grayscale
+                    if grayscale is not None
+                    else project_preprocessing.grayscale_enabled
+                ),
+                clahe_enabled=(
+                    clahe if clahe is not None else project_preprocessing.clahe_enabled
+                ),
+                clahe_clip_limit=project_preprocessing.clahe_clip_limit,
+                clahe_tile_grid_size=project_preprocessing.clahe_tile_grid_size,
+                color_space=project_preprocessing.color_space,
+                compatibility_mode=project_preprocessing.compatibility_mode,
+            )
+        checkpoint_manifest = discover_checkpoint_manifest(checkpoint)
+        effective = resolve_effective_configuration(
+            manifest,
+            checkpoint_manifest=checkpoint_manifest,
+            checkpoint_path=checkpoint,
+            overrides=overrides,
+        )
+        resolved_model_id = effective.model_id
         if registry_dir is not None:
             checkpoint_manifest = ModelRegistry(registry_dir).resolve(
                 resolved_model_id,
-                architecture=architecture,
+                architecture=effective.architecture,
                 classes=manifest.classes,
-                preprocessing=preprocessing_config,
+                preprocessing=effective.preprocessing.to_dict(),
+            )
+            effective = resolve_effective_configuration(
+                manifest,
+                checkpoint_manifest=checkpoint_manifest,
+                checkpoint_path=checkpoint,
+                overrides=overrides,
             )
         detector = load_detector(
             checkpoint,
-            architecture=architecture,
-            classes=manifest.classes,
+            architecture=effective.architecture,
+            classes=list(effective.classes),
             model_id=resolved_model_id,
             checkpoint_manifest=checkpoint_manifest,
-            preprocessing=preprocessing_config,
+            preprocessing=effective.preprocessing.to_dict(),
         )
         config = InferenceConfig(
             model_id=resolved_model_id,
-            image_size=image_size,
-            confidence=confidence,
-            device=device,
-            preprocessing=preprocessing_config,
+            image_size=effective.image_size,
+            confidence=effective.confidence,
+            device=effective.device,
+            preprocessing=effective.preprocessing,
             run_id=run_id or f"predict-{resolved_model_id}",
+            metadata={"effective_configuration": effective.to_dict()},
         )
         summary = run_resumable_inference(
             detector, iter_images(manifest.image_roots), config, output_dir

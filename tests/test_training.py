@@ -45,6 +45,12 @@ def test_training_registers_reusable_checkpoint_manifest(tmp_path: Path):
     )
 
 
+def test_training_config_preserves_effective_configuration_metadata():
+    config = TrainingConfig(metadata={"effective_configuration": {"fingerprint": "abc123"}})
+
+    assert config.to_dict()["metadata"]["effective_configuration"]["fingerprint"] == "abc123"
+
+
 def test_training_from_snapshot_prepares_labels_with_the_same_preprocessing(tmp_path: Path):
     source = tmp_path / "source.png"
     Image.new("RGB", (80, 40), color=(100, 20, 20)).save(source)

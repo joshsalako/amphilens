@@ -113,6 +113,12 @@ def resolve_effective_configuration(
             raise UnsupportedCheckpointError(
                 "Checkpoint model cannot be overridden by a different model preset"
             )
+        requested_model_id = values.pop("model_id", None)
+        if requested_model_id is not None and requested_model_id != model_id:
+            raise UnsupportedCheckpointError("Checkpoint model ID cannot be overridden")
+        requested_architecture = values.pop("architecture", None)
+        if requested_architecture is not None and requested_architecture != architecture:
+            raise UnsupportedCheckpointError("Checkpoint architecture cannot be overridden")
         requested_preprocessing = values.pop("preprocessing", None)
         if requested_preprocessing is not None and not _preprocessing_equal(
             PreprocessingConfig.from_any(requested_preprocessing), preprocessing
@@ -129,8 +135,10 @@ def resolve_effective_configuration(
     else:
         model_preset = str(values.pop("model_preset", project_config.model_preset))
         preset = ModelCatalog().get(model_preset)
-        model_id = preset.model_id
-        architecture = preset.architecture
+        model_id = str(values.pop("model_id", preset.model_id))
+        architecture = str(values.pop("architecture", preset.architecture))
+        if architecture not in {"yolo", "rtdetr", "faster_rcnn"}:
+            raise ValidationError(f"Unsupported detector architecture: {architecture}")
         preprocessing = PreprocessingConfig.from_any(
             values.pop("preprocessing", project_config.preprocessing)
         )

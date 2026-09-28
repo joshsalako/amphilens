@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import os
 import re
@@ -17,6 +18,7 @@ if __package__ in {None, ""}:  # pragma: no cover - exercised by Streamlit
         sys.path.insert(0, str(_source_root))
     __package__ = "amphilens"
 
+from .configuration import discover_checkpoint_manifest, resolve_effective_configuration
 from .locations import (
     ProjectLocationError,
     default_projects_root,
@@ -69,6 +71,61 @@ def preprocessing_from_controls(
         grayscale_enabled=bool(grayscale),
         clahe_enabled=bool(clahe),
     )
+
+
+def project_widget_key(project_dir: str | Path, project_identity: str, widget_name: str) -> str:
+    """Return a stable widget key isolated to one project/configuration identity."""
+    payload = json.dumps(
+        {
+            "project_dir": str(Path(project_dir).expanduser().resolve()),
+            "project_identity": project_identity,
+            "widget": widget_name,
+        },
+        sort_keys=True,
+    )
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"{widget_name}-{digest}"
+
+
+def _workflow_identity(store, project) -> str:
+    return f"{project.name}:{resolve_effective_configuration(project).fingerprint}"
+
+
+def _workflow_key(store, project, widget_name: str) -> str:
+    return project_widget_key(store.root, _workflow_identity(store, project), widget_name)
+
+
+def _show_effective_configuration(st, effective) -> None:
+    st.caption(f"Configuration source: {effective.source}; fingerprint: {effective.fingerprint}")
+    for warning in effective.warnings:
+        st.warning(warning)
+    st.json(effective.to_dict())
+
+
+def _preprocessing_overrides(st, effective, key_prefix: str) -> dict:
+    return {
+        "preprocessing": preprocessing_from_controls(
+            max_dimension=int(
+                st.number_input(
+                    "Maximum image dimension",
+                    min_value=32,
+                    value=effective.preprocessing.max_dimension,
+                    step=32,
+                    key=f"{key_prefix}-max-dimension",
+                )
+            ),
+            grayscale=st.checkbox(
+                "Convert images to grayscale",
+                value=effective.preprocessing.grayscale_enabled,
+                key=f"{key_prefix}-grayscale",
+            ),
+            clahe=st.checkbox(
+                "Use CLAHE",
+                value=effective.preprocessing.clahe_enabled,
+                key=f"{key_prefix}-clahe",
+            ),
+        )
+    }
 
 
 ACTIVE_PROJECT_KEY = "amphilens-active-project"
@@ -373,67 +430,154 @@ def _render_train(st):
     if not snapshot_paths:
         st.warning("Import an initial CVAT or YOLO dataset before training.")
         return
+    identity = _workflow_identity(store, project)
     snapshot_path = st.selectbox(
-        "Labelled dataset snapshot", [str(path) for path in snapshot_paths]
+        "Labelled dataset snapshot",
+        [str(path) for path in snapshot_paths],
+        key=project_widget_key(store.root, identity, "train-snapshot"),
     )
-    catalog = ModelCatalog()
-    preset = catalog.get(st.selectbox("Model", [item.model_id for item in catalog.list()], index=0))
     checkpoint = st.text_input(
-        "Optional local checkpoint (leave blank for official general-purpose weights)"
+        "Optional local checkpoint (leave blank for official general-purpose weights)",
+        key=project_widget_key(store.root, identity, "train-checkpoint"),
     )
     resume_manifest_path = st.text_input(
         "Optional parent checkpoint manifest (for continuing a cycle)",
         value="",
-        key="train-resume-manifest",
+        key=project_widget_key(store.root, identity, "train-resume-manifest"),
     )
     output_dir = st.text_input(
-        "Training output folder", value=str(store.root / "checkpoints" / "cycle-0")
+        "Training output folder",
+        value=str(store.root / "checkpoints" / "cycle-0"),
+        key=project_widget_key(store.root, identity, "train-output"),
     )
-    epochs = st.number_input("Training epochs", min_value=1, value=100, step=1)
-    batch_size = st.number_input("Batch size", min_value=1, value=16, step=1)
-    max_dimension = st.number_input("Maximum image dimension", min_value=32, value=640, step=32)
-    grayscale = st.checkbox("Convert images to grayscale", value=True, key="train-gray")
-    clahe = st.checkbox("Use CLAHE", value=False, key="train-clahe")
-    device = st.selectbox("Device", ["auto", "cpu", "cuda"], key="train-device")
+    parent_manifest = None
+    if resume_manifest_path.strip():
+        try:
+            parent_manifest = load_checkpoint_manifest(resume_manifest_path)
+        except Exception as exc:  # noqa: BLE001 - shown as an actionable UI error
+            st.error(str(exc))
+            return
+    selected_checkpoint = checkpoint.strip() or (
+        parent_manifest.checkpoint_path if parent_manifest else ""
+    )
+    try:
+        checkpoint_manifest = parent_manifest or (
+            discover_checkpoint_manifest(selected_checkpoint) if selected_checkpoint else None
+        )
+        base_effective = resolve_effective_configuration(
+            project,
+            checkpoint_manifest=checkpoint_manifest,
+            checkpoint_path=selected_checkpoint or None,
+        )
+    except Exception as exc:  # noqa: BLE001 - shown as an actionable UI error
+        st.error(str(exc))
+        return
+
+    advanced = st.checkbox(
+        "Advanced run overrides",
+        value=False,
+        key=project_widget_key(store.root, identity, "train-advanced"),
+    )
+    overrides = {}
+    if advanced:
+        if checkpoint_manifest is None:
+            catalog = ModelCatalog()
+            model_options = [item.model_id for item in catalog.list()]
+            model_default = (
+                model_options.index(base_effective.model_preset)
+                if base_effective.model_preset in model_options
+                else 0
+            )
+            overrides["model_preset"] = st.selectbox(
+                "Model",
+                model_options,
+                index=model_default,
+                key=project_widget_key(store.root, identity, "train-model"),
+            )
+        else:
+            st.info(
+                f"Checkpoint settings are locked: {base_effective.model_id} / "
+                f"{base_effective.architecture}"
+            )
+        if checkpoint_manifest is None:
+            overrides.update(_preprocessing_overrides(st, base_effective, "train"))
+            overrides["image_size"] = st.number_input(
+                "Detector input size",
+                min_value=32,
+                value=base_effective.image_size,
+                step=32,
+                key=project_widget_key(store.root, identity, "train-image-size"),
+            )
+        else:
+            st.write(
+                "Preprocessing and detector input size are locked to the checkpoint: "
+                f"{base_effective.preprocessing.fingerprint}, {base_effective.image_size}px"
+            )
+        overrides["epochs"] = st.number_input(
+            "Training epochs",
+            min_value=1,
+            value=base_effective.epochs,
+            step=1,
+            key=project_widget_key(store.root, identity, "train-epochs"),
+        )
+        overrides["batch_size"] = st.number_input(
+            "Batch size",
+            min_value=1,
+            value=base_effective.batch_size,
+            step=1,
+            key=project_widget_key(store.root, identity, "train-batch-size"),
+        )
+        overrides["device"] = st.selectbox(
+            "Device",
+            ["auto", "cpu", "cuda"],
+            index=["auto", "cpu", "cuda"].index(base_effective.device)
+            if base_effective.device in {"auto", "cpu", "cuda"}
+            else 0,
+            key=project_widget_key(store.root, identity, "train-device"),
+        )
+    try:
+        effective = resolve_effective_configuration(
+            project,
+            checkpoint_manifest=checkpoint_manifest,
+            checkpoint_path=selected_checkpoint or None,
+            overrides=overrides,
+        )
+    except Exception as exc:  # noqa: BLE001 - shown as an actionable UI error
+        st.error(str(exc))
+        return
+    _show_effective_configuration(st, effective)
     if st.button("Train model", type="primary"):
         try:
-            preprocessing = preprocessing_from_controls(
-                max_dimension=int(max_dimension), grayscale=grayscale, clahe=clahe
-            )
-            parent_manifest = (
-                load_checkpoint_manifest(resume_manifest_path)
-                if resume_manifest_path.strip()
-                else None
-            )
-            selected_checkpoint = checkpoint.strip() or (
-                parent_manifest.checkpoint_path if parent_manifest else ""
-            )
             detector = (
                 load_detector(
                     selected_checkpoint,
-                    architecture=preset.architecture,
-                    classes=project.classes,
-                    model_id=parent_manifest.model_id if parent_manifest else preset.model_id,
-                    checkpoint_manifest=parent_manifest,
-                    preprocessing=preprocessing.to_dict(),
+                    architecture=effective.architecture,
+                    classes=list(effective.classes),
+                    model_id=effective.model_id,
+                    checkpoint_manifest=checkpoint_manifest,
+                    preprocessing=effective.preprocessing.to_dict(),
                 )
                 if selected_checkpoint
-                else load_preset_detector(preset, classes=project.classes)
+                else load_preset_detector(
+                    ModelCatalog().get(effective.model_preset), classes=list(effective.classes)
+                )
             )
             result = train_snapshot_and_register(
                 detector,
                 snapshot=DatasetSnapshot.load(snapshot_path),
                 output_dir=output_dir,
                 config=TrainingConfig(
-                    epochs=int(epochs),
-                    batch_size=int(batch_size),
-                    image_size=project.project_config.image_size,
-                    patience=project.project_config.patience,
-                    seed=project.project_config.random_seed,
-                    device=device,
-                    preprocessing=preprocessing,
+                    epochs=effective.epochs,
+                    batch_size=effective.batch_size,
+                    image_size=effective.image_size,
+                    patience=effective.patience,
+                    seed=effective.seed,
+                    device=effective.device,
+                    freeze_strategy=effective.freeze_strategy,
+                    preprocessing=effective.preprocessing,
+                    metadata={"effective_configuration": effective.to_dict()},
                 ),
-                preprocessing=preprocessing,
+                preprocessing=effective.preprocessing,
                 resume_from=parent_manifest,
             )
             st.success(f"Training finished: {result.checkpoint}")
@@ -453,48 +597,124 @@ def _render_predict(st):
     if store is None:
         return
     project = store.load_manifest()
-    image_root = st.text_input("Image folder to scan", value=project.image_roots[0])
-    catalog = ModelCatalog()
-    preset = catalog.get(
-        st.selectbox(
-            "Model",
-            [item.model_id for item in catalog.list()],
-            index=0,
-            key="predict-model",
-        )
+    identity = _workflow_identity(store, project)
+    image_root = st.text_input(
+        "Image folder to scan",
+        value=project.image_roots[0],
+        key=project_widget_key(store.root, identity, "predict-image-root"),
     )
-    checkpoint = st.text_input("Checkpoint path (optional for official weights)")
+    checkpoint = st.text_input(
+        "Checkpoint path (optional for official weights)",
+        key=project_widget_key(store.root, identity, "predict-checkpoint"),
+    )
     output_dir = st.text_input(
-        "Results folder", value=str(store.root / "artifacts" / "prediction")
+        "Results folder",
+        value=str(store.root / "artifacts" / "prediction"),
+        key=project_widget_key(store.root, identity, "predict-output"),
     )
-    confidence = st.slider("Minimum confidence", 0.0, 1.0, 0.25, 0.01)
-    image_size = st.number_input("Detector input size", min_value=32, value=640, step=32)
-    max_dimension = st.number_input("Maximum image dimension", min_value=32, value=640, step=32)
-    grayscale = st.checkbox("Convert images to grayscale", value=True, key="predict-gray")
-    clahe = st.checkbox("Use CLAHE", value=False, key="predict-clahe")
-    device = st.selectbox("Device", ["auto", "cpu", "cuda"], key="predict-device")
+    try:
+        checkpoint_manifest = (
+            discover_checkpoint_manifest(checkpoint) if checkpoint.strip() else None
+        )
+        base_effective = resolve_effective_configuration(
+            project,
+            checkpoint_manifest=checkpoint_manifest,
+            checkpoint_path=checkpoint.strip() or None,
+        )
+    except Exception as exc:  # noqa: BLE001 - shown as an actionable UI error
+        st.error(str(exc))
+        return
+    advanced = st.checkbox(
+        "Advanced run overrides",
+        value=False,
+        key=project_widget_key(store.root, identity, "predict-advanced"),
+    )
+    overrides = {}
+    if advanced:
+        if checkpoint_manifest is None:
+            catalog = ModelCatalog()
+            model_options = [item.model_id for item in catalog.list()]
+            model_default = (
+                model_options.index(base_effective.model_preset)
+                if base_effective.model_preset in model_options
+                else 0
+            )
+            overrides["model_preset"] = st.selectbox(
+                "Model",
+                model_options,
+                index=model_default,
+                key=project_widget_key(store.root, identity, "predict-model"),
+            )
+        else:
+            st.info(
+                f"Checkpoint settings are locked: {base_effective.model_id} / "
+                f"{base_effective.architecture}"
+            )
+        if checkpoint_manifest is None:
+            overrides.update(_preprocessing_overrides(st, base_effective, "predict"))
+            overrides["image_size"] = st.number_input(
+                "Detector input size",
+                min_value=32,
+                value=base_effective.image_size,
+                step=32,
+                key=project_widget_key(store.root, identity, "predict-image-size"),
+            )
+        else:
+            st.write(
+                "Preprocessing and detector input size are locked to the checkpoint: "
+                f"{base_effective.preprocessing.fingerprint}, {base_effective.image_size}px"
+            )
+        overrides["confidence"] = st.slider(
+            "Minimum confidence",
+            0.0,
+            1.0,
+            base_effective.confidence,
+            0.01,
+            key=project_widget_key(store.root, identity, "predict-confidence"),
+        )
+        overrides["device"] = st.selectbox(
+            "Device",
+            ["auto", "cpu", "cuda"],
+            index=["auto", "cpu", "cuda"].index(base_effective.device)
+            if base_effective.device in {"auto", "cpu", "cuda"}
+            else 0,
+            key=project_widget_key(store.root, identity, "predict-device"),
+        )
+    try:
+        effective = resolve_effective_configuration(
+            project,
+            checkpoint_manifest=checkpoint_manifest,
+            checkpoint_path=checkpoint.strip() or None,
+            overrides=overrides,
+        )
+    except Exception as exc:  # noqa: BLE001 - shown as an actionable UI error
+        st.error(str(exc))
+        return
+    _show_effective_configuration(st, effective)
     if st.button("Run detection", type="primary"):
         try:
-            preprocessing = preprocessing_from_controls(
-                max_dimension=int(max_dimension), grayscale=grayscale, clahe=clahe
-            )
             detector = (
                 load_detector(
                     checkpoint,
-                    architecture=preset.architecture,
-                    classes=project.classes,
-                    model_id=preset.model_id,
+                    architecture=effective.architecture,
+                    classes=list(effective.classes),
+                    model_id=effective.model_id,
+                    checkpoint_manifest=checkpoint_manifest,
+                    preprocessing=effective.preprocessing.to_dict(),
                 )
                 if checkpoint.strip()
-                else load_preset_detector(preset, classes=project.classes)
+                else load_preset_detector(
+                    ModelCatalog().get(effective.model_preset), classes=list(effective.classes)
+                )
             )
             config = InferenceConfig(
-                model_id=preset.model_id,
-                image_size=int(image_size),
-                confidence=confidence,
-                device=device,
-                preprocessing=preprocessing,
-                run_id=f"predict-{preset.model_id}",
+                model_id=effective.model_id,
+                image_size=effective.image_size,
+                confidence=effective.confidence,
+                device=effective.device,
+                preprocessing=effective.preprocessing,
+                run_id=f"predict-{effective.model_id}",
+                metadata={"effective_configuration": effective.to_dict()},
             )
             summary = run_resumable_inference(
                 detector, iter_images([image_root]), config, output_dir

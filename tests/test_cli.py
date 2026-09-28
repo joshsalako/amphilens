@@ -15,8 +15,9 @@ from typer.testing import CliRunner
 import amphilens.cli as cli_module
 from amphilens.annotations.managed import CVATProjectSummary, CVATTaskSummary
 from amphilens.cli import app
-from amphilens.core import DetectionRecord
+from amphilens.core import DetectionRecord, ProjectConfig, ProjectManifest, ProjectStore
 from amphilens.inference import write_predictions_csv
+from amphilens.preprocessing import PreprocessingConfig
 
 
 def test_project_create_and_inspect_commands(tmp_path: Path):
@@ -313,6 +314,122 @@ def test_train_command_passes_model_and_preprocessing_choices_to_engine(
     assert observed["preprocessing"].max_dimension == 320
     assert observed["preprocessing"].grayscale_enabled is False
     assert observed["preprocessing"].clahe_enabled is True
+
+
+def test_train_command_uses_saved_project_configuration_when_options_are_omitted(
+    monkeypatch, tmp_path: Path
+):
+    images = tmp_path / "images"
+    images.mkdir()
+    project = tmp_path / "project"
+    config = ProjectConfig(
+        classes=["toad"],
+        model_preset="rtdetr-l",
+        preprocessing=PreprocessingConfig(max_dimension=320, clahe_enabled=True),
+        image_size=320,
+        epochs=3,
+        batch_size=2,
+        device="cpu",
+    )
+    ProjectStore(project).create(
+        ProjectManifest.create("configured", [images], ["toad"], project_config=config)
+    )
+    archive = tmp_path / "initial.zip"
+    image_bytes = BytesIO()
+    Image.new("RGB", (20, 10), color="black").save(image_bytes, format="JPEG")
+    with zipfile.ZipFile(archive, "w") as handle:
+        handle.writestr("images/camera.jpg", image_bytes.getvalue())
+        handle.writestr("classes.txt", "toad\n")
+        handle.writestr("labels/camera.txt", "")
+    assert CliRunner().invoke(app, ["dataset", "import", str(project), str(archive)]).exit_code == 0
+
+    observed = {}
+
+    class Detector:
+        pass
+
+    monkeypatch.setattr(
+        cli_module,
+        "load_preset_detector",
+        lambda preset, **_: observed.update(preset=preset) or Detector(),
+    )
+
+    def fake_train(detector, **kwargs):
+        observed.update(kwargs)
+        checkpoint = tmp_path / "out" / "best.pt"
+        checkpoint.parent.mkdir()
+        checkpoint.write_bytes(b"weights")
+        return SimpleNamespace(checkpoint=checkpoint)
+
+    monkeypatch.setattr(cli_module, "train_snapshot_and_register", fake_train)
+    result = CliRunner().invoke(
+        app, ["train", str(project), "--output-dir", str(tmp_path / "out")]
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert observed["preset"].model_id == "rtdetr-l"
+    assert observed["preprocessing"].max_dimension == 320
+    assert observed["preprocessing"].clahe_enabled is True
+    assert observed["config"].epochs == 3
+    assert observed["config"].batch_size == 2
+
+
+def test_predict_command_uses_saved_project_configuration_when_options_are_omitted(
+    monkeypatch, tmp_path: Path
+):
+    images = tmp_path / "images"
+    images.mkdir()
+    (images / "camera.jpg").write_bytes(b"fixture")
+    project = tmp_path / "project"
+    config = ProjectConfig(
+        classes=["toad"],
+        model_preset="rtdetr-l",
+        preprocessing=PreprocessingConfig(max_dimension=320, clahe_enabled=True),
+        image_size=320,
+        confidence_threshold=0.61,
+        device="cpu",
+    )
+    ProjectStore(project).create(
+        ProjectManifest.create("configured", [images], ["toad"], project_config=config)
+    )
+    observed = {}
+
+    class Detector:
+        model_id = "external"
+
+        def predict(self, image_paths, config):
+            observed["config"] = config
+            for path in image_paths:
+                yield DetectionRecord(
+                    image_path=str(path),
+                    image_id=path.name,
+                    class_id=0,
+                    class_name="toad",
+                    confidence=0.9,
+                    bbox_xyxy=[1, 1, 5, 5],
+                    image_width=10,
+                    image_height=10,
+                    model_id="external",
+                    run_id=config.run_id,
+                )
+
+    def fake_load_detector(path, **kwargs):
+        observed["kwargs"] = kwargs
+        return Detector()
+
+    monkeypatch.setattr(cli_module, "load_detector", fake_load_detector)
+    checkpoint = tmp_path / "external.pt"
+    checkpoint.write_bytes(b"weights")
+    result = CliRunner().invoke(
+        app,
+        ["predict", str(project), str(checkpoint), "--output-dir", str(tmp_path / "output")],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert observed["kwargs"]["architecture"] == "rtdetr"
+    assert observed["config"].image_size == 320
+    assert observed["config"].confidence == 0.61
+    assert observed["config"].preprocessing_config.clahe_enabled is True
 
 
 def test_cvat_cli_exports_and_imports_prediction_csv(tmp_path: Path):

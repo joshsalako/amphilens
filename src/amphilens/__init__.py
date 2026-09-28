@@ -1,5 +1,10 @@
 """AmphiLens: reproducible wildlife camera-trap detection."""
 
+from .configuration import (
+    EffectiveRunConfiguration,
+    discover_checkpoint_manifest,
+    resolve_effective_configuration,
+)
 from .core import (
     ArtifactRecord,
     CheckpointManifest,
@@ -29,6 +34,7 @@ from .runs import RunSummary, run_resumable_inference
 
 __all__ = [
     "CheckpointManifest",
+    "EffectiveRunConfiguration",
     "ArtifactRecord",
     "DetectionRecord",
     "InferenceConfig",
@@ -47,6 +53,8 @@ __all__ = [
     "write_selection_artifacts",
     "write_report",
     "atomic_write_json",
+    "discover_checkpoint_manifest",
+    "resolve_effective_configuration",
     "DatasetAnnotation",
     "DatasetImage",
     "DatasetImporter",
