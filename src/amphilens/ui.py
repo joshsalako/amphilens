@@ -64,12 +64,23 @@ def parse_class_mapping(value: str) -> dict[str, str]:
 
 
 def preprocessing_from_controls(
-    *, max_dimension: int, grayscale: bool, clahe: bool
+    *,
+    max_dimension: int,
+    grayscale: bool,
+    clahe: bool,
+    base: PreprocessingConfig | None = None,
 ) -> PreprocessingConfig:
+    reference = base or PreprocessingConfig()
     return PreprocessingConfig(
+        resize_enabled=reference.resize_enabled,
         max_dimension=int(max_dimension),
+        resize_interpolation=reference.resize_interpolation,
         grayscale_enabled=bool(grayscale),
         clahe_enabled=bool(clahe),
+        clahe_clip_limit=reference.clahe_clip_limit,
+        clahe_tile_grid_size=reference.clahe_tile_grid_size,
+        color_space=reference.color_space,
+        compatibility_mode=reference.compatibility_mode,
     )
 
 
@@ -124,6 +135,7 @@ def _preprocessing_overrides(st, effective, key_prefix: str) -> dict:
                 value=effective.preprocessing.clahe_enabled,
                 key=f"{key_prefix}-clahe",
             ),
+            base=effective.preprocessing,
         )
     }
 

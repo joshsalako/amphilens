@@ -7,6 +7,7 @@ import pytest
 import amphilens.ui as ui
 from amphilens.annotations.managed import CVATProjectSummary, CVATTaskSummary
 from amphilens.core import ProjectManifest, ProjectStore
+from amphilens.preprocessing import PreprocessingConfig
 from amphilens.state import UserStateStore
 from amphilens.ui import (
     _folder_input,
@@ -39,6 +40,31 @@ def test_ui_preprocessing_controls_build_reproducible_configuration():
     assert config.max_dimension == 320
     assert config.grayscale_enabled is False
     assert config.clahe_enabled is True
+
+
+def test_ui_preprocessing_overrides_preserve_unexposed_project_settings():
+    base = PreprocessingConfig(
+        max_dimension=640,
+        resize_interpolation="bilinear",
+        grayscale_enabled=True,
+        clahe_enabled=True,
+        color_space="lab",
+        compatibility_mode="shortest-side",
+    )
+
+    config = preprocessing_from_controls(
+        max_dimension=320,
+        grayscale=False,
+        clahe=False,
+        base=base,
+    )
+
+    assert config.max_dimension == 320
+    assert config.grayscale_enabled is False
+    assert config.clahe_enabled is False
+    assert config.resize_interpolation == "bilinear"
+    assert config.color_space == "lab"
+    assert config.compatibility_mode == "shortest-side"
 
 
 def test_project_widget_keys_are_namespaced_by_project_and_configuration(tmp_path):
