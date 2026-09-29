@@ -189,6 +189,7 @@ class UltralyticsDetector:
         if resume_from is not None:
             train_config["resume"] = str(resume_from.checkpoint_path)
         if progress_callback is not None:
+
             def report_epoch(trainer):
                 total = max(1, int(getattr(trainer, "epochs", train_config["epochs"])))
                 epoch = max(0, int(getattr(trainer, "epoch", -1)) + 1)

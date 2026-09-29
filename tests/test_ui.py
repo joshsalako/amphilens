@@ -174,9 +174,7 @@ def test_folder_input_uses_a_path_field_without_a_native_dialog():
     assert value == "/tmp/amphilens-project"
 
 
-def test_cloud_credentials_form_saves_password_fields_outside_project(
-    monkeypatch, tmp_path
-):
+def test_cloud_credentials_form_saves_password_fields_outside_project(monkeypatch, tmp_path):
     from amphilens.cloud import credentials as cloud_credentials
 
     credential_path = tmp_path / "user-state" / "credentials.json"

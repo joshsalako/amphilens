@@ -42,9 +42,7 @@ class UserStateStore:
 
     def __init__(self, path: str | Path | None = None):
         self.path = (
-            Path(path).expanduser().resolve()
-            if path is not None
-            else default_user_state_path()
+            Path(path).expanduser().resolve() if path is not None else default_user_state_path()
         )
 
     def _read(self) -> dict[str, Any]:
@@ -58,8 +56,7 @@ class UserStateStore:
             raise UserStateError("AmphiLens user state must be a JSON object")
         if value.get("schema_version") != USER_STATE_SCHEMA_VERSION:
             raise UserStateError(
-                "Unsupported AmphiLens user state schema version: "
-                f"{value.get('schema_version')!r}"
+                f"Unsupported AmphiLens user state schema version: {value.get('schema_version')!r}"
             )
         project = value.get("last_active_project")
         if project is not None and not isinstance(project, str):

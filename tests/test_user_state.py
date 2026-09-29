@@ -13,12 +13,18 @@ def test_default_user_state_path_uses_platform_configuration_directories(tmp_pat
     assert default_user_state_path("linux", home=tmp_path, environ={}) == (
         tmp_path / ".config" / "amphilens" / "state.json"
     )
-    assert default_user_state_path(
-        "linux", home=tmp_path, environ={"XDG_CONFIG_HOME": str(tmp_path / "config")}
-    ) == tmp_path / "config" / "amphilens" / "state.json"
-    assert default_user_state_path(
-        "win32", home=tmp_path, environ={"APPDATA": str(tmp_path / "appdata")}
-    ) == tmp_path / "appdata" / "AmphiLens" / "state.json"
+    assert (
+        default_user_state_path(
+            "linux", home=tmp_path, environ={"XDG_CONFIG_HOME": str(tmp_path / "config")}
+        )
+        == tmp_path / "config" / "amphilens" / "state.json"
+    )
+    assert (
+        default_user_state_path(
+            "win32", home=tmp_path, environ={"APPDATA": str(tmp_path / "appdata")}
+        )
+        == tmp_path / "appdata" / "AmphiLens" / "state.json"
+    )
 
 
 def test_user_state_remembers_only_last_project_and_reloads_atomically(tmp_path: Path):

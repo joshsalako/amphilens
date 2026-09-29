@@ -77,9 +77,11 @@ def train_and_register(
     train_options = {"resume_from": resume_from}
     if progress_callback is not None:
         train_options["progress_callback"] = progress_callback
-    checkpoint = Path(
-        detector.train(dataset_yaml, output, training_config, **train_options)
-    ).expanduser().resolve()
+    checkpoint = (
+        Path(detector.train(dataset_yaml, output, training_config, **train_options))
+        .expanduser()
+        .resolve()
+    )
     return finalize_training_outputs(
         detector,
         checkpoint=checkpoint,

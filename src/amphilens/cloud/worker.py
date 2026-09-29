@@ -394,8 +394,10 @@ def run_remote_training(
                 environment=environment,
             )
         except Exception as exc:
-            safe_error = str(exc).replace(str(root), "[remote-job]").replace(
-                str(output_root), "[training-output]"
+            safe_error = (
+                str(exc)
+                .replace(str(root), "[remote-job]")
+                .replace(str(output_root), "[training-output]")
             )
             _write_progress(
                 root,

@@ -124,8 +124,12 @@ def pack_training_payload(
                     entries.append(
                         (
                             "model/checkpoint.json",
-                            (json.dumps(manifest_data, ensure_ascii=False, sort_keys=True, indent=2)
-                             + "\n").encode("utf-8"),
+                            (
+                                json.dumps(
+                                    manifest_data, ensure_ascii=False, sort_keys=True, indent=2
+                                )
+                                + "\n"
+                            ).encode("utf-8"),
                             False,
                         )
                     )

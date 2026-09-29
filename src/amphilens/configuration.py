@@ -145,9 +145,7 @@ def resolve_effective_configuration(
         image_size = int(values.pop("image_size", project_config.image_size))
         source = "project"
         if checkpoint_path is not None:
-            warnings.append(
-                "Checkpoint metadata unavailable; project configuration was used."
-            )
+            warnings.append("Checkpoint metadata unavailable; project configuration was used.")
 
     confidence = float(values.pop("confidence", project_config.confidence_threshold))
     if not 0 <= confidence <= 1:

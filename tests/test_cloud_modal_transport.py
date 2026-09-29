@@ -99,9 +99,7 @@ def make_transport(monkeypatch):
         Client=SimpleNamespace(from_credentials=lambda token_id, secret: (token_id, secret)),
         exception=SimpleNamespace(NotFoundError=FakeModalNotFoundError),
         FunctionCall=SimpleNamespace(from_id=lambda call_id, client=None: call),
-        Volume=SimpleNamespace(
-            from_name=lambda name, create_if_missing=False, client=None: volume
-        ),
+        Volume=SimpleNamespace(from_name=lambda name, create_if_missing=False, client=None: volume),
     )
     app_module = SimpleNamespace(app=app, train=function)
     monkeypatch.setattr(transport, "_load_modal", lambda: modal)
@@ -144,9 +142,7 @@ def test_modal_upload_is_skipped_when_remote_payload_hash_matches(tmp_path, monk
     assert volume.files["jobs/key/payload.zip.sha256"] == b"digest\n"
 
 
-def test_modal_upload_replaces_stale_sentinel_without_reading_remote_payload(
-    tmp_path, monkeypatch
-):
+def test_modal_upload_replaces_stale_sentinel_without_reading_remote_payload(tmp_path, monkeypatch):
     transport, _, _, _, volume = make_transport(monkeypatch)
     source = tmp_path / "payload.zip"
     source.write_bytes(b"replacement")

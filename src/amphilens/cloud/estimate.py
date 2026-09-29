@@ -63,7 +63,8 @@ def _cost_rate(gpu: str) -> float:
     except KeyError as exc:
         raise ValidationError(f"Unsupported Modal GPU type: {gpu}") from exc
     return (
-        gpu_rate + MODAL_CPU_RATE_PER_CORE_SECOND * CPU_CORES
+        gpu_rate
+        + MODAL_CPU_RATE_PER_CORE_SECOND * CPU_CORES
         + MODAL_MEMORY_RATE_PER_GIB_SECOND * MEMORY_GIB
     )
 
@@ -90,9 +91,9 @@ def estimate_training_cost(
     work_scale = image_count * epochs / IMAGE_EPOCHS_REFERENCE
     resolution_scale = (image_size / 640) ** 2
     runtime_low = max(60, math.ceil(REFERENCE_RUNTIME_LOW_SECONDS * work_scale * resolution_scale))
-    runtime_high = max(runtime_low, math.ceil(
-        REFERENCE_RUNTIME_HIGH_SECONDS * work_scale * resolution_scale
-    ))
+    runtime_high = max(
+        runtime_low, math.ceil(REFERENCE_RUNTIME_HIGH_SECONDS * work_scale * resolution_scale)
+    )
     low_usd = runtime_low * rate
     high_usd = runtime_high * rate * MAX_REGION_MULTIPLIER
     if low_usd > max_cost_usd:

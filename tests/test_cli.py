@@ -362,9 +362,7 @@ def test_train_command_uses_saved_project_configuration_when_options_are_omitted
         return SimpleNamespace(checkpoint=checkpoint)
 
     monkeypatch.setattr(cli_module, "train_snapshot_and_register", fake_train)
-    result = CliRunner().invoke(
-        app, ["train", str(project), "--output-dir", str(tmp_path / "out")]
-    )
+    result = CliRunner().invoke(app, ["train", str(project), "--output-dir", str(tmp_path / "out")])
 
     assert result.exit_code == 0, result.stdout
     assert observed["preset"].model_id == "rtdetr-l"

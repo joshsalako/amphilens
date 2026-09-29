@@ -94,9 +94,7 @@ class CloudTrainingService:
 
     def active_jobs(self) -> list[CloudJobRecord]:
         return [
-            record
-            for record in self.list_jobs()
-            if record.state not in TERMINAL_CLOUD_JOB_STATES
+            record for record in self.list_jobs() if record.state not in TERMINAL_CLOUD_JOB_STATES
         ]
 
     def _safe_error(self, error: Exception) -> str:
@@ -301,8 +299,11 @@ class CloudTrainingService:
             record.state, record.phase = "uploaded", "payload-uploaded"
             self._save(record)
             record.deadline_at = (
-                self._now() + timedelta(seconds=record.timeout_seconds)
-            ).astimezone(timezone.utc).replace(microsecond=0).isoformat()
+                (self._now() + timedelta(seconds=record.timeout_seconds))
+                .astimezone(timezone.utc)
+                .replace(microsecond=0)
+                .isoformat()
+            )
             remote_payload = {
                 "run_id": run_id,
                 "job_key": job_key,

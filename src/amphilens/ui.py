@@ -165,9 +165,7 @@ def _user_state_store(state, user_state: UserStateStore | None = None) -> UserSt
     return created
 
 
-def restore_active_project(
-    state, *, user_state: UserStateStore | None = None
-) -> Path | None:
+def restore_active_project(state, *, user_state: UserStateStore | None = None) -> Path | None:
     """Restore and validate the last project once for a Streamlit session."""
     if ACTIVE_PROJECT_KEY in state:
         return active_project_path(state)
@@ -192,9 +190,7 @@ def restore_active_project(
     return project.root
 
 
-def set_active_project(
-    state, project_dir: str | Path, *, user_state: UserStateStore | None = None
-):
+def set_active_project(state, project_dir: str | Path, *, user_state: UserStateStore | None = None):
     """Validate and store the active project, returning its filesystem store."""
     store = open_project(project_dir)
     state[ACTIVE_PROJECT_KEY] = str(store.root)
@@ -376,9 +372,7 @@ def _render_import_dataset(st):
         archive = st.text_input("CVAT, COCO, or YOLO ZIP file")
         if st.button("Import initial dataset", type="primary"):
             try:
-                snapshot = store.import_dataset(
-                    archive, class_mapping=parse_class_mapping(mapping)
-                )
+                snapshot = store.import_dataset(archive, class_mapping=parse_class_mapping(mapping))
                 st.success(f"Imported {len(snapshot.manifest.images)} reviewed images")
                 st.json(snapshot.manifest.to_dict())
             except Exception as exc:  # noqa: BLE001 - shown as an actionable UI error
@@ -394,9 +388,7 @@ def _render_import_dataset(st):
     if st.button("Connect to CVAT"):
         try:
             transport = CVATSdkTransport(server_url=server_url or None)
-            projects = CVATProjectImportService(
-                store, transport
-            ).list_projects()
+            projects = CVATProjectImportService(store, transport).list_projects()
             st.session_state["amphilens-initial-cvat-projects"] = projects
             st.success(f"Found {len(projects)} CVAT projects")
         except Exception as exc:  # noqa: BLE001 - shown as an actionable UI error
@@ -413,9 +405,7 @@ def _render_import_dataset(st):
     if st.button("Import project", type="primary"):
         try:
             transport = CVATSdkTransport(server_url=server_url or None)
-            snapshot = CVATProjectImportService(
-                store, transport
-            ).import_project(
+            snapshot = CVATProjectImportService(store, transport).import_project(
                 selected.project_id,
                 class_mapping=parse_class_mapping(mapping),
             )
@@ -661,7 +651,12 @@ def _render_cloud_jobs(st, store, service, credentials):
                 st.link_button("Open Modal dashboard", job.dashboard_url)
             controls = st.columns(3)
             if job.state not in {
-                "finished", "verified", "incomplete", "failed", "canceled", "timed_out"
+                "finished",
+                "verified",
+                "incomplete",
+                "failed",
+                "canceled",
+                "timed_out",
             }:
                 if controls[0].button(
                     "Refresh status",
@@ -697,9 +692,7 @@ def _render_cloud_jobs(st, store, service, credentials):
                         st.rerun()
                     except Exception as exc:  # noqa: BLE001 - shown as an actionable UI error
                         st.error(str(exc))
-            terminal = job.state in {
-                "verified", "incomplete", "failed", "canceled", "timed_out"
-            }
+            terminal = job.state in {"verified", "incomplete", "failed", "canceled", "timed_out"}
             if terminal and job.cleanup_succeeded is not True:
                 cleanup_label = (
                     "Retry remote cleanup"
@@ -721,9 +714,7 @@ def _render_cloud_jobs(st, store, service, credentials):
             if job.log_tail:
                 st.code(job.log_tail[-8000:])
             if job.state == "verified":
-                st.success(
-                    f"Checkpoint: {store.root / 'checkpoints' / job.run_id / 'best.pt'}"
-                )
+                st.success(f"Checkpoint: {store.root / 'checkpoints' / job.run_id / 'best.pt'}")
             if terminal and job.cleanup_succeeded is True:
                 if job.call_id:
                     st.success(
@@ -1146,9 +1137,7 @@ def _render_managed_cvat(st):
 
     def service():
         transport = CVATSdkTransport(server_url=server_url or None)
-        return ManagedCVATCycleService(
-            store, transport, server_url=transport.server_url
-        )
+        return ManagedCVATCycleService(store, transport, server_url=transport.server_url)
 
     start, refresh, continue_button = st.columns(3)
     if start.button("Send to CVAT", type="primary", disabled=not paths):

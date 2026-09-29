@@ -170,9 +170,7 @@ if typer is not None:
             selected.root,
             gpu=gpu,
             epochs=project.project_config.epochs if epochs is None else epochs,
-            image_size=(
-                project.project_config.image_size if image_size is None else image_size
-            ),
+            image_size=(project.project_config.image_size if image_size is None else image_size),
             max_cost_usd=max_cost_usd,
         )
         typer.echo(json.dumps(estimate.to_dict(), indent=2))
@@ -433,13 +431,9 @@ if typer is not None:
                 resize_enabled=project_preprocessing.resize_enabled,
                 resize_interpolation=project_preprocessing.resize_interpolation,
                 grayscale_enabled=(
-                    grayscale
-                    if grayscale is not None
-                    else project_preprocessing.grayscale_enabled
+                    grayscale if grayscale is not None else project_preprocessing.grayscale_enabled
                 ),
-                clahe_enabled=(
-                    clahe if clahe is not None else project_preprocessing.clahe_enabled
-                ),
+                clahe_enabled=(clahe if clahe is not None else project_preprocessing.clahe_enabled),
                 clahe_clip_limit=project_preprocessing.clahe_clip_limit,
                 clahe_tile_grid_size=project_preprocessing.clahe_tile_grid_size,
                 color_space=project_preprocessing.color_space,
@@ -629,13 +623,9 @@ if typer is not None:
                 resize_enabled=project_preprocessing.resize_enabled,
                 resize_interpolation=project_preprocessing.resize_interpolation,
                 grayscale_enabled=(
-                    grayscale
-                    if grayscale is not None
-                    else project_preprocessing.grayscale_enabled
+                    grayscale if grayscale is not None else project_preprocessing.grayscale_enabled
                 ),
-                clahe_enabled=(
-                    clahe if clahe is not None else project_preprocessing.clahe_enabled
-                ),
+                clahe_enabled=(clahe if clahe is not None else project_preprocessing.clahe_enabled),
                 clahe_clip_limit=project_preprocessing.clahe_clip_limit,
                 clahe_tile_grid_size=project_preprocessing.clahe_tile_grid_size,
                 color_space=project_preprocessing.color_space,
