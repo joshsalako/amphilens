@@ -9,7 +9,7 @@ IMAGE_PINS = {
     "ultralytics": "8.4.163",
     "pyyaml": "6.0.3",
     "pillow": "12.3.0",
-    "numpy": "2.5.3",
+    "numpy": "2.3.5",
     "opencv-python-headless": "5.0.0.93",
 }
 

@@ -185,6 +185,7 @@ def test_cloud_credentials_form_saves_password_fields_outside_project(
         "default_credentials_path",
         lambda: credential_path,
     )
+    monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("MODAL_TOKEN_ID", raising=False)
     monkeypatch.delenv("MODAL_TOKEN_SECRET", raising=False)
 

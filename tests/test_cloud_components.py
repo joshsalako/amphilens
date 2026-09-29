@@ -5,9 +5,15 @@ from pathlib import Path
 
 from PIL import Image
 
+from amphilens.cloud.constants import IMAGE_PINS
 from amphilens.cloud.credentials import CloudCredentialsStore
 from amphilens.cloud.estimate import RATE_CHECKED_AT, estimate_training_cost
 from amphilens.cloud.pack import pack_training_payload
+
+
+def test_modal_training_image_numpy_pin_supports_its_python_311_base():
+    assert IMAGE_PINS["python"] == "3.11"
+    assert IMAGE_PINS["numpy"] == "2.3.5"
 
 
 def test_cloud_credentials_are_private_and_environment_wins(tmp_path: Path):
@@ -28,6 +34,24 @@ def test_cloud_credentials_are_private_and_environment_wins(tmp_path: Path):
     assert environment.source == "environment"
     assert environment.token_id == "env-id"
     assert environment.token_secret == "env-secret"
+
+
+def test_cloud_credentials_read_dotenv_when_process_environment_is_unset(
+    tmp_path: Path, monkeypatch
+):
+    (tmp_path / ".env").write_text(
+        'MODAL_TOKEN_ID="dotenv-id"\nMODAL_TOKEN_SECRET="dotenv-secret"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MODAL_TOKEN_ID", raising=False)
+    monkeypatch.delenv("MODAL_TOKEN_SECRET", raising=False)
+
+    credentials = CloudCredentialsStore(tmp_path / "credentials.json").resolve()
+
+    assert credentials.source == "dotenv"
+    assert credentials.token_id == "dotenv-id"
+    assert credentials.token_secret == "dotenv-secret"
 
 
 def test_cloud_cost_estimate_is_a_range_and_derives_a_bounded_timeout():

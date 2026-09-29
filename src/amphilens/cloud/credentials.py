@@ -95,6 +95,11 @@ class CloudCredentialsStore:
                 raise ValueError("MODAL_TOKEN_ID and MODAL_TOKEN_SECRET must be set together")
             return self._credentials(env_id, env_secret, "environment")
 
+        if environ is None:
+            dotenv_credentials = self._dotenv_credentials()
+            if dotenv_credentials is not None:
+                return dotenv_credentials
+
         if not self.path.is_file():
             return None
         try:
@@ -104,6 +109,24 @@ class CloudCredentialsStore:
         if not isinstance(data, dict):
             raise ValueError("Modal credentials file must contain an object")
         return self._credentials(data.get("token_id"), data.get("token_secret"), "credentials-file")
+
+    @classmethod
+    def _dotenv_credentials(cls) -> CloudCredentials | None:
+        try:
+            from dotenv import dotenv_values, find_dotenv
+        except ImportError:
+            return None
+        dotenv_path = find_dotenv(usecwd=True)
+        if not dotenv_path:
+            return None
+        values = dotenv_values(dotenv_path)
+        token_id = values.get("MODAL_TOKEN_ID")
+        token_secret = values.get("MODAL_TOKEN_SECRET")
+        if not token_id and not token_secret:
+            return None
+        if not token_id or not token_secret:
+            raise ValueError("MODAL_TOKEN_ID and MODAL_TOKEN_SECRET must be set together")
+        return cls._credentials(token_id, token_secret, "dotenv")
 
     def clear(self) -> None:
         try:

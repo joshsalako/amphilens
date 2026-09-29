@@ -39,9 +39,11 @@ cvat = [
 cloud = [
   "modal>=1.0,<2",
   "pillow>=10.0",
+  "python-dotenv>=1.0",
 ]
 dev = [
   "amphilens[cli,inference]",
+  "python-dotenv>=1.0",
   "pytest>=8.0",
   "pytest-cov>=5.0",
   "ruff>=0.6",

@@ -25,9 +25,12 @@ amphilens doctor --check-cloud
 
 The CLI reads both values interactively and stores them in a user-scoped
 `credentials.json` file with owner-only permissions. `MODAL_TOKEN_ID` and
-`MODAL_TOKEN_SECRET` can be used instead; when both environment variables are
-set, they take precedence over the saved file. `amphilens cloud logout`
-removes the saved file. Environment variables must be cleared separately.
+`MODAL_TOKEN_SECRET` can be set in the process environment or in a `.env` file
+in the working directory or a parent directory; process environment values
+take precedence, followed by `.env`, then the saved file. Only these two `.env`
+values are used, and they are never copied into the project or remote payload.
+`amphilens cloud logout` removes the saved file. Environment and `.env` values
+must be cleared separately.
 
 Modal requires a valid payment method for GPU use. AmphiLens creates a detached
 ephemeral invocation in your account; it does not deploy a persistent
@@ -139,8 +142,17 @@ starts during `doctor`, `cloud estimate`, or `cloud diagnose`.
 The automated suite exercises the provider-neutral service and a fake Modal
 SDK. It does not prove detached-call survival after the client exits, Modal's
 real timeout and cancellation behavior, Volume upload/read/delete semantics,
-GPU package compatibility, or the billed cost. This implementation has not
-had a live Modal training smoke run yet.
+GPU package compatibility, or the billed cost. On 2026-09-29, a live attempt
+used three synthetic labeled images, one YOLO26-L epoch at 64px, a requested
+T4, a $0.02–$0.04 estimate, and a 600-second derived timeout. The Modal
+credentials resolved directly from `.env` and authenticated. The image first
+failed because NumPy 2.5.3 requires Python 3.12 while the container uses Python
+3.11; the pin is now 2.3.5, and the full image built successfully. Modal then
+rejected GPU function creation with “Please add a payment method to use L4 GPU
+functions.” No GPU container or training call was started. All failed job
+prefixes were removed, and the detached apps stopped with zero tasks. Successful
+live GPU training, artifact download, and billed cost remain unverified. A
+payment method is required before the GPU run can proceed.
 
 Before release, run a consented smoke job with a non-sensitive snapshot of about
 20 labelled images, two epochs, a T4 GPU, and a budget that derives a
