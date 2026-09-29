@@ -1,5 +1,7 @@
 import hashlib
+import io
 import json
+import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -215,6 +217,30 @@ def test_cloud_submit_requires_explicit_consent_before_upload(tmp_path: Path):
 
     assert transport.uploaded == {}
     assert transport.submissions == []
+
+
+def test_cloud_training_yaml_supplies_val_key_without_enabling_evaluation(tmp_path: Path):
+    store, snapshot = make_project(tmp_path)
+    transport = FakeCloudTransport()
+    service = CloudTrainingService(store, transport)
+
+    record = service.submit(
+        snapshot_path=snapshot,
+        effective_configuration=config(),
+        training_config={"epochs": 1, "image_size": 64, "val": False},
+        consent=consent(),
+        gpu="T4",
+    )
+
+    payload_bytes, _ = next(
+        value for path, value in transport.uploaded.items() if path.endswith("payload.zip")
+    )
+    with zipfile.ZipFile(io.BytesIO(payload_bytes)) as archive:
+        dataset = json.loads(archive.read("dataset/dataset.yaml"))
+
+    assert dataset["val"] == dataset["train"] == "images"
+    assert record.training_config["val"] is False
+    assert record.training_config["evaluation"] == "not evaluated"
 
 
 def test_cloud_run_can_resume_after_restart_and_register_only_local_verified_bytes(

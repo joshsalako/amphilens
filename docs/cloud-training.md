@@ -142,23 +142,21 @@ starts during `doctor`, `cloud estimate`, or `cloud diagnose`.
 The automated suite exercises the provider-neutral service and a fake Modal
 SDK. It does not prove detached-call survival after the client exits, Modal's
 real timeout and cancellation behavior, Volume upload/read/delete semantics,
-GPU package compatibility, or the billed cost. On 2026-09-29, a live attempt
+GPU package compatibility, or the billed cost. On 2026-09-29, a live smoke test
 used three synthetic labeled images, one YOLO26-L epoch at 64px, a requested
-T4, a $0.02–$0.04 estimate, and a 600-second derived timeout. The Modal
-credentials resolved directly from `.env` and authenticated. The image first
-failed because NumPy 2.5.3 requires Python 3.12 while the container uses Python
-3.11; the pin is now 2.3.5, and the full image built successfully. Modal then
-rejected GPU function creation with “Please add a payment method to use L4 GPU
-functions.” No GPU container or training call was started. All failed job
-prefixes were removed, and the detached apps stopped with zero tasks. Successful
-live GPU training, artifact download, and billed cost remain unverified. A
-payment method is required before the GPU run can proceed.
+T4, a $0.02–$0.04 estimate, and a 600-second derived timeout. Credentials
+resolved from `.env`; the Modal SDK 1.6.0 authenticated and dispatched the job.
+The worker reported a Tesla T4 and completed training without validation. The
+dataset payload uploaded, all four outputs (`best.pt`, `last.pt`, `metrics.json`,
+and `checkpoint.json`) returned with matching hashes and sizes, and the best
+checkpoint was registered locally. CPU inference using that returned checkpoint
+produced a local prediction image. The remote job directory was removed and the
+Modal app stopped with no active app listed. The live image probe also confirmed
+that OpenCV and YOLO import successfully in the pinned Python 3.11 image.
 
-Before release, run a consented smoke job with a non-sensitive snapshot of about
-20 labelled images, two epochs, a T4 GPU, and a budget that derives a
-600-second function timeout. Record the estimate, wall-clock duration, and
-reported charge here after observing them. Verify that the job uploads and
-reaches `finished`, downloads all four artifacts, registers a checkpoint whose
-local manifest hash matches `best.pt`, removes the uploaded job directory, and
-leaves no running container in the Modal dashboard. Do not treat CI or a
-successful package build as a substitute for this check.
+The smoke test verifies transfer and lifecycle behavior with synthetic data; it
+does not measure model quality on wildlife data or confirm the provider's final
+billed charge. The $0.02–$0.04 figure is an estimate, not a billing cap. Before
+production use, run a consented job with a representative non-sensitive
+snapshot, then compare the estimate with Modal's recorded usage and inspect the
+registered model's behavior on a held-out dataset.

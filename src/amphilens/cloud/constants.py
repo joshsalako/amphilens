@@ -13,6 +13,8 @@ IMAGE_PINS = {
     "opencv-python-headless": "5.0.0.93",
 }
 
+IMAGE_APT_PACKAGES = ("libgl1", "libglib2.0-0")
+
 VOLUME_NAME = "amphilens-cloud-training"
 VOLUME_MOUNT = "/mnt/amphilens"
 MODAL_APP_NAME = "amphilens-cloud-training"

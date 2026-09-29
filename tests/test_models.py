@@ -51,6 +51,25 @@ class FakeUltralyticsModel:
         checkpoint.write_bytes(b"trained")
         return SimpleNamespace(save_dir=checkpoint.parent.parent)
 
+    def _smart_load(self, key):
+        assert key == "trainer"
+        return FakeBaseTrainer
+
+
+class FakeBaseTrainer:
+    def __init__(self):
+        self.metrics = {}
+        self.fitness = None
+        self.best_fitness = None
+        self.last = Path("missing-last.pt")
+        self.best = Path("missing-best.pt")
+
+    def validate(self):
+        raise AssertionError("Cloud training must skip validation")
+
+    def final_eval(self):
+        raise AssertionError("Cloud training must skip final evaluation")
+
 
 def _image(tmp_path: Path) -> Path:
     image = tmp_path / "camera.jpg"
@@ -153,6 +172,10 @@ def test_ultralytics_cloud_training_uses_last_weights_without_validation(tmp_pat
     assert result.name == "last.pt"
     assert model.train_calls["val"] is False
     assert provenance["checkpoint_selection"] == "last-no-validation"
+    trainer = model.train_calls["trainer"]()
+    assert trainer.validate() == ({}, 0.0)
+    assert trainer.best_fitness == 0.0
+    assert trainer.final_eval() is None
 
 
 def test_load_detector_rejects_missing_and_stale_checkpoints(tmp_path: Path):

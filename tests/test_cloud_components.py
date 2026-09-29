@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from amphilens.cloud.constants import IMAGE_PINS
+from amphilens.cloud.constants import IMAGE_APT_PACKAGES, IMAGE_PINS
 from amphilens.cloud.credentials import CloudCredentialsStore
 from amphilens.cloud.estimate import RATE_CHECKED_AT, estimate_training_cost
 from amphilens.cloud.pack import pack_training_payload
@@ -14,6 +14,10 @@ from amphilens.cloud.pack import pack_training_payload
 def test_modal_training_image_numpy_pin_supports_its_python_311_base():
     assert IMAGE_PINS["python"] == "3.11"
     assert IMAGE_PINS["numpy"] == "2.3.5"
+
+
+def test_modal_training_image_includes_opencv_runtime_libraries():
+    assert {"libgl1", "libglib2.0-0"}.issubset(IMAGE_APT_PACKAGES)
 
 
 def test_cloud_credentials_are_private_and_environment_wins(tmp_path: Path):

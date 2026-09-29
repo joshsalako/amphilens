@@ -6,12 +6,13 @@ from pathlib import Path
 
 import modal
 
-from .constants import IMAGE_PINS, MODAL_APP_NAME, VOLUME_MOUNT, VOLUME_NAME
+from .constants import IMAGE_APT_PACKAGES, IMAGE_PINS, MODAL_APP_NAME, VOLUME_MOUNT, VOLUME_NAME
 from .estimate import MAX_FUNCTION_TIMEOUT_SECONDS
 from .worker import run_remote_training
 
 training_image = (
     modal.Image.debian_slim(python_version=IMAGE_PINS["python"])
+    .apt_install(*IMAGE_APT_PACKAGES)
     .uv_pip_install(
         f"torch=={IMAGE_PINS['torch']}",
         f"torchvision=={IMAGE_PINS['torchvision']}",

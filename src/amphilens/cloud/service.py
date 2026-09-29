@@ -278,7 +278,10 @@ class CloudTrainingService:
                 prepared,
                 preprocessing=effective.get("preprocessing"),
             )
-            del dataset_yaml
+            dataset_config = json.loads(dataset_yaml.read_text(encoding="utf-8"))
+            # Ultralytics requires a val path even when training runs with val=False.
+            dataset_config["val"] = dataset_config["train"]
+            atomic_write_json(dataset_yaml, dataset_config)
             mount = f"/mnt/amphilens/jobs/{job_key}/dataset"
             payload_path = run_dir / "upload" / "payload.zip"
             payload = pack_training_payload(

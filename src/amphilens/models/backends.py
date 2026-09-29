@@ -21,6 +21,33 @@ class OptionalDependencyError(RuntimeError):
     """Raised when a selected backend's optional ML dependency is absent."""
 
 
+def _training_only_trainer(base_trainer):
+    """Keep Ultralytics' mandatory final-epoch hooks from evaluating cloud runs."""
+
+    class TrainingOnlyTrainer(base_trainer):
+        def validate(self):
+            self.metrics = {}
+            self.fitness = 0.0
+            if self.best_fitness is None or self.best_fitness < self.fitness:
+                self.best_fitness = self.fitness
+            return self.metrics, self.fitness
+
+        def final_eval(self):
+            if not self.last.exists() and not self.best.exists():
+                return None
+            from ultralytics.utils.torch_utils import strip_optimizer
+
+            last_checkpoint = strip_optimizer(self.last) if self.last.exists() else {}
+            if self.best.exists():
+                strip_optimizer(
+                    self.best,
+                    updates={"train_results": last_checkpoint.get("train_results")},
+                )
+
+    TrainingOnlyTrainer.__name__ = "AmphiLensTrainingOnlyTrainer"
+    return TrainingOnlyTrainer
+
+
 def _select_torch_device(torch, requested: str):
     available = bool(torch.cuda.is_available())
     if requested == "auto":
@@ -157,6 +184,8 @@ class UltralyticsDetector:
             "seed": int(config.get("seed", 42)),
             "exist_ok": True,
         }
+        if is_cloud_training:
+            train_config["trainer"] = _training_only_trainer(model._smart_load("trainer"))
         if resume_from is not None:
             train_config["resume"] = str(resume_from.checkpoint_path)
         if progress_callback is not None:
