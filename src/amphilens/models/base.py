@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Protocol
 
@@ -23,4 +23,5 @@ class DetectorBackend(Protocol):
         output_dir: str | Path,
         config: dict,
         resume_from: CheckpointManifest | None = None,
+        progress_callback: Callable[[dict], None] | None = None,
     ) -> Path: ...

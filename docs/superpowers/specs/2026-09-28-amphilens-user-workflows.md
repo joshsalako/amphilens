@@ -215,6 +215,38 @@ The resulting checkpoint records its parent checkpoint, dataset snapshot,
 classes, preprocessing, model architecture, configuration, and software.
 Repeat the cycle when additional images would improve the model.
 
+## Optional cloud GPU execution
+
+Cloud GPU is an execution choice for the **Train model** step; it does not
+change dataset import, class order, preprocessing, checkpoint compatibility,
+or evaluation rules.
+
+1. Install the optional cloud extra and configure Modal credentials with
+   `amphilens cloud login` or both `MODAL_TOKEN_ID` and
+   `MODAL_TOKEN_SECRET`.
+2. Choose **Modal cloud GPU**, a labelled dataset snapshot, model settings, GPU,
+   and a maximum budget.
+3. Review the estimate and explicitly approve uploading the selected prepared
+   dataset and any selected base checkpoint.
+4. Refresh or cancel the saved job from the UI or CLI. Finished artifacts are
+   downloaded only when the user requests collection.
+5. AmphiLens verifies the returned job identity, payload echo, artifact hashes,
+   sizes, and checkpoint compatibility before local registration.
+
+The app prepares an immutable copy, strips embedded image metadata, omits the
+full dataset manifest and original local paths, and rewrites the dataset root
+to the remote volume mount. Image filenames remain in the uploaded payload.
+Modal credentials never enter the job payload or project manifest. The job
+record includes the source digest, configuration, GPU, deadline, consent, and
+verified local provenance. Cloud jobs record `evaluation: not evaluated` and
+do not invent holdout splits.
+
+The estimate is a planning range based on an unverified runtime heuristic. Its
+budget-derived time limit is not a guaranteed billing cap. Modal requires a
+valid payment method and may preempt GPU work. Remote files are deleted after
+collection; failed cleanup remains visible and can be retried. See
+[`docs/cloud-training.md`](../../cloud-training.md) for provider details.
+
 ## UI and CLI mapping
 
 The UI and CLI must use the same underlying services. They must not implement
@@ -236,6 +268,14 @@ different dataset or CVAT behavior.
 | Start managed CVAT cycle | **Send to CVAT** | `amphilens cvat managed-start` |
 | Check annotation completion | **Refresh status** | `amphilens cvat managed-status` |
 | Merge completed annotations | **Continue cycle** | `amphilens cvat managed-continue` |
+| Save Modal credentials | **Masked token fields** | `amphilens cloud login` |
+| Check Modal connectivity | **Check Modal connectivity** on Environment | `amphilens cloud diagnose` or `amphilens doctor --check-cloud` |
+| Estimate cloud training | **Train model** | `amphilens cloud estimate PROJECT` |
+| Submit consented cloud training | **Train model** | `amphilens cloud train PROJECT` |
+| Refresh cloud job | **Refresh status** | `amphilens cloud status PROJECT RUN_ID` |
+| Cancel cloud job | **Cancel job** | `amphilens cloud cancel PROJECT RUN_ID` |
+| Verify and register cloud result | **Download and register checkpoint** | `amphilens cloud collect PROJECT RUN_ID` |
+| Retry remote cleanup | **Retry remote cleanup** | `amphilens cloud cleanup PROJECT RUN_ID` |
 
 ## Non-negotiable behavior
 
@@ -257,6 +297,13 @@ different dataset or CVAT behavior.
 - The local archive workflow remains available when CVAT is unavailable.
 - Evaluation must say `evaluation: not evaluated` when no holdout dataset was
   supplied.
+- Cloud training must require explicit dataset-upload and cost consent.
+- Cloud tokens must never enter project data, job payloads, logs, URLs, or
+  command-line arguments.
+- Cloud artifacts must not be registered until local hashes and compatibility
+  metadata have been verified.
+- Cost estimates and budget-derived deadlines must not be described as a
+  guaranteed provider billing cap.
 
 ## Failure handling
 

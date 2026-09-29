@@ -36,6 +36,10 @@ cvat = [
   "cvat-cli==2.76.0",
   "cvat-sdk==2.76.0",
 ]
+cloud = [
+  "modal>=1.0,<2",
+  "pillow>=10.0",
+]
 dev = [
   "amphilens[cli,inference]",
   "pytest>=8.0",
@@ -47,7 +51,7 @@ release = [
   "twine>=5.1",
 ]
 all = [
-  "amphilens[cli,ui,inference,training,cvat,release]",
+  "amphilens[cli,ui,inference,training,cvat,cloud,release]",
 ]
 
 [project.scripts]

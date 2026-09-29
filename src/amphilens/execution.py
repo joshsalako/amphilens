@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
@@ -26,6 +26,8 @@ class JobSpec:
     code_version: str = "working-tree"
     job_id: str = field(default_factory=lambda: f"job-{uuid.uuid4().hex[:12]}")
     created_at: str = field(default_factory=_now)
+    cost_ceiling_usd: float | None = None
+    timeout_seconds: int | None = None
 
     def __post_init__(self) -> None:
         if not self.operation.strip():
@@ -51,12 +53,58 @@ class JobStatus:
     updated_at: str
     message: str = ""
     artifacts: list[str] = field(default_factory=list)
+    phase: str = ""
+    remote_state: str = ""
+    progress: float | None = None
+    error: str = ""
+    log_tail: str = ""
+    cost_estimate_usd: float | None = None
+    cost_actual_usd: float | None = None
+    deadline_at: str | None = None
+    environment: dict[str, str] = field(default_factory=dict)
+    schema_version: int = 1
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> JobStatus:
+        """Read workspace-local status while ignoring fields from newer versions."""
+        accepted = {item.name for item in fields(cls)}
+        return cls(**{key: value for key, value in data.items() if key in accepted})
+
+
+@dataclass(slots=True)
+class JobArtifact:
+    name: str
+    relative_path: str
+    sha256: str
+    size_bytes: int
+    remote_ref: str = ""
+
+
+@dataclass(slots=True)
+class JobCostEstimate:
+    cost_low_usd: float
+    cost_high_usd: float
+    rate_date: str
+    time_limit_seconds: int
+    upload_time_low_seconds: int = 0
+    upload_time_high_seconds: int = 0
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class ExecutionBackend(Protocol):
     def submit(self, job: JobSpec) -> JobHandle: ...
 
     def status(self, job_id: str) -> JobStatus: ...
+
+    def cancel(self, job_id: str) -> JobStatus: ...
+
+
+class ArtifactFetchingBackend(Protocol):
+    def fetch(self, job_id: str, destination: str | Path) -> list[JobArtifact]: ...
+
+
+class CostEstimatingBackend(Protocol):
+    def estimate(self, job: JobSpec) -> JobCostEstimate: ...
 
 
 class LocalExecutionBackend:
@@ -80,7 +128,11 @@ class LocalExecutionBackend:
         path = self.root / job_id / "status.json"
         if not path.is_file():
             raise ValidationError(f"Job not found: {job_id}")
-        return JobStatus(**json.loads(path.read_text()))
+        return JobStatus.from_dict(json.loads(path.read_text()))
+
+    def cancel(self, job_id: str) -> JobStatus:
+        """Mark a local job canceled; the reference backend does not run workers."""
+        return self.update(job_id, "canceled", "Canceled by user")
 
     def update(
         self, job_id: str, state: str, message: str = "", artifacts: list[str] | None = None

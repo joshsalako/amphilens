@@ -203,9 +203,11 @@ Remote verification: `origin` is `https://github.com/joshsalako/amphilens.git`; 
 - [x] Implement a local backend as the reference implementation.
 - [x] Add Docker CPU inference image and CUDA training image foundations.
 - [x] Add Docker Compose single-machine deployment with local volumes and documented privacy boundaries.
+- [x] Add provider-neutral job status, cost-estimate, artifact, and cancellation contracts.
+- [x] Add opt-in Modal GPU training with consent, persistent job records, hash-verified uploads/downloads, progress, cancellation, and local checkpoint registration.
+- [ ] Add resumable partial-file transfers for interrupted uploads and downloads.
 - [ ] Add a reference local CVAT Community `v2.76.0` Compose profile and an AmphiLens app profile with a tested network/volume boundary; do not silently upload data to an external CVAT server.
 - [ ] Add SSH and Slurm adapters for institutional GPUs.
-- [ ] Add provider-neutral remote worker protocol with resumable uploads/downloads, logs, checkpoint artifacts, and job cancellation.
 - [ ] Only then evaluate hosted deployment with API, queue, workers, metadata database, object storage, authentication, and multi-user isolation.
 
 ## Public interfaces to preserve

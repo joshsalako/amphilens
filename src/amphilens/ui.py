@@ -238,7 +238,8 @@ def _render_environment(st):
     from .doctor import run_doctor
 
     st.header("Environment")
-    report = run_doctor(".").to_dict()
+    check_cloud = st.button("Check Modal connectivity")
+    report = run_doctor(".", check_cloud=check_cloud).to_dict()
     st.json(report)
     st.caption(
         "CPU inference is supported. A CUDA GPU is recommended for fine-tuning "
@@ -443,6 +444,11 @@ def _render_train(st):
         st.warning("Import an initial CVAT or YOLO dataset before training.")
         return
     identity = _workflow_identity(store, project)
+    training_location = st.selectbox(
+        "Training location",
+        ["Local machine", "Modal cloud GPU"],
+        key=project_widget_key(store.root, identity, "train-location"),
+    )
     snapshot_path = st.selectbox(
         "Labelled dataset snapshot",
         [str(path) for path in snapshot_paths],
@@ -457,10 +463,14 @@ def _render_train(st):
         value="",
         key=project_widget_key(store.root, identity, "train-resume-manifest"),
     )
-    output_dir = st.text_input(
-        "Training output folder",
-        value=str(store.root / "checkpoints" / "cycle-0"),
-        key=project_widget_key(store.root, identity, "train-output"),
+    output_dir = (
+        st.text_input(
+            "Training output folder",
+            value=str(store.root / "checkpoints" / "cycle-0"),
+            key=project_widget_key(store.root, identity, "train-output"),
+        )
+        if training_location == "Local machine"
+        else None
     )
     parent_manifest = None
     if resume_manifest_path.strip():
@@ -490,7 +500,7 @@ def _render_train(st):
         value=False,
         key=project_widget_key(store.root, identity, "train-advanced"),
     )
-    overrides = {}
+    overrides = {"device": "cuda"} if training_location == "Modal cloud GPU" else {}
     if advanced:
         if checkpoint_manifest is None:
             catalog = ModelCatalog()
@@ -539,14 +549,18 @@ def _render_train(st):
             step=1,
             key=project_widget_key(store.root, identity, "train-batch-size"),
         )
-        overrides["device"] = st.selectbox(
-            "Device",
-            ["auto", "cpu", "cuda"],
-            index=["auto", "cpu", "cuda"].index(base_effective.device)
-            if base_effective.device in {"auto", "cpu", "cuda"}
-            else 0,
-            key=project_widget_key(store.root, identity, "train-device"),
-        )
+        if training_location == "Modal cloud GPU":
+            overrides["device"] = "cuda"
+            st.info("Cloud training uses the selected Modal GPU.")
+        else:
+            overrides["device"] = st.selectbox(
+                "Device",
+                ["auto", "cpu", "cuda"],
+                index=["auto", "cpu", "cuda"].index(base_effective.device)
+                if base_effective.device in {"auto", "cpu", "cuda"}
+                else 0,
+                key=project_widget_key(store.root, identity, "train-device"),
+            )
     try:
         effective = resolve_effective_configuration(
             project,
@@ -558,7 +572,18 @@ def _render_train(st):
         st.error(str(exc))
         return
     _show_effective_configuration(st, effective)
-    if st.button("Train model", type="primary"):
+    cloud_service = None
+    cloud_credentials = None
+    if training_location == "Modal cloud GPU":
+        cloud_service, cloud_credentials = _render_cloud_training(
+            st,
+            store,
+            snapshot_path,
+            selected_checkpoint,
+            checkpoint_manifest,
+            effective,
+        )
+    elif st.button("Train model", type="primary"):
         try:
             detector = (
                 load_detector(
@@ -596,6 +621,283 @@ def _render_train(st):
             st.json({"checkpoint": str(result.checkpoint), "evaluation": "not evaluated"})
         except Exception as exc:  # noqa: BLE001 - shown as an actionable UI error
             st.error(str(exc))
+    if cloud_service is None:
+        try:
+            cloud_service, cloud_credentials = _cloud_training_service(store)
+        except Exception:
+            cloud_service, cloud_credentials = _cloud_training_service_without_credentials(store)
+    _render_cloud_jobs(st, store, cloud_service, cloud_credentials)
+
+
+def _cloud_training_service(store):
+    from .cloud.credentials import CloudCredentialsStore
+    from .cloud.modal_transport import ModalTransport
+    from .cloud.service import CloudTrainingService
+
+    credentials = CloudCredentialsStore().resolve()
+    return CloudTrainingService(store, ModalTransport(credentials)), credentials
+
+
+def _render_cloud_jobs(st, store, service, credentials):
+    try:
+        jobs = service.list_jobs()
+    except Exception as exc:  # noqa: BLE001 - shown as an actionable UI error
+        st.error(str(exc))
+        return
+    if not jobs:
+        return
+    st.subheader("Cloud training jobs")
+    for job in jobs:
+        with st.container():
+            st.write(f"**{job.run_id}** · {job.state} · {job.phase}")
+            if job.progress is not None:
+                st.progress(float(job.progress))
+            st.caption(
+                f"{job.gpu} · {job.training_config.get('epochs', '?')} epochs · "
+                f"budget limit ${job.consent.max_cost_usd:.2f} · "
+                f"deadline {job.deadline_at or 'not submitted'}"
+            )
+            if job.dashboard_url:
+                st.link_button("Open Modal dashboard", job.dashboard_url)
+            controls = st.columns(3)
+            if job.state not in {
+                "finished", "verified", "incomplete", "failed", "canceled", "timed_out"
+            }:
+                if controls[0].button(
+                    "Refresh status",
+                    key=f"cloud-refresh-{job.run_id}",
+                    disabled=credentials is None,
+                ):
+                    try:
+                        service.refresh(job.run_id)
+                        st.rerun()
+                    except Exception as exc:  # noqa: BLE001 - shown as an actionable UI error
+                        st.error(str(exc))
+                if controls[1].button(
+                    "Cancel job", key=f"cloud-cancel-{job.run_id}", disabled=credentials is None
+                ):
+                    try:
+                        service.cancel(job.run_id)
+                        st.rerun()
+                    except Exception as exc:  # noqa: BLE001 - shown as an actionable UI error
+                        st.error(str(exc))
+            if job.state == "finished":
+                if controls[0].button(
+                    "Download and register checkpoint",
+                    key=f"cloud-collect-{job.run_id}",
+                    disabled=credentials is None,
+                ):
+                    try:
+                        verified = service.collect(job.run_id)
+                        st.success(
+                            "Verified checkpoint saved to "
+                            f"{store.root / 'checkpoints' / job.run_id / 'best.pt'}"
+                        )
+                        st.json(verified.checkpoint_manifest.to_dict())
+                        st.rerun()
+                    except Exception as exc:  # noqa: BLE001 - shown as an actionable UI error
+                        st.error(str(exc))
+            terminal = job.state in {
+                "verified", "incomplete", "failed", "canceled", "timed_out"
+            }
+            if terminal and job.cleanup_succeeded is not True:
+                cleanup_label = (
+                    "Retry remote cleanup"
+                    if job.cleanup_succeeded is False
+                    else "Remove uploaded files"
+                )
+                if controls[2].button(
+                    cleanup_label,
+                    key=f"cloud-cleanup-{job.run_id}",
+                    disabled=credentials is None,
+                ):
+                    try:
+                        service.retry_cleanup(job.run_id)
+                        st.rerun()
+                    except Exception as exc:  # noqa: BLE001 - shown as an actionable UI error
+                        st.error(str(exc))
+            if job.error:
+                st.error(job.error)
+            if job.log_tail:
+                st.code(job.log_tail[-8000:])
+            if job.state == "verified":
+                st.success(
+                    f"Checkpoint: {store.root / 'checkpoints' / job.run_id / 'best.pt'}"
+                )
+            if terminal and job.cleanup_succeeded is True:
+                if job.call_id:
+                    st.success(
+                        "The training container has stopped and the uploaded job files were "
+                        "removed from Modal."
+                    )
+                else:
+                    st.success("Uploaded job files were removed from Modal.")
+            elif terminal and job.cleanup_succeeded is False:
+                if job.call_id:
+                    message = (
+                        "The training container has stopped, but uploaded files could not be "
+                        "removed. Modal may charge for storage until they are removed."
+                    )
+                else:
+                    message = (
+                        "Uploaded files could not be removed. Modal may charge for storage "
+                        "until they are removed."
+                    )
+                if job.cleanup_error:
+                    message += f" Cleanup error: {job.cleanup_error}"
+                st.warning(message)
+
+
+def _render_cloud_credentials(st):
+    import os
+
+    from .cloud.credentials import CloudCredentialsStore
+
+    credentials_store = CloudCredentialsStore()
+    environment_has_id = bool(os.environ.get("MODAL_TOKEN_ID"))
+    environment_has_secret = bool(os.environ.get("MODAL_TOKEN_SECRET"))
+    if environment_has_id or environment_has_secret:
+        try:
+            credentials = credentials_store.resolve()
+        except ValueError as exc:
+            st.error(str(exc))
+            return None
+        st.caption(
+            "Using Modal credentials from environment variables; they override saved credentials."
+        )
+        return credentials
+
+    try:
+        credentials = credentials_store.resolve()
+    except ValueError as exc:
+        st.error(str(exc))
+        credentials = None
+    if credentials is not None:
+        details = credentials.describe()
+        st.caption(
+            f"Modal credentials saved in your user configuration ({details['token_id']}). "
+            "Enter new values below to replace them."
+        )
+    else:
+        st.caption("Save your Modal token ID and token secret in your user configuration.")
+
+    with st.form("modal-cloud-credentials"):
+        token_id = st.text_input("Modal token ID", type="password", key="modal-token-id-input")
+        token_secret = st.text_input(
+            "Modal token secret", type="password", key="modal-token-secret-input"
+        )
+        save = st.form_submit_button("Save Modal credentials")
+    if save:
+        try:
+            credentials_store.save(token_id, token_secret)
+        except (OSError, ValueError) as exc:
+            st.error(str(exc))
+            return credentials
+        st.session_state.pop("modal-token-id-input", None)
+        st.session_state.pop("modal-token-secret-input", None)
+        st.success("Modal credentials saved with owner-only permissions outside the project.")
+        st.rerun()
+        return credentials_store.resolve()
+    return credentials
+
+
+def _render_cloud_training(st, store, snapshot_path, checkpoint, checkpoint_manifest, effective):
+    from .cloud.estimate import GPU_RATES_PER_SECOND
+    from .cloud.modal_transport import ModalTransport
+    from .cloud.models import CloudConsent
+    from .cloud.service import CloudTrainingService
+
+    credentials = _render_cloud_credentials(st)
+    service = CloudTrainingService(store, ModalTransport(credentials))
+    st.warning(
+        "Cloud training uploads the selected labelled images and labels to Modal. "
+        "A valid Modal payment method is required. The estimate and budget-derived "
+        "time limit are not a guaranteed billing cap."
+    )
+    gpu_names = list(GPU_RATES_PER_SECOND)
+    gpu = st.selectbox("Modal GPU", gpu_names, index=gpu_names.index("L4"))
+    max_cost = float(
+        st.number_input("Maximum estimated budget (USD)", min_value=0.1, value=5.0, step=1.0)
+    )
+    try:
+        estimate = service.estimate(
+            snapshot_path,
+            gpu=gpu,
+            epochs=effective.epochs,
+            max_cost_usd=max_cost,
+            image_size=effective.image_size,
+        )
+        st.metric("Estimated training cost", f"${estimate.low_usd:.2f}–${estimate.high_usd:.2f}")
+        st.caption(
+            f"Estimated runtime {estimate.runtime_low_seconds // 60}–"
+            f"{estimate.runtime_high_seconds // 60} minutes; data upload "
+            f"{estimate.upload_time_low_seconds}–{estimate.upload_time_high_seconds} seconds. "
+            f"Prices checked {estimate.rate_checked_at}. {estimate.disclaimer}"
+        )
+        if estimate.rates_stale:
+            st.warning(
+                "The cached provider rates are older than 90 days; refresh them before submitting."
+            )
+    except Exception as exc:  # noqa: BLE001 - shown as an actionable UI error
+        st.error(str(exc))
+        estimate = None
+    configured = credentials is not None
+    if not configured:
+        st.info(
+            "Set Modal credentials with `amphilens cloud login` or both "
+            "MODAL_TOKEN_ID and MODAL_TOKEN_SECRET."
+        )
+    acknowledged = st.checkbox(
+        "I authorize uploading this dataset and checkpoint to Modal, and accept the displayed "
+        "estimate and budget-derived time limit.",
+        key=f"cloud-consent-{store.root}",
+        disabled=estimate is None,
+    )
+    if st.button(
+        "Submit cloud training",
+        type="primary",
+        disabled=estimate is None or not configured,
+    ):
+        if not acknowledged:
+            st.error("Check the dataset-upload and cloud-cost consent box before submitting.")
+        else:
+            try:
+                training_config = {
+                    "epochs": effective.epochs,
+                    "image_size": effective.image_size,
+                    "batch_size": effective.batch_size,
+                    "patience": effective.patience,
+                    "seed": effective.seed,
+                    "device": "cuda",
+                    "evaluation": "not evaluated",
+                }
+                with st.spinner("Preparing and uploading the consented training payload…"):
+                    job = service.submit(
+                        snapshot_path=snapshot_path,
+                        effective_configuration=effective.to_dict(),
+                        training_config=training_config,
+                        consent=CloudConsent(
+                            acknowledged=True,
+                            uploads_dataset=True,
+                            estimated_usd=estimate.high_usd,
+                            max_cost_usd=max_cost,
+                        ),
+                        gpu=gpu,
+                        base_checkpoint=checkpoint or None,
+                        base_manifest=checkpoint_manifest,
+                    )
+                st.success(f"Cloud job submitted: {job.run_id}")
+                st.rerun()
+            except Exception as exc:  # noqa: BLE001 - shown as an actionable UI error
+                st.error(str(exc))
+    return service, credentials
+
+
+def _cloud_training_service_without_credentials(store):
+    from .cloud.modal_transport import ModalTransport
+    from .cloud.service import CloudTrainingService
+
+    return CloudTrainingService(store, ModalTransport(None)), None
 
 
 def _render_predict(st):

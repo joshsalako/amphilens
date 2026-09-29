@@ -20,6 +20,9 @@ planned detector-training and remote-execution feature is production ready.
 
 ## [Unreleased]
 
+- Add optional Modal cloud GPU training with explicit upload/cost consent,
+  durable job records, progress and cancellation, and checksum-verified local
+  checkpoint registration.
 - Continue hardening manifests, annotation validation, detector contracts,
   training workflows, and release automation.
 - Add direct CVAT project listing and whole-project initial dataset import

@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import os
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -223,6 +224,10 @@ def _save_torch_checkpoint(torch, path: Path, value: dict[str, Any]) -> None:
         raise
 
 
+def _selected_checkpoint_name(config: dict[str, Any]) -> str:
+    return "last.pt" if isinstance(config.get("cloud"), dict) else "best.pt"
+
+
 class FasterRCNNTrainer:
     """Train a torchvision Faster R-CNN model from a CVAT/YOLO bundle."""
 
@@ -238,6 +243,7 @@ class FasterRCNNTrainer:
         config: dict[str, Any],
         initial_checkpoint: str | Path | None = None,
         resume_from: str | Path | None = None,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> Path:
         try:
             import torch
@@ -327,8 +333,18 @@ class FasterRCNNTrainer:
             if average_loss <= best_loss:
                 best_loss = average_loss
                 _save_torch_checkpoint(torch, output / "best.pt", state)
+            if progress_callback is not None:
+                completed = epoch - start_epoch + 1
+                progress_callback(
+                    {
+                        "epoch": completed,
+                        "epochs": epochs,
+                        "progress": min(1.0, completed / epochs),
+                        "train_loss": average_loss,
+                    }
+                )
         atomic_write_json(
             output / "metrics.json",
             {"evaluation": "not evaluated", "epochs": metrics, "classes": self.classes},
         )
-        return output / "best.pt"
+        return output / _selected_checkpoint_name(config)

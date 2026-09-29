@@ -14,13 +14,15 @@ class FixtureTrainer:
     architecture = "yolo"
     classes = ["toad"]
 
-    def train(self, dataset_yaml, output_dir, config, resume_from=None):
+    def train(self, dataset_yaml, output_dir, config, resume_from=None, progress_callback=None):
         self.dataset_yaml = Path(dataset_yaml)
         self.resume_from = resume_from
         output = Path(output_dir)
         output.mkdir(parents=True, exist_ok=True)
         checkpoint = output / "best.pt"
         checkpoint.write_bytes(b"fixture-checkpoint")
+        if progress_callback is not None:
+            progress_callback({"epoch": 1, "epochs": int(config.get("epochs", 1)), "progress": 1.0})
         return checkpoint
 
 
@@ -49,6 +51,33 @@ def test_training_config_preserves_effective_configuration_metadata():
     config = TrainingConfig(metadata={"effective_configuration": {"fingerprint": "abc123"}})
 
     assert config.to_dict()["metadata"]["effective_configuration"]["fingerprint"] == "abc123"
+
+
+def test_shared_training_finalization_persists_cloud_provenance_and_reports_progress(
+    tmp_path: Path,
+):
+    progress = []
+    result = train_and_register(
+        FixtureTrainer(),
+        dataset_yaml=tmp_path / "dataset.yaml",
+        output_dir=tmp_path / "cloud-run",
+        config=TrainingConfig(epochs=2, image_size=640, seed=17),
+        preprocessing={"name": "none"},
+        progress_callback=progress.append,
+        extra_training_config={
+            "cloud": {
+                "provider": "modal",
+                "job_key": "job-123",
+                "gpu": "L4",
+                "effective_fingerprint": "config-456",
+            }
+        },
+    )
+
+    saved = json.loads((tmp_path / "cloud-run" / "checkpoint.json").read_text())
+    assert saved["training_config"]["cloud"]["job_key"] == "job-123"
+    assert result.manifest.training_config["cloud"]["effective_fingerprint"] == "config-456"
+    assert progress == [{"epoch": 1, "epochs": 2, "progress": 1.0}]
 
 
 def test_training_from_snapshot_prepares_labels_with_the_same_preprocessing(tmp_path: Path):

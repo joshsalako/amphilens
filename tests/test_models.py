@@ -9,6 +9,7 @@ from amphilens.models import FasterRCNNDetector, UltralyticsDetector, load_detec
 from amphilens.models.backends import OptionalDependencyError, _select_torch_device
 from amphilens.models.faster_rcnn_training import (
     FasterRCNNDatasetSpec,
+    _selected_checkpoint_name,
     parse_yolo_label_lines,
 )
 
@@ -44,7 +45,8 @@ class FakeUltralyticsModel:
 
     def train(self, **kwargs):
         self.train_calls = kwargs
-        checkpoint = Path(kwargs["project"]) / kwargs["name"] / "weights" / "best.pt"
+        weight_name = "best.pt" if kwargs.get("val", True) else "last.pt"
+        checkpoint = Path(kwargs["project"]) / kwargs["name"] / "weights" / weight_name
         checkpoint.parent.mkdir(parents=True, exist_ok=True)
         checkpoint.write_bytes(b"trained")
         return SimpleNamespace(save_dir=checkpoint.parent.parent)
@@ -136,6 +138,21 @@ def test_ultralytics_adapter_passes_resume_checkpoint_to_training(tmp_path: Path
 
     assert result.is_file()
     assert model.train_calls["resume"] == str(parent)
+    assert model.train_calls["val"] is True
+
+
+def test_ultralytics_cloud_training_uses_last_weights_without_validation(tmp_path: Path):
+    detector = UltralyticsDetector(tmp_path / "base.pt", "yolo", ["toad"])
+    model = FakeUltralyticsModel(None)
+    detector._model = model
+    provenance = {"provider": "modal"}
+    config = {"epochs": 1, "evaluation": "not evaluated", "cloud": provenance}
+
+    result = detector.train(tmp_path / "dataset.yaml", tmp_path / "output", config)
+
+    assert result.name == "last.pt"
+    assert model.train_calls["val"] is False
+    assert provenance["checkpoint_selection"] == "last-no-validation"
 
 
 def test_load_detector_rejects_missing_and_stale_checkpoints(tmp_path: Path):
@@ -214,6 +231,11 @@ def test_faster_rcnn_label_parser_rejects_unknown_classes_and_bad_boxes(tmp_path
         parse_yolo_label_lines(["1 0.5 0.5 0.4 0.6"], 40, 30, class_count=1)
     with pytest.raises(ValueError, match="within the image"):
         parse_yolo_label_lines(["0 0.1 0.5 0.4 0.6"], 40, 30, class_count=1)
+
+
+def test_faster_rcnn_cloud_training_selects_last_weights_without_validation():
+    assert _selected_checkpoint_name({"cloud": {"provider": "modal"}}) == "last.pt"
+    assert _selected_checkpoint_name({}) == "best.pt"
 
 
 def test_faster_rcnn_training_rejects_missing_base_checkpoint(tmp_path: Path):

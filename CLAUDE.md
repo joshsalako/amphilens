@@ -44,7 +44,9 @@ uv run --locked amphilens --help      # CLI command set
 ```
 
 Environment variables: `CVAT_URL` and `CVAT_TOKEN` for managed CVAT; `AMPHILENS_PROJECT_ROOT` and
-`AMPHILENS_MODEL_ROOT` for the Docker/Compose layouts.
+`AMPHILENS_MODEL_ROOT` for the Docker/Compose layouts. Optional cloud training accepts
+`MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET` or a user-scoped credential file created by
+`amphilens cloud login`.
 
 ## Architecture
 
@@ -103,6 +105,11 @@ never substituted with hard-coded difficulty values.
 suite never touches the network. Managed cycles are keyed by `selection_hash` and idempotent: the
 same selection resumes the same task, a changed selection is rejected. `CVAT_TOKEN` is read from the
 environment only and must never reach a manifest, log, CSV, URL, or commit.
+
+**Cloud training is opt-in and provider-isolated.** `CloudTrainingService` persists consented
+jobs and verifies every downloaded artifact before registration. Modal imports stay inside
+`cloud/modal_app.py` and `ModalTransport` operations. Tests must not use real Modal credentials
+or launch paid work; exercise the worker and transport with local fixtures and fakes.
 
 ## Working rules
 

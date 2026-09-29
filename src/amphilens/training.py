@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -55,6 +56,8 @@ def train_and_register(
     config: TrainingConfig,
     preprocessing: PreprocessingConfig | dict[str, Any] | str,
     resume_from: CheckpointManifest | None = None,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    extra_training_config: dict[str, Any] | None = None,
 ) -> TrainingResult:
     output = Path(output_dir).expanduser().resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -67,18 +70,45 @@ def train_and_register(
         else PreprocessingConfig.from_any(preprocessing).to_dict()
     )
     training_config["preprocessing"] = preprocessing_data
-    checkpoint = (
-        Path(
-            detector.train(
-                dataset_yaml,
-                output,
-                training_config,
-                resume_from=resume_from,
-            )
-        )
-        .expanduser()
-        .resolve()
+    for key, value in (extra_training_config or {}).items():
+        if key == "cloud" and not isinstance(value, dict):
+            raise ValidationError("Cloud training provenance must be a mapping")
+        training_config[key] = value
+    train_options = {"resume_from": resume_from}
+    if progress_callback is not None:
+        train_options["progress_callback"] = progress_callback
+    checkpoint = Path(
+        detector.train(dataset_yaml, output, training_config, **train_options)
+    ).expanduser().resolve()
+    return finalize_training_outputs(
+        detector,
+        checkpoint=checkpoint,
+        output_dir=output,
+        config=config,
+        preprocessing=preprocessing_data,
+        resume_from=resume_from,
+        training_config=training_config,
     )
+
+
+def finalize_training_outputs(
+    detector,
+    *,
+    checkpoint: str | Path,
+    output_dir: str | Path,
+    config: TrainingConfig,
+    preprocessing: dict[str, Any],
+    resume_from: CheckpointManifest | None = None,
+    training_config: dict[str, Any] | None = None,
+) -> TrainingResult:
+    """Materialize the canonical local artifacts and provenance for one training run."""
+    output = Path(output_dir).expanduser().resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    checkpoint = Path(checkpoint).expanduser().resolve()
+    if not checkpoint.is_file():
+        raise ValidationError(f"Training checkpoint does not exist: {checkpoint}")
+    final_training_config = dict(training_config or config.to_dict())
+    final_training_config["preprocessing"] = dict(preprocessing)
     best_checkpoint = output / "best.pt"
     if checkpoint != best_checkpoint:
         shutil.copy2(checkpoint, best_checkpoint)
@@ -101,9 +131,9 @@ def train_and_register(
         model_id=detector.model_id,
         architecture=detector.architecture,
         classes=detector.classes,
-        preprocessing=preprocessing_data,
+        preprocessing=preprocessing,
         parent_checkpoint=resume_from.checkpoint_path if resume_from else None,
-        training_config=training_config,
+        training_config=final_training_config,
     )
     atomic_write_json(output / "checkpoint.json", manifest.to_dict())
     return TrainingResult(checkpoint=best_checkpoint, manifest=manifest)
@@ -117,6 +147,8 @@ def train_snapshot_and_register(
     config: TrainingConfig,
     preprocessing: PreprocessingConfig | dict[str, Any] | str | None = None,
     resume_from: CheckpointManifest | None = None,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    extra_training_config: dict[str, Any] | None = None,
 ) -> TrainingResult:
     """Prepare an immutable snapshot and train through the existing adapter contract."""
     output = Path(output_dir).expanduser().resolve()
@@ -132,6 +164,8 @@ def train_snapshot_and_register(
         config=config,
         preprocessing=selected.to_dict(),
         resume_from=resume_from,
+        progress_callback=progress_callback,
+        extra_training_config=extra_training_config,
     )
 
 

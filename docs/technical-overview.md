@@ -26,6 +26,10 @@ The complete user behavior is defined in the
   workflow.
 - `amphilens.annotations` provides portable CVAT/COCO/YOLO exchange and the
   optional managed CVAT SDK transport.
+- `amphilens.cloud` stores consented cloud jobs in project run records, prepares
+  a deterministic privacy-filtered payload, and verifies downloaded artifacts
+  before registration. `ModalTransport` loads the provider SDK lazily; only
+  `cloud/modal_app.py` imports Modal at module scope.
 
 The package keeps source images untouched. Derived files are written to the
 project's artifact directories and retain mappings back to their source files.
@@ -221,7 +225,23 @@ The portable exchange remains the recovery path when CVAT is unavailable or
 credentials cannot be used. AmphiLens never deletes CVAT projects or tasks
 automatically.
 
-## 7. Project outputs
+## 7. Cloud GPU training
+
+Cloud jobs reuse the same detector adapters and `train_and_register` finalizer
+as local training. The local orchestration service owns consent, payload
+identity, estimates, job records, cancellation, result verification, and
+artifact registration. The provider transport owns Volume upload/download and
+Modal FunctionCall operations. The remote worker verifies the uploaded code
+digest and payload before it trains. The optional Modal SDK is imported only by
+the cloud entry point or on the first transport operation; importing the UI,
+CLI, or dependency-light package does not require Modal.
+
+The worker runs in one detached, ephemeral Modal invocation with application
+retries disabled and a budget-derived deadline. Modal GPU functions can be
+preempted. Runtime assumptions and estimate limitations are documented in the
+[cloud training guide](cloud-training.md).
+
+## 8. Project outputs
 
 Projects contain a manifest, run records, annotations, artifacts, an artifact
 index, and checkpoints. Prediction runs can include:
@@ -237,7 +257,7 @@ preprocessing, thresholds, image size, seed, software version, parent
 checkpoint, and output paths. Checkpoints are reusable only when their
 compatibility metadata matches the new project.
 
-## 8. Python API
+## 9. Python API
 
 ```python
 from amphilens import InferenceConfig, ProjectManifest, ProjectStore
@@ -252,7 +272,7 @@ store.create(manifest)
 run = store.start_run(InferenceConfig(model_id="wlt-yolo", confidence=0.25))
 ```
 
-## 9. Development and verification
+## 10. Development and verification
 
 Install the optional development dependencies and run the test suite:
 

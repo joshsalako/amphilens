@@ -27,12 +27,14 @@ class DoctorReport:
     opencv_installed: bool = False
     yaml_installed: bool = False
     cvat_sdk_installed: bool = False
+    modal_token_present: bool = False
+    modal_connectivity: str = "not checked"
 
     def to_dict(self):
         return asdict(self)
 
 
-def run_doctor(path: str | Path = ".") -> DoctorReport:
+def run_doctor(path: str | Path = ".", *, check_cloud: bool = False) -> DoctorReport:
     usage = shutil.disk_usage(Path(path).expanduser().resolve())
     torch_installed = importlib.util.find_spec("torch") is not None
     cuda_available = False
@@ -43,6 +45,24 @@ def run_doctor(path: str | Path = ".") -> DoctorReport:
             cuda_available = bool(torch.cuda.is_available())
         except Exception:
             cuda_available = False
+    try:
+        from .cloud.credentials import CloudCredentialsStore
+
+        modal_credentials = CloudCredentialsStore().resolve()
+    except Exception:
+        modal_credentials = None
+    modal_connectivity = "not checked"
+    if check_cloud:
+        if modal_credentials is None:
+            modal_connectivity = "not configured"
+        else:
+            try:
+                from .cloud.modal_transport import ModalTransport
+
+                ModalTransport(modal_credentials).probe()
+                modal_connectivity = "connected"
+            except Exception:
+                modal_connectivity = "failed; run `amphilens cloud diagnose` for details"
     return DoctorReport(
         python=sys.version.split()[0],
         platform=platform.platform(),
@@ -57,4 +77,6 @@ def run_doctor(path: str | Path = ".") -> DoctorReport:
         opencv_installed=importlib.util.find_spec("cv2") is not None,
         yaml_installed=importlib.util.find_spec("yaml") is not None,
         cvat_sdk_installed=importlib.util.find_spec("cvat_sdk") is not None,
+        modal_token_present=modal_credentials is not None,
+        modal_connectivity=modal_connectivity,
     )

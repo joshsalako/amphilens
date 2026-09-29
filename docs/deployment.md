@@ -126,9 +126,28 @@ docker compose --profile cuda run --rm amphilens-cuda doctor
 The Docker images are foundations. Pin and test the CUDA/PyTorch combination
 for the target machine before production training.
 
-## 7. Future remote execution
+## 7. Train on a Modal cloud GPU
 
-Remote execution will use the same project and artifact contracts through SSH,
-Slurm, Docker workers, and provider-neutral cloud workers. Hosted deployment
-will require separate APIs, queues, object storage, authentication, and
-multi-user isolation; those components are not part of local v1.
+Cloud training is an optional single-user workflow using the current user's
+Modal account. It needs the cloud extra, credentials, network access, and a
+valid Modal payment method:
+
+```bash
+uv sync --locked --python 3.11 \
+  --extra cli --extra ui --extra inference --extra training --extra cloud
+amphilens cloud login
+amphilens cloud diagnose
+```
+
+The app uploads a prepared copy of the selected labelled snapshot and any
+selected base checkpoint only after the user accepts the upload and cost
+consent. Local projects and result registration stay on the client. Use the
+same **Train model** workflow and choose **Modal cloud GPU**, or run
+`amphilens cloud estimate` and `amphilens cloud train`. Cloud jobs run in a
+detached ephemeral Modal invocation with bounded concurrency and a
+budget-derived time limit. The local job record survives app restarts.
+
+Install the `cvat` extra separately when CVAT workflows are also needed. Read
+the [cloud training guide](cloud-training.md) for estimates, payload contents,
+credential priority, status, cancellation, and cleanup. Institutional SSH,
+Slurm, and hosted multi-user execution are still future work.

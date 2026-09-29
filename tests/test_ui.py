@@ -1,5 +1,6 @@
 import inspect
 import runpy
+from contextlib import nullcontext
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,8 @@ from amphilens.preprocessing import PreprocessingConfig
 from amphilens.state import UserStateStore
 from amphilens.ui import (
     _folder_input,
+    _render_cloud_credentials,
+    _render_environment,
     active_project_path,
     clear_active_project,
     cvat_project_choices,
@@ -169,6 +172,97 @@ def test_folder_input_uses_a_path_field_without_a_native_dialog():
     )
 
     assert value == "/tmp/amphilens-project"
+
+
+def test_cloud_credentials_form_saves_password_fields_outside_project(
+    monkeypatch, tmp_path
+):
+    from amphilens.cloud import credentials as cloud_credentials
+
+    credential_path = tmp_path / "user-state" / "credentials.json"
+    monkeypatch.setattr(
+        cloud_credentials,
+        "default_credentials_path",
+        lambda: credential_path,
+    )
+    monkeypatch.delenv("MODAL_TOKEN_ID", raising=False)
+    monkeypatch.delenv("MODAL_TOKEN_SECRET", raising=False)
+
+    class FakeStreamlit:
+        session_state = {}
+
+        def __init__(self):
+            self.labels = []
+            self.captions = []
+
+        def caption(self, value):
+            self.captions.append(value)
+
+        def form(self, key):
+            assert key == "modal-cloud-credentials"
+            return nullcontext()
+
+        def text_input(self, label, *, type, key):
+            self.labels.append((label, type, key))
+            return "token-id-value" if "id" in key else "token-secret-value"
+
+        def form_submit_button(self, label):
+            assert label == "Save Modal credentials"
+            return True
+
+        def success(self, message):
+            assert "owner-only" in message
+
+        def rerun(self):
+            return None
+
+        def error(self, message):
+            raise AssertionError(message)
+
+    st = FakeStreamlit()
+    result = _render_cloud_credentials(st)
+
+    assert [(label, field_type) for label, field_type, _ in st.labels] == [
+        ("Modal token ID", "password"),
+        ("Modal token secret", "password"),
+    ]
+    assert "token-secret-value" not in " ".join(st.captions)
+    assert result is not None
+    assert credential_path.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("check_cloud", [False, True])
+def test_environment_page_probes_modal_only_after_explicit_click(monkeypatch, check_cloud):
+    from amphilens import doctor
+
+    calls = []
+
+    class Report:
+        def to_dict(self):
+            return {"torch_installed": True, "modal_connectivity": "not checked"}
+
+    def fake_run_doctor(path, *, check_cloud=False):
+        calls.append(check_cloud)
+        return Report()
+
+    class FakeStreamlit:
+        def header(self, _label):
+            return None
+
+        def button(self, label):
+            assert label == "Check Modal connectivity"
+            return check_cloud
+
+        def json(self, _value):
+            return None
+
+        def caption(self, _value):
+            return None
+
+    monkeypatch.setattr(doctor, "run_doctor", fake_run_doctor)
+    _render_environment(FakeStreamlit())
+
+    assert calls == [check_cloud]
 
 
 def test_ui_contains_no_tkinter_or_native_window_code():

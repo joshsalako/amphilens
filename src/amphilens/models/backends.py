@@ -131,6 +131,7 @@ class UltralyticsDetector:
         output_dir: str | Path,
         config: dict,
         resume_from: CheckpointManifest | None = None,
+        progress_callback=None,
     ) -> Path:
         model = self._load()
         output = Path(output_dir).expanduser().resolve()
@@ -141,6 +142,8 @@ class UltralyticsDetector:
                 classes=self.classes,
                 preprocessing=config.get("preprocessing", {}),
             )
+        cloud_provenance = config.get("cloud")
+        is_cloud_training = isinstance(cloud_provenance, dict)
         train_config = {
             "data": str(dataset_yaml),
             "project": str(output),
@@ -149,19 +152,38 @@ class UltralyticsDetector:
             "imgsz": int(config.get("image_size", 640)),
             "batch": int(config.get("batch_size", 16)),
             "device": config.get("device", "auto"),
+            "val": bool(config.get("val", not is_cloud_training)),
             "patience": int(config.get("patience", 25)),
             "seed": int(config.get("seed", 42)),
             "exist_ok": True,
         }
         if resume_from is not None:
             train_config["resume"] = str(resume_from.checkpoint_path)
+        if progress_callback is not None:
+            def report_epoch(trainer):
+                total = max(1, int(getattr(trainer, "epochs", train_config["epochs"])))
+                epoch = max(0, int(getattr(trainer, "epoch", -1)) + 1)
+                progress_callback(
+                    {
+                        "epoch": min(epoch, total),
+                        "epochs": total,
+                        "progress": min(1.0, max(0.0, epoch / total)),
+                    }
+                )
+
+            model.add_callback("on_fit_epoch_end", report_epoch)
         results = model.train(
             **train_config,
         )
         save_dir = Path(getattr(results, "save_dir", output / str(config.get("run_name", "train"))))
         checkpoint = save_dir / "weights" / "best.pt"
+        if is_cloud_training:
+            checkpoint = save_dir / "weights" / "last.pt"
+            cloud_provenance["checkpoint_selection"] = "last-no-validation"
         if not checkpoint.is_file():
-            raise RuntimeError(f"Training completed without a best checkpoint at {checkpoint}")
+            raise RuntimeError(
+                f"Training completed without the selected checkpoint at {checkpoint}"
+            )
         return checkpoint
 
 
@@ -253,7 +275,9 @@ class FasterRCNNDetector:
                     preprocessing=config.preprocessing_fingerprint,
                 )
 
-    def train(self, dataset_yaml, output_dir, config, resume_from=None) -> Path:
+    def train(
+        self, dataset_yaml, output_dir, config, resume_from=None, progress_callback=None
+    ) -> Path:
         from .faster_rcnn_training import FasterRCNNTrainer
 
         if self.checkpoint is not None and not self.checkpoint.is_file():
@@ -276,6 +300,7 @@ class FasterRCNNDetector:
             config,
             initial_checkpoint=self.checkpoint,
             resume_from=resume_checkpoint,
+            progress_callback=progress_callback,
         )
 
 

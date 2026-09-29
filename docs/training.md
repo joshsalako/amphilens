@@ -126,6 +126,14 @@ The trainer writes `best.pt`, `last.pt`, `metrics.json`, and a checkpoint
 manifest. The manifest records classes, preprocessing, configuration, and
 software information.
 
+For a Modal cloud GPU, install the optional `cloud` extra and choose **Modal
+cloud GPU** from the training location control. Cloud training requires an
+explicit dataset-upload and cost consent, uploads a prepared copy of the
+selected snapshot, and registers results only after checksum and compatibility
+checks. The local training workflow remains available. Follow the
+[cloud training guide](cloud-training.md) for credentials, estimates, billing
+limits, progress, cleanup, and the CLI commands.
+
 The CLI equivalent is:
 
 ```bash

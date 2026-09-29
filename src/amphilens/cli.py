@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import getpass
 import json
 import os
 import subprocess
@@ -76,15 +77,232 @@ if typer is not None:
     cvat_app = typer.Typer(help="Exchange annotations with CVAT and compatible tools.")
     dataset_app = typer.Typer(help="Import and merge immutable annotated datasets.")
     checkpoint_app = typer.Typer(help="Register and inspect reusable checkpoints.")
+    cloud_app = typer.Typer(help="Submit and manage consented Modal cloud GPU training jobs.")
     app.add_typer(project_app, name="project")
     app.add_typer(cvat_app, name="cvat")
     app.add_typer(dataset_app, name="dataset")
     app.add_typer(checkpoint_app, name="checkpoint")
+    app.add_typer(cloud_app, name="cloud")
 
     @app.command()
-    def doctor(path: str = "."):
+    def doctor(
+        path: str = ".",
+        check_cloud: bool = typer.Option(False, "--check-cloud", help="Probe Modal connectivity."),
+    ):
         """Report local CPU, disk, ML dependency, and CUDA status."""
-        typer.echo(json.dumps(run_doctor(path).to_dict(), indent=2))
+        typer.echo(json.dumps(run_doctor(path, check_cloud=check_cloud).to_dict(), indent=2))
+
+    def _cloud_service(project_dir: Path | None = None, *, resolve_credentials: bool = True):
+        from .cloud.credentials import CloudCredentialsStore
+        from .cloud.modal_transport import ModalTransport
+        from .cloud.service import CloudTrainingService
+
+        try:
+            credentials = CloudCredentialsStore().resolve() if resolve_credentials else None
+        except ValueError:
+            if resolve_credentials:
+                raise
+            credentials = None
+        store = ProjectStore(project_dir) if project_dir is not None else None
+        service = CloudTrainingService(store, ModalTransport(credentials)) if store else None
+        return service, credentials
+
+    @cloud_app.command("login")
+    def cloud_login():
+        """Save Modal credentials in the user configuration directory."""
+        from .cloud.credentials import CloudCredentialsStore
+
+        token_id = getpass.getpass("Modal token ID: ")
+        token_secret = getpass.getpass("Modal token secret: ")
+        credentials = CloudCredentialsStore()
+        credentials.save(token_id, token_secret)
+        typer.echo(f"Modal credentials saved with owner-only permissions at {credentials.path}")
+
+    @cloud_app.command("logout")
+    def cloud_logout():
+        """Remove Modal credentials saved in the user configuration directory."""
+        from .cloud.credentials import CloudCredentialsStore
+
+        credentials = CloudCredentialsStore()
+        credentials.clear()
+        typer.echo(f"Removed saved Modal credentials from {credentials.path}")
+
+    @cloud_app.command("diagnose")
+    def cloud_diagnose():
+        """Check whether Modal credentials are configured and can reach Modal."""
+        from .cloud.credentials import CloudCredentialsStore
+        from .cloud.modal_transport import ModalTransport
+
+        try:
+            credentials = CloudCredentialsStore().resolve()
+            if credentials is None:
+                typer.echo(
+                    json.dumps({"configured": False, "connectivity": "not configured"}, indent=2)
+                )
+                raise typer.Exit(1)
+            result = ModalTransport(credentials).probe()
+            typer.echo(json.dumps({"configured": True, **result}, indent=2))
+        except typer.Exit:
+            raise
+        except Exception as exc:  # noqa: BLE001 - CLI presents an actionable diagnostic
+            typer.echo(
+                json.dumps(
+                    {"configured": True, "connectivity": "failed", "error": str(exc)}, indent=2
+                )
+            )
+            raise typer.Exit(1) from exc
+
+    @cloud_app.command("estimate")
+    def cloud_estimate(
+        project_dir: Path,
+        snapshot: Path | None = typer.Option(None, "--snapshot"),
+        gpu: str = typer.Option("L4", "--gpu"),
+        epochs: int | None = typer.Option(None, "--epochs"),
+        image_size: int | None = typer.Option(None, "--image-size"),
+        max_cost_usd: float = typer.Option(5.0, "--max-cost-usd"),
+    ):
+        """Estimate the time and cost range before a cloud training upload."""
+        store = ProjectStore(project_dir)
+        selected = DatasetSnapshot.load(snapshot) if snapshot else _latest_snapshot(store)
+        service, _ = _cloud_service(project_dir, resolve_credentials=False)
+        project = store.load_manifest()
+        estimate = service.estimate(
+            selected.root,
+            gpu=gpu,
+            epochs=project.project_config.epochs if epochs is None else epochs,
+            image_size=(
+                project.project_config.image_size if image_size is None else image_size
+            ),
+            max_cost_usd=max_cost_usd,
+        )
+        typer.echo(json.dumps(estimate.to_dict(), indent=2))
+
+    @cloud_app.command("train")
+    def cloud_train(
+        project_dir: Path,
+        snapshot: Path | None = typer.Option(None, "--snapshot"),
+        checkpoint: Path | None = typer.Option(None, "--checkpoint"),
+        resume_from: Path | None = typer.Option(None, "--resume-from"),
+        model_preset: str | None = typer.Option(None, "--model-preset"),
+        epochs: int | None = typer.Option(None, "--epochs"),
+        batch_size: int | None = typer.Option(None, "--batch-size"),
+        gpu: str = typer.Option("L4", "--gpu"),
+        max_cost_usd: float = typer.Option(5.0, "--max-cost-usd"),
+    ):
+        """Upload one labelled snapshot with consent and submit a GPU training job."""
+        from .cloud.models import CloudConsent
+
+        store = ProjectStore(project_dir)
+        project = store.load_manifest()
+        selected_snapshot = DatasetSnapshot.load(snapshot) if snapshot else _latest_snapshot(store)
+        parent_manifest = load_checkpoint_manifest(resume_from) if resume_from else None
+        if parent_manifest is not None:
+            parent_checkpoint = Path(parent_manifest.checkpoint_path)
+            if checkpoint is not None and checkpoint.expanduser().resolve() != parent_checkpoint:
+                raise ValueError("--checkpoint and --resume-from must refer to the same checkpoint")
+            checkpoint = parent_checkpoint
+        checkpoint_manifest = parent_manifest or (
+            discover_checkpoint_manifest(checkpoint) if checkpoint is not None else None
+        )
+        overrides = {"device": "cuda"}
+        if model_preset is not None:
+            overrides["model_preset"] = model_preset
+        if epochs is not None:
+            overrides["epochs"] = epochs
+        if batch_size is not None:
+            overrides["batch_size"] = batch_size
+        effective = resolve_effective_configuration(
+            project,
+            checkpoint_manifest=checkpoint_manifest,
+            checkpoint_path=checkpoint,
+            overrides=overrides,
+        )
+        service, credentials = _cloud_service(project_dir)
+        if credentials is None:
+            raise ValueError("Modal credentials are not configured; run `amphilens cloud login`")
+        estimate = service.estimate(
+            selected_snapshot.root,
+            gpu=gpu,
+            epochs=effective.epochs,
+            image_size=effective.image_size,
+            max_cost_usd=max_cost_usd,
+        )
+        typer.echo(json.dumps(estimate.to_dict(), indent=2))
+        typer.confirm(
+            "Upload this labelled dataset and selected checkpoint to Modal, and accept the "
+            f"${estimate.low_usd:.2f}–${estimate.high_usd:.2f} estimate with a "
+            f"${max_cost_usd:.2f} budget-derived time limit? The estimate is not a "
+            "guaranteed bill cap.",
+            default=False,
+            abort=True,
+        )
+        job = service.submit(
+            snapshot_path=selected_snapshot.root,
+            effective_configuration=effective.to_dict(),
+            training_config={
+                "epochs": effective.epochs,
+                "image_size": effective.image_size,
+                "batch_size": effective.batch_size,
+                "patience": effective.patience,
+                "seed": effective.seed,
+                "device": "cuda",
+                "evaluation": "not evaluated",
+            },
+            consent=CloudConsent(
+                acknowledged=True,
+                uploads_dataset=True,
+                estimated_usd=estimate.high_usd,
+                max_cost_usd=max_cost_usd,
+            ),
+            gpu=gpu,
+            base_checkpoint=checkpoint,
+            base_manifest=checkpoint_manifest,
+        )
+        typer.echo(json.dumps(job.to_dict(), indent=2))
+
+    @cloud_app.command("status")
+    def cloud_status(
+        project_dir: Path,
+        run_id: str,
+        refresh: bool = typer.Option(True, "--refresh/--no-refresh"),
+    ):
+        """Read a saved cloud job, optionally polling Modal for fresh status."""
+        service, _ = _cloud_service(project_dir)
+        record = service.refresh(run_id) if refresh else service.get_job(run_id)
+        typer.echo(json.dumps(record.to_dict(), indent=2))
+
+    @cloud_app.command("collect")
+    def cloud_collect(project_dir: Path, run_id: str):
+        """Download, verify, and register a finished cloud checkpoint."""
+        service, _ = _cloud_service(project_dir)
+        record = service.collect(run_id)
+        typer.echo(
+            json.dumps(
+                {
+                    "state": record.state,
+                    "checkpoint": str(
+                        ProjectStore(project_dir).root / "checkpoints" / run_id / "best.pt"
+                    ),
+                    "manifest": record.checkpoint_manifest.to_dict(),
+                    "cleanup_succeeded": record.cleanup_succeeded,
+                },
+                indent=2,
+            )
+        )
+
+    @cloud_app.command("cancel")
+    def cloud_cancel(project_dir: Path, run_id: str):
+        """Cancel an active cloud GPU job."""
+        service, _ = _cloud_service(project_dir)
+        record = service.cancel(run_id)
+        typer.echo(json.dumps(record.to_dict(), indent=2))
+
+    @cloud_app.command("cleanup")
+    def cloud_cleanup(project_dir: Path, run_id: str):
+        """Retry removal of the remote payload and artifacts after a terminal job."""
+        service, _ = _cloud_service(project_dir)
+        record = service.retry_cleanup(run_id)
+        typer.echo(json.dumps(record.to_dict(), indent=2))
 
     @project_app.command("create")
     def project_create(

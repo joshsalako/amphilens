@@ -9,7 +9,8 @@ camera-trap images. It helps conservation and ecology teams:
 - download predictions, reports, and review images.
 
 Your images stay on your computer unless you deliberately send a review queue
-to a CVAT server.
+to a CVAT server or choose cloud training and approve uploading a labelled
+dataset to Modal.
 
 ## What the app does
 
@@ -48,6 +49,13 @@ For the managed CVAT workflow, include the CVAT extra:
 ```bash
 uv sync --locked --python 3.11 \
   --extra cli --extra ui --extra inference --extra training --extra cvat
+```
+
+For optional cloud GPU training, also include the cloud extra:
+
+```bash
+uv sync --locked --python 3.11 \
+  --extra cli --extra ui --extra inference --extra training --extra cloud
 ```
 
 If `uv` is not available, use a normal Python virtual environment:
@@ -104,6 +112,16 @@ open automatically.
 
 The **Environment** page shows whether the computer has the libraries, disk
 space, and GPU needed for the selected workflow.
+
+## Optional: train on a cloud GPU
+
+Cloud training sends the selected labelled snapshot and any selected base
+checkpoint to your Modal account after you approve the upload and cost estimate.
+It requires the `cloud` extra, Modal credentials, and a valid Modal payment
+method. Open **Train model**, save your Modal credentials in the masked fields
+or run `amphilens cloud login`, then choose **Modal cloud GPU**. See the
+[cloud training guide](docs/cloud-training.md) for privacy, cost, status,
+cancellation, and cleanup details.
 
 ## 4. Create a project
 
