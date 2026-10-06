@@ -5,8 +5,6 @@ from __future__ import annotations
 import getpass
 import json
 import os
-import subprocess
-import sys
 from pathlib import Path
 
 try:
@@ -553,15 +551,23 @@ if typer is not None:
         )
 
     @app.command("app")
-    def app_ui():
+    def app_ui(
+        host: str = typer.Option("127.0.0.1", "--host", help="Address for the browser app."),
+        port: int = typer.Option(8501, "--port", min=1, max=65535),
+    ):
         """Launch the local browser application."""
-        ui_path = Path(__file__).with_name("ui.py")
         try:
-            subprocess.run([sys.executable, "-m", "streamlit", "run", str(ui_path)], check=True)
-        except FileNotFoundError as exc:
+            import uvicorn
+        except ImportError as exc:  # pragma: no cover - optional runtime
             raise RuntimeError(
-                "The UI requires the 'ui' extra: pip install 'amphilens[ui]'"
+                "The browser app requires the 'web' extra: pip install 'amphilens[web]'"
             ) from exc
+        uvicorn.run(
+            "amphilens.webapp:app",
+            host=host,
+            port=port,
+            log_level="info",
+        )
 
     @app.command()
     def images(project_dir: Path):

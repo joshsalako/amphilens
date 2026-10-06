@@ -28,7 +28,7 @@ ruff check src tests
 
 ```bash
 # Install all extras, then build a wheel + sdist
-uv sync --locked --python 3.11 --extra cli --extra ui --extra inference --extra training
+uv sync --locked --python 3.11 --extra cli --extra web --extra inference --extra training
 python -m build
 ```
 
@@ -39,7 +39,7 @@ works inside an installed environment. There is no `conftest.py`; tests use `tmp
 
 ```bash
 uv run --locked amphilens doctor      # CPU / disk / ML dependency / CUDA report
-uv run --locked amphilens app         # launches Streamlit on :8501
+uv run --locked amphilens app         # launches the local browser app on :8501
 uv run --locked amphilens --help      # CLI command set
 ```
 
@@ -60,7 +60,7 @@ on-disk project layout (`manifest.json`, `runs/`, `artifacts/`, `checkpoints/`, 
 **Every write goes through `atomic_write_json` / `read_json`.** They replace-by-rename and recover an
 interrupted temporary write. Do not call `json.dump` onto a manifest directly.
 
-**UI and CLI are thin adapters.** `cli.py` (Typer) and `ui.py` (Streamlit) both call the same
+**Browser app and CLI are thin adapters.** `cli.py` (Typer) and the web API both call the same
 services, and the canonical workflow spec requires it stay that way: *"Do not add a second CVAT
 parser or a separate UI-only import path."* New user-facing behavior goes in a service first, then
 gets wired into both surfaces.
@@ -76,9 +76,9 @@ the same config; `CheckpointManifest.validate_compatibility` compares architectu
 and the full preprocessing dict before a checkpoint may be reused, and `load_detector` additionally
 re-checks the checkpoint's sha256.
 
-**Optional ML/UI dependencies load lazily, inside functions.** `UltralyticsDetector._load()` and
+**Optional ML/web dependencies load lazily, inside functions.** `UltralyticsDetector._load()` and
 `FasterRCNNDetector._load()` import torch/ultralytics on first use; `CVATSdkTransport._load_sdk()`
-imports `cvat_sdk` similarly; `ui.main()` imports streamlit. Missing extras raise
+imports `cvat_sdk` similarly; the browser app imports Starlette only when launched. Missing extras raise
 `OptionalDependencyError` / `RuntimeError` with the extra name to install. The core package,
 manifests, CSV export, CVAT exchange, and diagnostics must stay importable without CUDA — CI asserts
 this with a bare `import amphilens`.

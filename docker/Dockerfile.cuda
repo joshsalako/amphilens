@@ -14,8 +14,7 @@ COPY pyproject.toml README.md AGENTS.md ./
 COPY src ./src
 
 RUN python3 -m pip install --upgrade pip \
-    && python3 -m pip install ".[cli,ui,inference,training]"
+    && python3 -m pip install ".[cli,web,inference,training]"
 
-ENTRYPOINT ["python3", "-m", "amphilens.cli"]
+ENTRYPOINT ["amphilens"]
 CMD ["doctor"]
-

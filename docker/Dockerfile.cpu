@@ -9,9 +9,8 @@ COPY pyproject.toml README.md AGENTS.md ./
 COPY src ./src
 
 RUN python -m pip install --upgrade pip \
-    && python -m pip install ".[cli,ui,inference]"
+    && python -m pip install ".[cli,web,inference]"
 
 EXPOSE 8501
-ENTRYPOINT ["python", "-m", "streamlit"]
-CMD ["run", "/opt/amphilens/src/amphilens/ui.py", "--server.address=0.0.0.0", "--server.port=8501"]
-
+ENTRYPOINT ["amphilens"]
+CMD ["app", "--host", "0.0.0.0", "--port", "8501"]

@@ -3,7 +3,7 @@
 AmphiLens is a local browser app for finding amphibians and other wildlife in
 camera-trap images. It helps conservation and ecology teams:
 
-- find animals in large image collections;
+- find wildlife in large image collections;
 - select useful images for human review;
 - improve a model with a small amount of annotation; and
 - download predictions, reports, and review images.
@@ -41,21 +41,21 @@ project. Replace the example path with your own location:
 cd /path/to/amphilens
 uv python install 3.11
 uv sync --locked --python 3.11 \
-  --extra cli --extra ui --extra inference --extra training
+  --extra cli --extra web --extra inference --extra training
 ```
 
 For the managed CVAT workflow, include the CVAT extra:
 
 ```bash
 uv sync --locked --python 3.11 \
-  --extra cli --extra ui --extra inference --extra training --extra cvat
+  --extra cli --extra web --extra inference --extra training --extra cvat
 ```
 
 For optional cloud GPU training, also include the cloud extra:
 
 ```bash
 uv sync --locked --python 3.11 \
-  --extra cli --extra ui --extra inference --extra training --extra cloud
+  --extra cli --extra web --extra inference --extra training --extra cloud
 ```
 
 If `uv` is not available, use a normal Python virtual environment:
@@ -63,7 +63,7 @@ If `uv` is not available, use a normal Python virtual environment:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e ".[cli,ui,inference,training]"
+python -m pip install -e ".[cli,web,inference,training]"
 ```
 
 On Windows PowerShell:
@@ -71,7 +71,7 @@ On Windows PowerShell:
 ```powershell
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install -e ".[cli,ui,inference,training]"
+python -m pip install -e ".[cli,web,inference,training]"
 ```
 
 ## 2. Keep project data separate from the source code
@@ -107,10 +107,9 @@ uv run --locked amphilens doctor
 uv run --locked amphilens app
 ```
 
-Open [http://localhost:8501](http://localhost:8501) if the browser does not
-open automatically.
+Open [http://127.0.0.1:8501](http://127.0.0.1:8501) in your browser.
 
-The **Environment** page shows whether the computer has the libraries, disk
+The **System health** page shows whether the computer has the libraries, disk
 space, and GPU needed for the selected workflow.
 
 ## Optional: train on a cloud GPU
@@ -118,7 +117,7 @@ space, and GPU needed for the selected workflow.
 Cloud training sends the selected labelled snapshot and any selected base
 checkpoint to your Modal account after you approve the upload and cost estimate.
 It requires the `cloud` extra, Modal credentials, and a valid Modal payment
-method. Open **Train model**, save your Modal credentials in the masked fields
+method. Open **Train a model**, save your Modal credentials in the masked fields
 or run `amphilens cloud login`, then choose **Modal cloud GPU**. See the
 [cloud training guide](docs/cloud-training.md) for privacy, cost, status,
 cancellation, and cleanup details.
@@ -129,7 +128,7 @@ In the app:
 
 1. Open **Create project**.
 2. Enter the path to the folder containing the camera-trap images.
-3. Enter the animals or organisms to detect, one class per line.
+3. Enter the wildlife classes as comma-separated names.
 4. Accept the safe default project folder or enter another project path.
 5. Press **Create project**.
 
@@ -137,7 +136,7 @@ The original image folder is never modified.
 
 ## 5. Import existing annotations
 
-If you already labelled some images, open **Import initial dataset**. You can
+If you already labelled some images, open **Import images**. You can
 choose the recommended direct CVAT workflow or use a local archive.
 
 ### Import directly from CVAT
@@ -187,7 +186,7 @@ grayscale images are replicated into three channels. If CLAHE is enabled,
 resizing happens first to reduce processing time. These choices are saved in
 the project and run metadata.
 
-When you train or find animals, AmphiLens loads these saved choices
+When you train or find wildlife, AmphiLens loads these saved choices
 automatically. Open **Advanced run overrides** only when you intentionally want
 different settings for one run. Those changes are recorded for that run and do
 not change the project defaults.
@@ -197,30 +196,30 @@ model, classes, preprocessing, and detector input size take priority. AmphiLens
 locks those settings and stops before running if they are incompatible with the
 project.
 
-## 7. Train a model or find animals
+## 7. Train a model or find wildlife
 
-Use **Train model** when you have imported labelled data. The initial imported
+Use **Train a model** when you have imported labelled data. The initial imported
 images are all used for training. AmphiLens does not invent a validation split;
 until you provide a separate validation dataset, results say:
 `evaluation: not evaluated`.
 
-Use **Find animals** to run a selected base model or trained checkpoint over
+Use **Find wildlife** to run a selected base model or trained checkpoint over
 an unlabeled image folder.
 
 ## 8. Improve the model with active learning
 
 After inference:
 
-1. Open **Active learning queue**.
+1. Open **Choose images to review**.
 2. Provide the prediction, calibration, and feature files.
 3. Choose the number of images to review.
 4. Press **Select annotation queue**.
-5. Open **CVAT cycle** and select the generated `selection_queue.csv`.
-6. Press **Send to CVAT**.
+5. Open **Annotation cycle** and select the generated `selection_queue.csv`.
+6. Choose **Send a queue to CVAT** and press **Start cycle**.
 7. Press **Open CVAT**, annotate and save every selected image.
 8. Return to AmphiLens and press **Refresh status**.
 9. When all CVAT jobs are complete, press **Continue cycle**.
-10. Select the new immutable snapshot on **Train model** and provide the
+10. Select the new immutable snapshot on **Train a model** and provide the
     parent checkpoint manifest to continue training.
 
 For managed CVAT, set the server URL and token before starting the app. The

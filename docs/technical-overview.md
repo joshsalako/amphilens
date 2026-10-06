@@ -6,8 +6,8 @@ only want to run the browser app.
 
 ## 1. Current architecture
 
-AmphiLens is a local-first Python package with a Streamlit browser interface
-and a Typer command-line interface. Both use the same services:
+AmphiLens is a local-first Python package with a Starlette browser interface and
+a Typer command-line interface. Both use the same domain services:
 
 The complete user behavior is defined in the
 [canonical workflow specification](superpowers/specs/2026-09-28-amphilens-user-workflows.md).
@@ -42,7 +42,7 @@ checkpoints. The browser app does not place this unit in the source checkout:
 new projects default to `~/Downloads/AmphiLens/projects`, and a new location
 inside the checkout is rejected.
 
-The Streamlit session uses one resolved active project path. **Create project**
+The browser app uses one resolved active project path. **Create project**
 creates it, **Open project** validates it from `manifest.json`, and all import,
 training, prediction, and CVAT pages use that active store. The app also stores
 only the last active project path in a versioned user-state file:
@@ -67,8 +67,9 @@ model preset, preprocessing, detector input size, confidence, device, and
 training settings. A checkpoint manifest takes priority for model identity,
 architecture, classes, preprocessing, and recorded input size. Explicit
 advanced overrides are run-scoped and are stored in run or checkpoint metadata;
-they never rewrite the project manifest. Widget keys include the project path
-and configuration identity so values cannot leak between projects.
+they never rewrite the project manifest. Browser form values are loaded from
+the active project's saved configuration so choices cannot leak between
+projects.
 
 ## 4. Dataset import and preprocessing
 

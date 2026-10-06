@@ -29,7 +29,7 @@ validation split. Until a separate validation dataset is supplied, results say
 ### Import from an existing CVAT project
 
 1. Install the `cvat` extra and set `CVAT_URL` and `CVAT_TOKEN`.
-2. Open **Import initial dataset**.
+2. Open **Import images**.
 3. Choose **CVAT project** and press **Connect to CVAT**.
 4. Select the project containing the initial annotations.
 5. Confirm the labels or provide an explicit class mapping.
@@ -116,7 +116,7 @@ configuration, but AmphiLens warns that its metadata could not be verified.
 
 In the browser app:
 
-1. Open **Train model**.
+1. Open **Train a model**.
 2. Select the labelled dataset snapshot.
 3. Select the model preset.
 4. Set epochs, batch size, image settings, and device.
@@ -152,7 +152,7 @@ amphilens train /path/to/my-project \
 
 ## 7. Run inference
 
-1. Open **Find animals**.
+1. Open **Find wildlife**.
 2. Select the image folder to scan.
 3. Select the model or trained checkpoint.
 4. Set confidence, image size, preprocessing, and device.
@@ -164,7 +164,7 @@ Detection boxes are mapped back to the original image dimensions.
 ## 8. Create an active-learning queue
 
 1. Run inference on the unlabeled image folder.
-2. Open **Active learning queue**.
+2. Open **Choose images to review**.
 3. Provide the prediction, calibration, and feature files.
 4. Choose the annotation budget and advanced sampling settings.
 5. Press **Select annotation queue**.
@@ -176,9 +176,9 @@ an error rather than silently replaced with guessed values.
 
 For managed CVAT:
 
-1. Open **CVAT cycle**.
+1. Open **Annotation cycle**.
 2. Select the generated `selection_queue.csv`.
-3. Press **Send to CVAT**.
+3. Choose **Send a queue to CVAT** and press **Start cycle**.
 4. Press **Open CVAT** and annotate every selected image.
 5. Save the CVAT task.
 6. Return to AmphiLens and press **Refresh status**.
@@ -193,7 +193,7 @@ stored in project files or manifests.
 
 ## 10. Continue training
 
-1. Open **Train model**.
+1. Open **Train a model**.
 2. Select the new merged snapshot.
 3. Select the same compatible model architecture.
 4. Provide the parent `checkpoint.json` as the parent checkpoint manifest.

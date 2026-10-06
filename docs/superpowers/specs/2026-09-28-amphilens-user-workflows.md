@@ -3,7 +3,7 @@
 ## Status and purpose
 
 This is the normative end-to-end workflow reference for AmphiLens. Future
-models and engineers should use this document when changing the Streamlit UI,
+models and engineers should use this document when changing the browser app,
 CLI, CVAT integration, dataset handling, inference, or training behavior.
 
 AmphiLens has two distinct user processes:
@@ -252,7 +252,7 @@ collection; failed cleanup remains visible and can be retried. See
 The UI and CLI must use the same underlying services. They must not implement
 different dataset or CVAT behavior.
 
-| User action | Streamlit | CLI |
+| User action | Browser app | CLI |
 |---|---|---|
 | Check environment | **Environment** | `amphilens doctor` |
 | Create project | **Create project** | `amphilens project create` |

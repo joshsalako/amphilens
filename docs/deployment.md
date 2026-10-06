@@ -16,7 +16,7 @@ The supported release profile is Python 3.11. From your AmphiLens checkout:
 
 ```bash
 uv sync --locked --python 3.11 \
-  --extra cli --extra ui --extra inference --extra training
+  --extra cli --extra web --extra inference --extra training
 uv run --locked amphilens doctor
 uv run --locked amphilens app
 ```
@@ -76,7 +76,7 @@ Install the managed CVAT extra when you want the one-button workflow:
 
 ```bash
 uv sync --locked --python 3.11 \
-  --extra cli --extra ui --extra inference --extra training --extra cvat
+  --extra cli --extra web --extra inference --extra training --extra cvat
 ```
 
 Set the CVAT server and token in the process environment:
@@ -106,7 +106,7 @@ exchange instead.
 
 ## 6. Run with Docker Compose
 
-The CPU service runs the local Streamlit app and mounts project and model
+The CPU service runs the local browser app and mounts project and model
 folders from the host:
 
 ```bash
@@ -134,7 +134,7 @@ valid Modal payment method:
 
 ```bash
 uv sync --locked --python 3.11 \
-  --extra cli --extra ui --extra inference --extra training --extra cloud
+  --extra cli --extra web --extra inference --extra training --extra cloud
 amphilens cloud login
 amphilens cloud diagnose
 ```
@@ -142,7 +142,7 @@ amphilens cloud diagnose
 The app uploads a prepared copy of the selected labelled snapshot and any
 selected base checkpoint only after the user accepts the upload and cost
 consent. Local projects and result registration stay on the client. Use the
-same **Train model** workflow and choose **Modal cloud GPU**, or run
+same **Train a model** workflow and choose **Modal cloud GPU**, or run
 `amphilens cloud estimate` and `amphilens cloud train`. Cloud jobs run in a
 detached ephemeral Modal invocation with bounded concurrency and a
 budget-derived time limit. The local job record survives app restarts.

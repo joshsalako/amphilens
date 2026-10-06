@@ -8,7 +8,7 @@ This file applies to the entire `wlt-app` project. `wlt-app` is the product code
 
 - Use the `src/amphilens` layout and Python 3.10+.
 - Write a focused failing test before production behavior, then run the full suite after each meaningful change.
-- Keep optional ML and UI dependencies lazy-loaded. The core project, manifests, CSV export, CVAT exchange, and diagnostics must remain importable without CUDA.
+- Keep optional ML and browser-server dependencies lazy-loaded. The core project, manifests, CSV export, CVAT exchange, and diagnostics must remain importable without CUDA.
 - Keep the Modal SDK lazy-loaded; only `amphilens.cloud.modal_app` imports Modal at module scope. Unit tests use fake transports and must not authenticate or start remote work.
 - Cloud uploads require explicit consent, local content verification, redacted provider errors, and user-visible cost limits. Estimates and timeouts are not guaranteed billing caps.
 - Preserve source images and source annotations. Every derived file must have an explicit output path, provenance, and stable mapping back to the source.
@@ -21,10 +21,10 @@ This file applies to the entire `wlt-app` project. `wlt-app` is the product code
 
 ## Verification
 
-Run the dependency-light suite with:
+Run the package suite with the development extra:
 
 ```bash
-PYTHONPATH=src uv run --with pytest --with pillow --with typer --no-project pytest -q
+uv run --locked --extra dev pytest -q
 ```
 
 Run formatting/linting with Ruff when available. Before claiming completion, inspect the complete test output and verify the requested files and repository state.

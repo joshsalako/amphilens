@@ -32,7 +32,7 @@ The v1 managed profile is deliberately narrow: Python 3.11, CVAT Community `v2.7
 
 ## Architecture
 
-`amphilens.core` owns manifests, typed records, compatibility checks, and filesystem artifacts. `amphilens.models` provides YOLO, RT-DETR, and Faster R-CNN adapters. `amphilens.inference` owns model-independent prediction and export. `amphilens.active_learning` owns the default Hybrid PPAL strategy. `amphilens.annotations` owns portable CVAT/COCO/YOLO exchange and the optional managed CVAT adapter. The Typer CLI and Streamlit app call these services rather than duplicating pipeline logic.
+`amphilens.core` owns manifests, typed records, compatibility checks, and filesystem artifacts. `amphilens.models` provides YOLO, RT-DETR, and Faster R-CNN adapters. `amphilens.inference` owns model-independent prediction and export. `amphilens.active_learning` owns the default Hybrid PPAL strategy. `amphilens.annotations` owns portable CVAT/COCO/YOLO exchange and the optional managed CVAT adapter. The browser app and Typer CLI call these services rather than duplicating pipeline logic.
 
 Project state is portable and source-preserving. Each run records configuration, code/runtime information, model identity, and output paths. Derived files never overwrite image roots or previous cycle artifacts.
 

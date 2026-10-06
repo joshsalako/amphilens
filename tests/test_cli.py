@@ -56,6 +56,22 @@ def test_project_default_location_command_uses_user_data():
     assert result.stdout.strip() == str(default_projects_root())
 
 
+def test_app_starts_local_browser_server_by_default(monkeypatch):
+    calls = []
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "uvicorn",
+        SimpleNamespace(run=lambda app, **kwargs: calls.append((app, kwargs))),
+    )
+
+    result = CliRunner().invoke(app, ["app"])
+
+    assert result.exit_code == 0, result.stdout
+    assert calls == [
+        ("amphilens.webapp:app", {"host": "127.0.0.1", "port": 8501, "log_level": "info"})
+    ]
+
+
 def test_project_move_command_verifies_and_removes_source(tmp_path: Path):
     images = tmp_path / "images"
     images.mkdir()

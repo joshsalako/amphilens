@@ -6,11 +6,11 @@ optional provider adapter; local training remains available.
 
 ## Setup and credentials
 
-Install the cloud extra in addition to the usual training and UI dependencies:
+Install the cloud extra in addition to the usual training and browser app dependencies:
 
 ```bash
 uv sync --locked --python 3.11 \
-  --extra cli --extra ui --extra inference --extra training --extra cloud
+  --extra cli --extra web --extra inference --extra training --extra cloud
 ```
 
 Create a Modal API token in your Modal account, then save it in the masked
@@ -38,7 +38,7 @@ multi-user service.
 
 ## Submit a job
 
-In the browser app, open **Train model**, choose **Modal cloud GPU**, select a
+In the browser app, open **Train a model**, choose **Modal cloud GPU**, select a
 dataset snapshot and model settings, choose a GPU and budget, review the cost
 range, then check the upload and cost consent box before submitting.
 
@@ -81,7 +81,7 @@ records `checkpoint_selection: last-no-validation`.
 
 ## Status, cancel, and cleanup
 
-The saved cloud job list is shown on the **Train model** page, including status,
+The saved cloud job list is shown on the **Train a model** page, including status,
 progress, environment, errors, logs, and the Modal dashboard link. Use **Refresh
 status**, **Cancel job**, and **Download and register checkpoint** as needed.
 The CLI supports the same actions:

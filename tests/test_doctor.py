@@ -14,3 +14,4 @@ def test_doctor_reports_runtime_and_disk_information(tmp_path):
     assert isinstance(report.cvat_sdk_installed, bool)
     assert report.modal_connectivity == "not checked"
     assert isinstance(report.modal_token_present, bool)
+    assert isinstance(report.browser_app_installed, bool)

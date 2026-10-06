@@ -20,7 +20,7 @@ class DoctorReport:
     torch_installed: bool
     cuda_available: bool
     ultralytics_installed: bool
-    streamlit_installed: bool
+    browser_app_installed: bool
     cvat_exchange: bool = True
     pillow_installed: bool = False
     numpy_installed: bool = False
@@ -71,7 +71,10 @@ def run_doctor(path: str | Path = ".", *, check_cloud: bool = False) -> DoctorRe
         torch_installed=torch_installed,
         cuda_available=cuda_available,
         ultralytics_installed=importlib.util.find_spec("ultralytics") is not None,
-        streamlit_installed=importlib.util.find_spec("streamlit") is not None,
+        browser_app_installed=(
+            importlib.util.find_spec("starlette") is not None
+            and importlib.util.find_spec("uvicorn") is not None
+        ),
         pillow_installed=importlib.util.find_spec("PIL") is not None,
         numpy_installed=importlib.util.find_spec("numpy") is not None,
         opencv_installed=importlib.util.find_spec("cv2") is not None,
