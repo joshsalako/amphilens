@@ -157,6 +157,15 @@ h3 { margin: 0; font-size: 15px; line-height: 1.4; font-weight: 650; }
 .cvat-project-summary { display: grid; gap: 12px; padding: 3px 0 4px; }
 .cvat-label-list { display: grid; gap: 7px; }
 .cvat-label-row { display: grid; grid-template-columns: minmax(90px, .8fr) minmax(0, 1.2fr); align-items: center; gap: 9px; color: #46534a; font-size: 12px; }
+.hosted-model-panel { display: grid; gap: 12px; padding: 16px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-soft); }
+.hosted-model-panel[hidden], .hosted-class-mapping[hidden], [data-training-hosted][hidden], [data-training-checkpoint][hidden] { display: none; }
+.hosted-model-facts { display: flex; flex-wrap: wrap; gap: 6px 13px; margin: 0; color: var(--muted); font-size: 12px; }
+.hosted-model-facts strong { color: var(--ink); font-weight: 660; text-transform: uppercase; }
+.hosted-access-note { padding: 10px 12px; }
+.hosted-access-note code { padding: 1px 4px; border-radius: 3px; background: rgba(255,255,255,.62); font-size: 11px; }
+.hosted-class-mapping { display: grid; gap: 12px; padding: 15px 16px; border: 1px solid var(--line); border-radius: 7px; background: #fbfcf9; }
+.hosted-class-mapping .cvat-label-row label { color: #36443a; font-weight: 620; }
+.hosted-class-mapping .class-match { display: block; margin-top: 3px; }
 .field-title { color: #36443a; font-size: 12px; font-weight: 660; }
 .class-match { color: var(--success); font-size: 11px; }
 .cvat-label-row select { min-height: 34px; padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: 5px; background: white; color: var(--ink); font: inherit; font-size: 11px; }
@@ -190,6 +199,9 @@ h3 { margin: 0; font-size: 15px; line-height: 1.4; font-weight: 650; }
 .notice-mark { display: grid; place-items: center; flex: none; width: 18px; height: 18px; border: 1px solid currentColor; border-radius: 50%; font-size: 11px; font-weight: 700; }
 .notice p { margin: 0; }
 .notice strong { font-weight: 690; }
+@media (max-width: 560px) {
+  .hosted-class-mapping .cvat-label-row { grid-template-columns: minmax(0, 1fr); gap: 5px; }
+}
 .empty-state { max-width: 740px; margin: 5vh auto 0; padding: 38px 34px; text-align: left; }
 .empty-illustration { display: grid; place-items: center; width: 54px; height: 54px; margin-bottom: 21px; border-radius: 13px; background: #e4ece3; color: var(--marsh); }
 .empty-illustration svg { width: 30px; height: 30px; }

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,12 +26,22 @@ class PreprocessingConfig:
     clahe_tile_grid_size: tuple[int, int] = (8, 8)
     color_space: str = "rgb"
     compatibility_mode: str = "max-dimension"
+    round_to_multiple: int | None = None
+    allow_upscale: bool = False
 
     def __post_init__(self) -> None:
         if self.max_dimension <= 0:
             raise ValueError("max_dimension must be positive")
-        if self.resize_interpolation not in {"nearest", "bilinear", "bicubic", "lanczos"}:
-            raise ValueError("resize_interpolation must be nearest, bilinear, bicubic, or lanczos")
+        if self.resize_interpolation not in {
+            "nearest",
+            "bilinear",
+            "bicubic",
+            "lanczos",
+            "opencv-linear",
+        }:
+            raise ValueError(
+                "resize_interpolation must be nearest, bilinear, bicubic, lanczos, or opencv-linear"
+            )
         if self.clahe_clip_limit <= 0:
             raise ValueError("clahe_clip_limit must be positive")
         if len(self.clahe_tile_grid_size) != 2 or any(
@@ -41,6 +52,8 @@ class PreprocessingConfig:
             raise ValueError("color_space must be rgb or lab")
         if self.compatibility_mode not in {"max-dimension", "shortest-side"}:
             raise ValueError("unsupported preprocessing compatibility mode")
+        if self.round_to_multiple is not None and self.round_to_multiple <= 0:
+            raise ValueError("round_to_multiple must be positive when provided")
 
     @property
     def fingerprint(self) -> str:
@@ -60,6 +73,8 @@ class PreprocessingConfig:
             "clahe_tile_grid_size": list(self.clahe_tile_grid_size),
             "color_space": self.color_space,
             "compatibility_mode": self.compatibility_mode,
+            "round_to_multiple": self.round_to_multiple,
+            "allow_upscale": self.allow_upscale,
         }
         if include_fingerprint:
             data["fingerprint"] = self.fingerprint
@@ -92,6 +107,8 @@ class PreprocessedImage:
     image: object
     original_size: tuple[int, int]
     scale: float
+    scale_x: float | None = None
+    scale_y: float | None = None
 
     @property
     def processed_size(self) -> tuple[int, int]:
@@ -100,14 +117,28 @@ class PreprocessedImage:
     def map_box_to_original(self, box_xyxy: list[float] | tuple[float, ...]) -> list[float]:
         if len(box_xyxy) != 4:
             raise ValueError("box_xyxy must contain four coordinates")
-        if self.scale == 1:
+        scale_x = self.scale if self.scale_x is None else self.scale_x
+        scale_y = self.scale if self.scale_y is None else self.scale_y
+        if scale_x == 1 and scale_y == 1:
             return [float(value) for value in box_xyxy]
-        return [round(float(value) / self.scale, 6) for value in box_xyxy]
+        return [
+            round(float(box_xyxy[0]) / scale_x, 6),
+            round(float(box_xyxy[1]) / scale_y, 6),
+            round(float(box_xyxy[2]) / scale_x, 6),
+            round(float(box_xyxy[3]) / scale_y, 6),
+        ]
 
     def map_box_to_processed(self, box_xyxy: list[float] | tuple[float, ...]) -> list[float]:
         if len(box_xyxy) != 4:
             raise ValueError("box_xyxy must contain four coordinates")
-        return [round(float(value) * self.scale, 6) for value in box_xyxy]
+        scale_x = self.scale if self.scale_x is None else self.scale_x
+        scale_y = self.scale if self.scale_y is None else self.scale_y
+        return [
+            round(float(box_xyxy[0]) * scale_x, 6),
+            round(float(box_xyxy[1]) * scale_y, 6),
+            round(float(box_xyxy[2]) * scale_x, 6),
+            round(float(box_xyxy[3]) * scale_y, 6),
+        ]
 
 
 class PreprocessingService:
@@ -123,12 +154,19 @@ class PreprocessingService:
         image = self._load(source)
         original_size = image.size
         scale = self._resize_scale(image.size)
-        if scale < 1:
-            image = image.resize(self._target_size(image.size, scale), self._resampling())
+        target_size = self._target_size(image.size, scale)
+        if target_size != image.size:
+            image = self._resize(image, target_size)
         image = self._to_three_channel(image)
         if self.config.clahe_enabled:
             image = self._apply_clahe(image)
-        return PreprocessedImage(image=image, original_size=original_size, scale=scale)
+        return PreprocessedImage(
+            image=image,
+            original_size=original_size,
+            scale=scale,
+            scale_x=image.width / original_size[0],
+            scale_y=image.height / original_size[1],
+        )
 
     def materialize(self, source: str | Path) -> Path:
         source_path = Path(source).expanduser().resolve()
@@ -161,12 +199,43 @@ class PreprocessingService:
             return 1.0
         width, height = size
         if self.config.compatibility_mode == "shortest-side":
-            return min(1.0, self.config.max_dimension / min(width, height))
-        return min(1.0, self.config.max_dimension / max(width, height))
+            scale = self.config.max_dimension / min(width, height)
+        else:
+            scale = self.config.max_dimension / max(width, height)
+        return scale if self.config.allow_upscale else min(1.0, scale)
+
+    def _target_size(self, size: tuple[int, int], scale: float) -> tuple[int, int]:
+        width, height = size
+        multiple = self.config.round_to_multiple
+        if multiple is None:
+            return max(1, round(width * scale)), max(1, round(height * scale))
+        if scale == 1 and not self.config.allow_upscale:
+            return size
+        if self.config.compatibility_mode == "shortest-side":
+            if width <= height:
+                return self.config.max_dimension, self._ceil_multiple(height * scale, multiple)
+            return self._ceil_multiple(width * scale, multiple), self.config.max_dimension
+        if width >= height:
+            return self.config.max_dimension, self._ceil_multiple(height * scale, multiple)
+        return self._ceil_multiple(width * scale, multiple), self.config.max_dimension
 
     @staticmethod
-    def _target_size(size: tuple[int, int], scale: float) -> tuple[int, int]:
-        return max(1, round(size[0] * scale)), max(1, round(size[1] * scale))
+    def _ceil_multiple(value: float, multiple: int) -> int:
+        return max(multiple, math.ceil(value / multiple) * multiple)
+
+    def _resize(self, image, target_size: tuple[int, int]):
+        if self.config.resize_interpolation == "opencv-linear":
+            try:
+                import cv2
+                import numpy as np
+            except ImportError as exc:  # pragma: no cover - inference extra supplies OpenCV
+                raise PreprocessingDependencyError(
+                    "OpenCV linear resize requires 'opencv-python-headless'; "
+                    "install 'amphilens[inference]'"
+                ) from exc
+            resized = cv2.resize(np.asarray(image), target_size, interpolation=cv2.INTER_LINEAR)
+            return self._pil_image(resized)
+        return image.resize(target_size, self._resampling())
 
     def _resampling(self):
         from PIL import Image

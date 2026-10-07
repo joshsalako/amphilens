@@ -70,6 +70,60 @@ def _image_size(path: Path) -> tuple[int, int]:
         return image.width, image.height
 
 
+def reset_ultralytics_classification_head(
+    detector_model,
+    *,
+    architecture: str,
+    source_classes: list[str] | tuple[str, ...] | None,
+    target_classes: list[str] | tuple[str, ...],
+) -> bool:
+    """Reinitialize class outputs when checkpoint labels or class order changes."""
+    if source_classes is None or list(source_classes) == list(target_classes):
+        return False
+    if architecture not in {"yolo", "rtdetr"}:
+        raise ValidationError(f"Unsupported Ultralytics head architecture: {architecture}")
+    try:
+        import torch
+    except ImportError as exc:
+        raise OptionalDependencyError("Fine-tuning requires the 'training' extra") from exc
+
+    core = getattr(detector_model, "model", None)
+    modules = getattr(core, "model", None)
+    if modules is None or len(modules) == 0:
+        raise RuntimeError("Cannot find the Ultralytics detector output head")
+    head = modules[-1]
+    reset_count = 0
+    if architecture == "yolo":
+        for name in ("cv3", "one2one_cv3"):
+            branches = getattr(head, name, None)
+            if branches is None:
+                continue
+            for branch in branches:
+                convolutions = [
+                    module for module in branch.modules() if isinstance(module, torch.nn.Conv2d)
+                ]
+                if convolutions:
+                    convolutions[-1].reset_parameters()
+                    reset_count += 1
+    else:
+        for name in ("enc_score_head", "dec_score_head", "denoising_class_embed"):
+            classifier = getattr(head, name, None)
+            if classifier is None:
+                continue
+            for module in classifier.modules():
+                if isinstance(
+                    module,
+                    (torch.nn.Linear, torch.nn.Conv2d, torch.nn.Embedding),
+                ):
+                    module.reset_parameters()
+                    reset_count += 1
+    if not reset_count:
+        raise RuntimeError(
+            f"Cannot identify the {architecture} class output head for label adaptation"
+        )
+    return True
+
+
 class UltralyticsDetector:
     """YOLO or RT-DETR adapter using Ultralytics' lazy runtime."""
 
@@ -84,7 +138,7 @@ class UltralyticsDetector:
             raise ValidationError("UltralyticsDetector architecture must be 'yolo' or 'rtdetr'")
         checkpoint_path = Path(checkpoint).expanduser()
         self.checkpoint = (
-            checkpoint_path.resolve()
+            checkpoint_path.absolute()
             if checkpoint_path.is_absolute() or checkpoint_path.is_file()
             else checkpoint_path
         )
@@ -161,6 +215,26 @@ class UltralyticsDetector:
         progress_callback=None,
     ) -> Path:
         model = self._load()
+        metadata = config.get("metadata", {})
+        effective_configuration = (
+            metadata.get("effective_configuration", {}) if isinstance(metadata, dict) else {}
+        )
+        hosted_model = effective_configuration.get("hosted_model", {})
+        source_classes = (
+            hosted_model.get("source_class_order") if isinstance(hosted_model, dict) else None
+        )
+        if source_classes is None:
+            names = getattr(model, "names", None)
+            if isinstance(names, dict):
+                source_classes = [str(names[key]) for key in sorted(names)]
+            elif isinstance(names, (list, tuple)):
+                source_classes = [str(name) for name in names]
+        reset_ultralytics_classification_head(
+            model,
+            architecture=self.architecture,
+            source_classes=source_classes,
+            target_classes=self.classes,
+        )
         output = Path(output_dir).expanduser().resolve()
         output.mkdir(parents=True, exist_ok=True)
         if resume_from:
@@ -225,7 +299,7 @@ class FasterRCNNDetector:
     def __init__(self, checkpoint: str | Path, classes: list[str], model_id: str | None = None):
         checkpoint_path = Path(checkpoint).expanduser()
         self.checkpoint = (
-            checkpoint_path.resolve()
+            checkpoint_path.absolute()
             if checkpoint_path.is_absolute() or checkpoint_path.is_file()
             else None
         )
@@ -278,7 +352,7 @@ class FasterRCNNDetector:
             with Image.open(path) as image:
                 width, height = image.size
             transformed = PreprocessingService(config.preprocessing_config).transform(path)
-            rgb = np.asarray(transformed.image)
+            rgb = np.array(transformed.image, copy=True)
             tensor = torch.from_numpy(rgb).permute(2, 0, 1).float().div(255).to(device)
             with torch.no_grad():
                 output = model([tensor])[0]
@@ -343,7 +417,7 @@ def load_detector(
     checkpoint_manifest: CheckpointManifest | None = None,
     preprocessing: dict | None = None,
 ):
-    checkpoint_path = Path(checkpoint).expanduser().resolve()
+    checkpoint_path = Path(checkpoint).expanduser().absolute()
     if not checkpoint_path.is_file():
         raise UnsupportedCheckpointError(f"Checkpoint is missing: {checkpoint_path}")
     if not classes or len(classes) != len(set(classes)):
