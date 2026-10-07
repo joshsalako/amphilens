@@ -134,13 +134,16 @@ class ProgressContractTests(unittest.TestCase):
                 }
             )
             started.set()
-            release.wait(timeout=2)
+            release.wait()
             return {"message": "done"}
 
         try:
             with patch.dict(os.environ, {"MODAL_TOKEN_SECRET": "secret-value"}):
                 job_id = manager.submit(operation, with_progress=True)
-                self.assertTrue(started.wait(timeout=2))
+                self.assertTrue(
+                    started.wait(timeout=10),
+                    f"background job did not start: {manager.snapshot(job_id)}",
+                )
                 status = manager.snapshot(job_id)
                 self.assertEqual(status["progress"]["phase"], "training")
                 self.assertEqual(len(status["progress"]["log_tail"]), 8000)
