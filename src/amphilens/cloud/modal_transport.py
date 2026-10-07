@@ -217,7 +217,11 @@ class ModalTransport:
             raise RuntimeError(self._redact(str(exc))) from exc
 
     def predict_batch(
-        self, payload: dict[str, Any], *, cancellation_requested=None
+        self,
+        payload: dict[str, Any],
+        *,
+        cancellation_requested=None,
+        progress_callback=None,
     ) -> dict[str, Any]:
         """Submit one staged batch to a single dynamically selected Modal GPU worker."""
         from .prediction import PredictionCancelled
@@ -228,6 +232,7 @@ class ModalTransport:
         gpu = str(payload["gpu"])
         timeout = max(1, int(payload["timeout_seconds"]))
         model_spec_json = json.dumps(payload["model_spec"], ensure_ascii=False, sort_keys=True)
+        job_key = str(payload["job_key"])
         try:
             with module.app.run(detach=True, client=client):
                 engine_class = module.PredictionEngine.with_options(
@@ -236,7 +241,11 @@ class ModalTransport:
                     retries=0,
                     max_containers=1,
                 )
-                engine = engine_class(model_spec_json=model_spec_json)
+                engine = engine_class(
+                    model_spec_json=model_spec_json,
+                    job_key=job_key,
+                    gpu_type=gpu,
+                )
                 call = engine.predict_batch.spawn(payload)
                 deadline = time.monotonic() + timeout + 120
                 while True:
@@ -244,6 +253,9 @@ class ModalTransport:
                         result = call.get(timeout=1)
                         break
                     except TimeoutError:
+                        progress = self._prediction_progress(job_key)
+                        if progress and progress_callback is not None:
+                            progress_callback(progress)
                         if cancellation_requested and cancellation_requested():
                             call.cancel(terminate_containers=True)
                             raise PredictionCancelled(
@@ -273,6 +285,34 @@ class ModalTransport:
             if self._is_not_found_error(exc):
                 return
             raise RuntimeError(self._redact(str(exc))) from exc
+
+    def cleanup_prediction_progress(self, job_key: str) -> None:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", job_key):
+            raise ValueError("Invalid prediction job identity")
+        path = f"prediction-jobs/{job_key}/progress.json"
+        try:
+            volume = self._volume(volume_name=PREDICTION_VOLUME_NAME)
+            volume.remove_file(path, recursive=False)
+        except FileNotFoundError:
+            return
+        except Exception as exc:
+            if self._is_not_found_error(exc):
+                return
+            raise RuntimeError(self._redact(str(exc))) from exc
+
+    def _prediction_progress(self, job_key: str) -> dict[str, Any]:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", job_key):
+            return {}
+        try:
+            volume = self._volume(volume_name=PREDICTION_VOLUME_NAME)
+            volume.reload()
+            path = f"prediction-jobs/{job_key}/progress.json"
+            if not self._file_exists(volume, path):
+                return {}
+            payload = json.loads(self._read_file(volume, path))
+            return payload if isinstance(payload, dict) else {}
+        except Exception:
+            return {}
 
     def upload_model_checkpoint(self, source: Path, sha256: str) -> str:
         if not re.fullmatch(r"[0-9a-f]{64}", sha256):
@@ -317,7 +357,13 @@ class ModalTransport:
             raise RuntimeError(self._redact(str(exc))) from exc
         progress = self._progress(remote_prefix)
         if result is None:
-            return {"state": "running", **progress} if progress else None
+            if not progress:
+                return None
+            return {
+                "state": "running",
+                "progress": progress.get("progress"),
+                "progress_details": progress,
+            }
         if not isinstance(result, dict):
             raise RuntimeError("Modal training function returned an invalid result")
         response = dict(result)

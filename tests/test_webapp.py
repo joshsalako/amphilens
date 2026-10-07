@@ -56,6 +56,10 @@ def test_static_frontend_and_assets_are_served(client):
     assert "AmphiLens" in page.text
     assert 'data-path-picker="directory" data-path-target="open-path"' in page.text
     assert 'data-path-picker="directory" data-path-target="project-path-input"' in page.text
+    assert 'src="/static/prediction_state.js"' in page.text
+    assert 'src="/static/activity_view.js"' in page.text
+    assert client.get("/static/prediction_state.js").status_code == 200
+    assert client.get("/static/activity_view.js").status_code == 200
     assert client.get("/static/app.js").status_code == 200
     assert 'api("/api/path-picker"' in client.get("/static/app.js").text
     script = client.get("/static/app.js").text

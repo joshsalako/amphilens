@@ -77,7 +77,11 @@ def test_shared_training_finalization_persists_cloud_provenance_and_reports_prog
     saved = json.loads((tmp_path / "cloud-run" / "checkpoint.json").read_text())
     assert saved["training_config"]["cloud"]["job_key"] == "job-123"
     assert result.manifest.training_config["cloud"]["effective_fingerprint"] == "config-456"
-    assert progress == [{"epoch": 1, "epochs": 2, "progress": 1.0}]
+    assert progress[0]["phase"] == "training"
+    assert progress[1]["epoch"] == 1
+    assert progress[1]["epochs"] == 2
+    assert progress[1]["progress"] == 1.0
+    assert progress[-1]["phase"] == "finalizing"
 
 
 def test_training_from_snapshot_prepares_labels_with_the_same_preprocessing(tmp_path: Path):

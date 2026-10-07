@@ -1,4 +1,5 @@
 import json
+import threading
 from pathlib import Path
 
 from amphilens.core import DetectionRecord, InferenceConfig
@@ -124,3 +125,76 @@ def test_resumable_inference_halves_gpu_batch_after_out_of_memory(tmp_path: Path
     assert [len(call) for call in detector.calls] == [4, 2, 2]
     assert result.completed_images == 4
     assert result.failed_images == []
+
+
+def test_prediction_progress_streams_batch_counts_before_run_finishes(tmp_path: Path):
+    images = _images(tmp_path, 4)
+    second_batch_started = threading.Event()
+    finish_second_batch = threading.Event()
+    first_batch_reported = threading.Event()
+    progress = []
+
+    class DelayedSecondBatchDetector(BatchRecordingDetector):
+        def predict(self, image_paths, config):
+            paths = list(image_paths)
+            self.calls.append([path.name for path in paths])
+            if paths[0].name == "02.jpg":
+                second_batch_started.set()
+                finish_second_batch.wait(timeout=3)
+            for path in paths:
+                yield DetectionRecord(
+                    image_path=str(path),
+                    image_id=path.name,
+                    class_id=0,
+                    class_name="toad",
+                    confidence=0.9,
+                    bbox_xyxy=[1, 2, 11, 22],
+                    image_width=20,
+                    image_height=40,
+                    model_id=self.model_id,
+                    run_id=config.run_id,
+                )
+
+    def report(event):
+        progress.append(event)
+        if event.get("phase") == "prediction" and event.get("completed") == 2:
+            first_batch_reported.set()
+
+    detector = DelayedSecondBatchDetector()
+    result = []
+    worker = threading.Thread(
+        target=lambda: result.append(
+            run_resumable_inference(
+                detector,
+                images,
+                InferenceConfig(
+                    model_id="batch-recording",
+                    batch_size=2,
+                    device="mps",
+                    run_id="run-streaming",
+                ),
+                tmp_path / "streaming-artifacts",
+                progress_callback=report,
+            )
+        )
+    )
+    worker.start()
+    try:
+        assert first_batch_reported.wait(timeout=2)
+        assert second_batch_started.wait(timeout=2)
+        assert worker.is_alive()
+        update = next(
+            event
+            for event in reversed(progress)
+            if event.get("phase") == "prediction" and event.get("completed") == 2
+        )
+        assert update["total"] == 4
+        assert update["remaining"] == 2
+        assert update["message"] == "Predicted 2 of 4 images"
+        assert all(image.name not in repr(update) for image in images)
+    finally:
+        finish_second_batch.set()
+        worker.join(timeout=3)
+
+    assert not worker.is_alive()
+    assert result[0].completed_images == 4

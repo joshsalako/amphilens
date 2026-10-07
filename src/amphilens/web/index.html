@@ -8,6 +8,8 @@
     <title>AmphiLens · Field workspace</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <link rel="stylesheet" href="/static/app.css">
+    <script src="/static/prediction_state.js" defer></script>
+    <script src="/static/activity_view.js" defer></script>
     <script src="/static/app.js" defer></script>
   </head>
   <body>
@@ -48,6 +50,14 @@
         <header class="topbar">
           <div class="mobile-brand"><span class="brand-mark small" aria-hidden="true"><svg viewBox="0 0 40 40" fill="none"><circle cx="20" cy="19.3" r="13.8" stroke="currentColor" stroke-width="2"/><circle cx="20" cy="19.3" r="8.1" stroke="currentColor" stroke-width="2"/><circle cx="20" cy="19.3" r="3.2" fill="currentColor"/></svg></span>amphilens</div>
           <div class="topbar-spacer"></div>
+          <div class="activity-wrap">
+            <button class="activity-toggle" type="button" aria-expanded="false" aria-controls="activity-panel" data-activity-toggle>
+              <span class="activity-indicator" aria-hidden="true"></span><span>Activity</span><span class="activity-count" data-activity-count hidden></span>
+            </button>
+            <section id="activity-panel" class="activity-panel" aria-label="Run activity" hidden>
+              <div id="activity-content"></div>
+            </section>
+          </div>
           <div class="project-switcher">
             <span class="project-label">Current project</span>
             <span id="current-project" class="project-name">Loading workspace…</span>

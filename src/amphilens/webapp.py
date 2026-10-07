@@ -254,6 +254,7 @@ class _Job:
     result: dict[str, Any] | None = None
     error: str | None = None
     progress: dict[str, Any] | None = None
+    progress_events: list[dict[str, Any]] = field(default_factory=list)
     downloads: dict[str, DownloadArtifact] = field(default_factory=dict)
     future: Future | None = None
     cancel_event: threading.Event = field(default_factory=threading.Event)
@@ -261,6 +262,9 @@ class _Job:
 
 class JobManager:
     """Run a bounded number of local workflows and retain a bounded status history."""
+
+    MAX_PROGRESS_EVENTS = 100
+    MAX_PROGRESS_LOG_CHARS = 8000
 
     def __init__(self, *, max_workers: int = 2, max_pending: int = 6, max_history: int = 100):
         if max_workers <= 0 or max_pending < max_workers or max_history <= 0:
@@ -373,6 +377,8 @@ class JobManager:
                 payload["error"] = job.error
             if job.progress is not None:
                 payload["progress"] = dict(job.progress)
+            if job.progress_events:
+                payload["progress_events"] = [dict(event) for event in job.progress_events]
             return payload
 
     def cancel(self, job_id: str) -> bool:
@@ -387,7 +393,54 @@ class JobManager:
         with self._lock:
             job = self._jobs.get(job_id)
             if job is not None:
-                job.progress = dict(progress)
+                safe_progress = dict(progress)
+                for key in ("message", "phase", "error"):
+                    value = safe_progress.get(key)
+                    if isinstance(value, str):
+                        safe_progress[key] = redact_sensitive_text(value)[:1000]
+                log_tail = safe_progress.get("log_tail")
+                if isinstance(log_tail, str):
+                    safe_progress["log_tail"] = redact_sensitive_text(log_tail)[
+                        -self.MAX_PROGRESS_LOG_CHARS :
+                    ]
+                for key in ("completed", "failed", "total", "remaining", "epoch", "epochs"):
+                    value = safe_progress.get(key)
+                    if value is not None:
+                        try:
+                            safe_progress[key] = max(0, int(value))
+                        except (TypeError, ValueError):
+                            safe_progress.pop(key, None)
+                for key in ("progress", "phase_progress"):
+                    progress_value = safe_progress.get(key)
+                    if isinstance(progress_value, (int, float)) and math.isfinite(progress_value):
+                        safe_progress[key] = max(0.0, min(1.0, float(progress_value)))
+                eta_seconds = safe_progress.get("eta_seconds")
+                if eta_seconds is not None:
+                    try:
+                        safe_progress["eta_seconds"] = max(0, min(31_536_000, int(eta_seconds)))
+                    except (TypeError, ValueError):
+                        safe_progress.pop("eta_seconds", None)
+                metrics = safe_progress.get("metrics")
+                if isinstance(metrics, dict):
+                    safe_progress["metrics"] = {
+                        str(key)[:80]: (
+                            redact_sensitive_text(value)[:240]
+                            if isinstance(value, str)
+                            else value
+                        )
+                        for key, value in list(metrics.items())[:24]
+                        if isinstance(value, (str, int, bool))
+                        or (isinstance(value, float) and math.isfinite(value))
+                    }
+                job.progress = safe_progress
+                event = {
+                    key: value
+                    for key, value in safe_progress.items()
+                    if key != "log_tail"
+                }
+                event["updated_at"] = time.time()
+                job.progress_events.append(event)
+                del job.progress_events[: -self.MAX_PROGRESS_EVENTS]
 
     def register_result(self, output: JobOutput) -> dict[str, Any]:
         """Expose a completed synchronous action using the same safe download contract."""
@@ -998,22 +1051,7 @@ def prediction_preflight(
     else:
         model_id = request.model_preset or project.project_config.model_preset
 
-    timing_samples = []
-    for path in (store.root / "runs").glob("*/cloud-cost.json"):
-        try:
-            sample = json.loads(path.read_text(encoding="utf-8"))
-            if (
-                sample.get("provider") == "modal"
-                and sample.get("gpu") == request.gpu
-                and sample.get("model_id") == model_id
-                and int(sample.get("completed_images", 0)) > 0
-                and float(sample.get("elapsed_seconds", 0.0)) > 0
-            ):
-                timing_samples.append(
-                    float(sample["elapsed_seconds"]) / int(sample["completed_images"])
-                )
-        except (OSError, ValueError, TypeError, json.JSONDecodeError):
-            continue
+    timing_samples = _modal_prediction_timing_samples(store, model_id, request.gpu)
     estimated_cost = None
     if timing_samples:
         rate = (
@@ -1048,6 +1086,29 @@ def prediction_preflight(
     }
 
 
+def _modal_prediction_timing_samples(
+    store: ProjectStore, model_id: str, gpu: str
+) -> list[float]:
+    """Return per-image Modal runtimes for the same model and GPU only."""
+    timing_samples = []
+    for path in (store.root / "runs").glob("*/cloud-cost.json"):
+        try:
+            sample = json.loads(path.read_text(encoding="utf-8"))
+            if (
+                sample.get("provider") == "modal"
+                and sample.get("gpu") == gpu
+                and sample.get("model_id") == model_id
+                and int(sample.get("completed_images", 0)) > 0
+                and float(sample.get("elapsed_seconds", 0.0)) > 0
+            ):
+                timing_samples.append(
+                    float(sample["elapsed_seconds"]) / int(sample["completed_images"])
+                )
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            continue
+    return timing_samples
+
+
 def run_prediction_job(
     store: ProjectStore,
     request: PredictionsRequest,
@@ -1076,6 +1137,17 @@ def run_prediction_job(
     image_paths = iter_images([image_root_path])
     if not image_paths:
         raise ValueError(f"No supported images were found in: {image_root_path}")
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "phase": "model_setup",
+                "message": f"Preparing model for {len(image_paths)} images",
+                "completed": 0,
+                "failed": 0,
+                "total": len(image_paths),
+                "remaining": len(image_paths),
+            }
+        )
     if request.execution == "modal":
         if not request.acknowledged or not request.uploads_dataset:
             raise ValueError("Explicit image upload and Modal spending-limit consent is required")
@@ -1129,7 +1201,7 @@ def run_prediction_job(
             checkpoint = str(
                 download_hosted_checkpoint(
                     hosted_model.model_id,
-                    progress_callback=progress_callback,
+                    progress_callback=_phase_progress(progress_callback, "model_download"),
                 )
             )
             detector = load_detector(
@@ -1148,6 +1220,14 @@ def run_prediction_job(
             overrides=overrides,
         )
         if request.execution == "local":
+            if not checkpoint and progress_callback is not None:
+                progress_callback(
+                    {
+                        "phase": "model_setup",
+                        "message": "Loading pretrained weights; first use may download them",
+                        "progress": None,
+                    }
+                )
             detector = (
                 load_detector(
                     checkpoint,
@@ -1222,6 +1302,9 @@ def run_prediction_job(
                 "model_id": effective.model_preset,
                 "classes": list(effective.classes),
             }
+        timing_samples = _modal_prediction_timing_samples(
+            store, str(model_spec["model_id"]), request.gpu
+        )
         detector = ModalPredictionDetector(
             cloud_transport,
             job_key=f"pred-{uuid.uuid4().hex}",
@@ -1230,25 +1313,59 @@ def run_prediction_job(
             timeout_seconds=MAX_FUNCTION_TIMEOUT_SECONDS,
             max_cost_usd=request.max_cost_usd,
             output_dir=output_dir,
+            seconds_per_image=(
+                sum(timing_samples) / len(timing_samples) if timing_samples else None
+            ),
             progress_callback=progress_callback,
             image_count=len(image_paths),
             cancellation_requested=cancel_check if callable(cancel_check) else None,
         )
-    summary = run_resumable_inference(
-        detector,
-        image_paths,
-        InferenceConfig(
-            model_id=effective.model_id,
-            image_size=effective.image_size,
-            confidence=effective.confidence,
-            device=effective.device,
-            batch_size=effective.batch_size,
-            preprocessing=effective.preprocessing,
-            run_id=run_id,
-            metadata=run_metadata,
-        ),
-        output_dir,
-    )
+    try:
+        summary = run_resumable_inference(
+            detector,
+            image_paths,
+            InferenceConfig(
+                model_id=effective.model_id,
+                image_size=effective.image_size,
+                confidence=effective.confidence,
+                device=effective.device,
+                batch_size=effective.batch_size,
+                preprocessing=effective.preprocessing,
+                run_id=run_id,
+                metadata=run_metadata,
+            ),
+            output_dir,
+            progress_callback=progress_callback,
+        )
+    finally:
+        cleanup_progress = getattr(detector, "cleanup_progress", None)
+        if callable(cleanup_progress):
+            try:
+                cleanup_progress()
+            except Exception as exc:
+                if progress_callback is not None:
+                    progress_callback(
+                        {
+                            "phase": "cleanup",
+                            "message": "Could not remove temporary Modal progress data",
+                            "error": redact_sensitive_text(str(exc))[:240],
+                        }
+                    )
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "phase": "saving_results",
+                "message": "Writing reports and updating the project",
+                "completed": summary.completed_images,
+                "failed": len(summary.failed_images),
+                "total": summary.image_count,
+                "remaining": max(
+                    0, summary.image_count - summary.completed_images - len(summary.failed_images)
+                ),
+                "progress": 1.0,
+                "device": getattr(detector, "device_name", effective.device),
+            }
+        )
     report = write_report(summary.predictions_csv, Path(output_dir) / "report")
     markdown = Path(report["markdown"])
     json_report = Path(report["summary_json"])
@@ -1354,6 +1471,21 @@ def _training_checkpoint(
     return source, None, "", None
 
 
+def _phase_progress(
+    callback: Callable[[dict[str, Any]], None] | None, phase: str
+) -> Callable[[dict[str, Any]], None] | None:
+    if callback is None:
+        return None
+
+    def report(values: dict[str, Any]) -> None:
+        event = dict(values)
+        if phase == "model_download" and "progress" in event:
+            event["phase_progress"] = event.pop("progress")
+        callback({"phase": phase, **event})
+
+    return report
+
+
 def run_training_job(
     store: ProjectStore,
     request: TrainingRequest,
@@ -1365,9 +1497,17 @@ def run_training_job(
     from .training import TrainingConfig, train_snapshot_and_register
 
     project = store.load_manifest()
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "phase": "model_setup",
+                "message": "Preparing the selected training model",
+                "device": request.device or project.project_config.device,
+            }
+        )
     source, hosted_model, checkpoint, checkpoint_manifest = _training_checkpoint(
         request,
-        progress_callback=progress_callback,
+        progress_callback=_phase_progress(progress_callback, "model_download"),
     )
     overrides: dict[str, Any] = {}
     if request.epochs is not None:
@@ -1397,6 +1537,14 @@ def run_training_job(
             ModelCatalog().get(effective.model_preset), classes=list(effective.classes)
         )
     )
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "phase": "dataset_preparation",
+                "message": "Model ready; preparing the labeled dataset",
+                "device": effective.device,
+            }
+        )
     snapshot = _project_snapshot(store, request.snapshot_path)
     default_output = (
         store.root / "checkpoints" / f"cycle-{len(list((store.root / 'checkpoints').glob('*')))}"
@@ -1419,7 +1567,19 @@ def run_training_job(
         ),
         preprocessing=effective.preprocessing,
         resume_from=checkpoint_manifest,
+        progress_callback=progress_callback,
     )
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "phase": "completed",
+                "message": "Training and checkpoint registration completed",
+                "progress": 1.0,
+                "epoch": effective.epochs,
+                "epochs": effective.epochs,
+                "device": effective.device,
+            }
+        )
     return JobOutput(
         result={
             "message": f"Training finished from {source}: {result.checkpoint}",
@@ -1542,9 +1702,16 @@ def run_cloud_training_job(
             "Modal environment variables."
         )
     _project_snapshot(store, request.snapshot_path)
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "phase": "model_setup",
+                "message": "Preparing the model and dataset for Modal",
+            }
+        )
     source, hosted_model, checkpoint, checkpoint_manifest = _training_checkpoint(
         request,
-        progress_callback=progress_callback,
+        progress_callback=_phase_progress(progress_callback, "model_download"),
     )
     project = store.load_manifest()
     overrides: dict[str, Any] = {"device": "cuda"}
@@ -1576,6 +1743,14 @@ def run_cloud_training_job(
         "device": "cuda",
         "evaluation": "not evaluated",
     }
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "phase": "uploading_dataset",
+                "message": "Uploading the approved training snapshot to Modal",
+                "gpu": request.gpu,
+            }
+        )
     job = service.submit(
         snapshot_path=request.snapshot_path,
         effective_configuration=effective.to_dict(),
@@ -1590,6 +1765,15 @@ def run_cloud_training_job(
         base_checkpoint=checkpoint or None,
         base_manifest=checkpoint_manifest,
     )
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "phase": "submitted",
+                "message": "Modal accepted the training job; waiting for its first update",
+                "gpu": request.gpu,
+                "progress": 0.0,
+            }
+        )
     return {"message": f"Cloud training submitted: {job.run_id}.", "job": _cloud_job_dict(job)}
 
 
@@ -1600,6 +1784,49 @@ def _cloud_job_dict(job) -> dict[str, Any]:
         payload["error"] = safe_error(RuntimeError(payload["error"])).split(": ", 1)[-1]
     if payload.get("log_tail"):
         payload["log_tail"] = redact_sensitive_text(str(payload["log_tail"]))[-8000:]
+    for key in ("progress_details",):
+        details = payload.get(key)
+        if isinstance(details, dict):
+            payload[key] = dict(details)
+            for text_key in ("phase", "message", "error"):
+                if isinstance(payload[key].get(text_key), str):
+                    payload[key][text_key] = redact_sensitive_text(payload[key][text_key])[:1000]
+            metrics = payload[key].get("metrics")
+            if isinstance(metrics, dict):
+                payload[key]["metrics"] = {
+                    str(metric_key)[:80]: (
+                        redact_sensitive_text(metric_value)[:240]
+                        if isinstance(metric_value, str)
+                        else metric_value
+                    )
+                    for metric_key, metric_value in list(metrics.items())[:24]
+                    if isinstance(metric_value, (str, int, bool))
+                    or (isinstance(metric_value, float) and math.isfinite(metric_value))
+                }
+    events = payload.get("progress_events")
+    if isinstance(events, list):
+        safe_events = []
+        for event in events[-100:]:
+            if not isinstance(event, dict):
+                continue
+            safe_event = dict(event)
+            for text_key in ("phase", "message", "error"):
+                if isinstance(safe_event.get(text_key), str):
+                    safe_event[text_key] = redact_sensitive_text(safe_event[text_key])[:1000]
+            metrics = safe_event.get("metrics")
+            if isinstance(metrics, dict):
+                safe_event["metrics"] = {
+                    str(metric_key)[:80]: (
+                        redact_sensitive_text(metric_value)[:240]
+                        if isinstance(metric_value, str)
+                        else metric_value
+                    )
+                    for metric_key, metric_value in list(metrics.items())[:24]
+                    if isinstance(metric_value, (str, int, bool))
+                    or (isinstance(metric_value, float) and math.isfinite(metric_value))
+                }
+            safe_events.append(safe_event)
+        payload["progress_events"] = safe_events
     return payload
 
 

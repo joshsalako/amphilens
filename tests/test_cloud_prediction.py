@@ -34,8 +34,10 @@ class FakeTransport:
             for index, path in enumerate(sources)
         ]
 
-    def predict_batch(self, payload, *, cancellation_requested=None):
-        del cancellation_requested
+    def predict_batch(
+        self, payload, *, cancellation_requested=None, progress_callback=None
+    ):
+        del cancellation_requested, progress_callback
         self.payload = payload
         return self.result
 
@@ -79,7 +81,7 @@ def test_modal_prediction_detector_maps_local_ids_and_cleans_batch(tmp_path):
 
     records = list(detector.predict(paths, config))
 
-    assert [record.image_path for record in records] == [str(second)]
+    assert [record.image_path for record in records] == [str(second.resolve())]
     assert records[0].image_id == "b.jpg"
     assert records[0].run_id == "run-1"
     assert transport.payload["gpu"] == "L4"
@@ -314,8 +316,8 @@ def test_modal_batches_are_sequential_and_resume_from_local_progress(tmp_path):
             self.active_calls = 0
             self.max_active_calls = 0
 
-        def predict_batch(self, payload, *, cancellation_requested=None):
-            del cancellation_requested
+        def predict_batch(self, payload, *, cancellation_requested=None, progress_callback=None):
+            del cancellation_requested, progress_callback
             self.active_calls += 1
             self.max_active_calls = max(self.max_active_calls, self.active_calls)
             self.payload = payload

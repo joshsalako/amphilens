@@ -391,10 +391,14 @@ class FasterRCNNTrainer:
                 completed = epoch - start_epoch + 1
                 progress_callback(
                     {
+                        "phase": "training",
+                        "message": f"Epoch {completed} of {epochs}",
                         "epoch": completed,
                         "epochs": epochs,
                         "progress": min(1.0, completed / epochs),
                         "train_loss": average_loss,
+                        "metrics": {"train_loss": average_loss},
+                        "device": str(device),
                     }
                 )
         atomic_write_json(

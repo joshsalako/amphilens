@@ -15,7 +15,9 @@ def test_prediction_modal_class_uses_a_supported_parameter_annotation():
     pytest.importorskip("modal")
     from amphilens.cloud import modal_app
 
-    assert modal_app.PredictionEngine(model_spec_json="{}") is not None
+    assert modal_app.PredictionEngine(
+        model_spec_json="{}", job_key="test-job", gpu_type="L4"
+    ) is not None
 
 
 def test_prediction_image_adds_local_python_source_after_build_steps():

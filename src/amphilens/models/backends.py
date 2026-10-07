@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -46,6 +47,40 @@ def _training_only_trainer(base_trainer):
 
     TrainingOnlyTrainer.__name__ = "AmphiLensTrainingOnlyTrainer"
     return TrainingOnlyTrainer
+
+
+def _trainer_metrics(trainer) -> dict[str, float]:
+    """Extract finite scalar metrics from an Ultralytics epoch callback."""
+    metrics: dict[str, float] = {}
+    source_metrics = getattr(trainer, "metrics", {})
+    if isinstance(source_metrics, dict):
+        for key, value in source_metrics.items():
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(numeric):
+                metrics[str(key)] = numeric
+
+    losses = getattr(trainer, "tloss", None)
+    if losses is not None:
+        if hasattr(losses, "detach"):
+            losses = losses.detach().cpu()
+        if hasattr(losses, "tolist"):
+            losses = losses.tolist()
+        if not isinstance(losses, (list, tuple)):
+            losses = [losses]
+        names = list(getattr(trainer, "loss_names", []))
+        for index, value in enumerate(losses):
+            if index >= len(names):
+                break
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(numeric):
+                metrics[f"train/{names[index]}"] = numeric
+    return metrics
 
 
 def _select_torch_device(torch, requested: str):
@@ -313,9 +348,13 @@ class UltralyticsDetector:
                 epoch = max(0, int(getattr(trainer, "epoch", -1)) + 1)
                 progress_callback(
                     {
+                        "phase": "training",
+                        "message": f"Epoch {min(epoch, total)} of {total}",
                         "epoch": min(epoch, total),
                         "epochs": total,
                         "progress": min(1.0, max(0.0, epoch / total)),
+                        "metrics": _trainer_metrics(trainer),
+                        "device": str(getattr(trainer, "device", "")),
                     }
                 )
 

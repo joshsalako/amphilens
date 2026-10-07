@@ -8,6 +8,7 @@ import importlib.metadata
 import io
 import json
 import platform
+import re
 import shutil
 import signal
 import tempfile
@@ -130,9 +131,16 @@ class _TailBuffer:
         self._value = ""
 
     def write(self, value: str) -> int:
-        rendered = str(value)
-        self._value = (self._value + rendered)[-self.max_chars :]
-        return len(rendered)
+        source = str(value)
+        rendered = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", source)
+        rendered = rendered.replace("\r", "\n")
+        useful_lines = [
+            line
+            for line in rendered.splitlines(keepends=True)
+            if not re.search(r"\b\d{1,3}%\|.*\||\b\d+/\d+\s+\[", line)
+        ]
+        self._value = (self._value + "".join(useful_lines))[-self.max_chars :]
+        return len(source)
 
     def flush(self) -> None:
         return None
@@ -276,6 +284,16 @@ def run_remote_training(
             if base_manifest.sha256 != base_digest:
                 raise ValidationError("Base checkpoint manifest hash does not match")
 
+        _write_progress(
+            root,
+            volume_commit,
+            state="running",
+            phase="model_setup",
+            message="Loading the selected model on the Modal GPU",
+            progress=0.0,
+            phase_progress=None,
+            gpu=str(payload.get("gpu", "")),
+        )
         if base_path.is_file():
             detector = load_detector(
                 base_path,
@@ -289,6 +307,16 @@ def run_remote_training(
             detector = load_preset_detector(
                 ModelCatalog().get(str(effective["model_preset"])),
                 classes=classes,
+            )
+        _write_progress(
+            root,
+            volume_commit,
+            state="running",
+                phase="dataset_preparation",
+                message="The model and approved training snapshot are ready",
+                progress=0.0,
+                phase_progress=1.0,
+                gpu=str(payload.get("gpu", "")),
             )
 
         submitted_config = dict(payload.get("training_config", {}))
@@ -312,6 +340,7 @@ def run_remote_training(
             raise ValidationError("Cloud training does not evaluate or create validation splits")
 
         environment = _environment()
+        logs = _TailBuffer(8000)
         output_root = Path(tempfile.mkdtemp(prefix="amphilens-cloud-training-"))
         result_root = root / "results"
         result_root.mkdir(parents=True, exist_ok=True)
@@ -321,6 +350,10 @@ def run_remote_training(
             state="running",
             phase="training",
             progress=0.0,
+            message="Starting model training",
+            epoch=0,
+            epochs=training.epochs,
+            metrics={},
             environment=environment,
         )
         cloud_provenance = {
@@ -343,15 +376,23 @@ def run_remote_training(
                 root,
                 volume_commit,
                 state="running",
-                phase="training",
+                phase=str(values.get("phase", "training")),
+                message=str(values.get("message", "Training model")),
                 progress=float(values.get("progress", 0.0)),
                 epoch=values.get("epoch"),
                 epochs=values.get("epochs"),
-                metrics={
+                phase_progress=values.get("phase_progress"),
+                gpu=str(payload.get("gpu", "")),
+                device=str(values.get("device") or environment.get("gpu", "CUDA")),
+                metrics=dict(values.get("metrics", {}))
+                if isinstance(values.get("metrics"), dict)
+                else {
                     key: value
                     for key, value in values.items()
-                    if key not in {"epoch", "epochs", "progress"}
+                    if key
+                    not in {"phase", "message", "epoch", "epochs", "progress", "phase_progress"}
                 },
+                log_tail=logs.getvalue()[-8000:],
                 environment=environment,
             )
 
@@ -362,7 +403,6 @@ def run_remote_training(
             del signum, frame
             raise TimeoutError("Budget-derived server-side deadline reached")
 
-        logs = _TailBuffer(8000)
         try:
             signal.signal(signal.SIGALRM, on_deadline)
             signal.setitimer(signal.ITIMER_REAL, timer_seconds)

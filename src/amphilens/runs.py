@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -73,11 +73,40 @@ def _predict_resiliently(detector, paths: list[Path], config: InferenceConfig):
         ]
 
 
+def _report_inference_progress(
+    callback: Callable[[dict], None] | None,
+    *,
+    phase: str,
+    message: str,
+    total: int,
+    completed: int,
+    failed: int,
+    **details,
+) -> None:
+    if callback is None:
+        return
+    remaining = max(0, total - completed - failed)
+    callback(
+        {
+            "phase": phase,
+            "message": message,
+            "completed": completed,
+            "failed": failed,
+            "total": total,
+            "remaining": remaining,
+            "progress": (completed + failed) / total if total else 1.0,
+            **details,
+        }
+    )
+
+
 def run_resumable_inference(
     detector,
     image_paths: Iterable[str | Path],
     config: InferenceConfig,
     artifact_dir: str | Path,
+    *,
+    progress_callback: Callable[[dict], None] | None = None,
 ) -> RunSummary:
     paths = sorted(Path(path).expanduser().resolve() for path in image_paths)
     artifact = Path(artifact_dir).expanduser().resolve()
@@ -114,11 +143,24 @@ def run_resumable_inference(
     completed = set(progress.get("completed_images", []))
     failures = dict(progress.get("failed_images", {}))
     records = _load_jsonl(records_path)
+    current_paths = {str(path) for path in paths}
     pending = [path for path in paths if str(path) not in completed]
+    attempted_this_run: set[str] = set()
     batch_size = min(config.batch_size, 32)
     if config.device == "cpu":
         batch_size = 1
     effective_batch_size = int(progress.get("effective_batch_size", 0))
+
+    _report_inference_progress(
+        progress_callback,
+        phase="prediction",
+        message="Preparing image prediction",
+        total=len(paths),
+        completed=sum(path in completed for path in current_paths),
+        failed=0,
+        device=getattr(detector, "device_name", config.device),
+        effective_batch_size=effective_batch_size or batch_size,
+    )
 
     interruption_reason = None
     for offset in range(0, len(pending), batch_size):
@@ -137,9 +179,11 @@ def run_resumable_inference(
                 completed.update(str(path) for path in successful_paths)
                 for path in successful_paths:
                     failures.pop(str(path), None)
+                attempted_this_run.update(str(path) for path in successful_paths)
                 effective_batch_size = max(effective_batch_size, len(successful_paths))
             else:
                 failures[str(successful_paths[0])] = f"{type(error).__name__}: {error}"
+                attempted_this_run.add(str(successful_paths[0]))
             atomic_write_json(
                 progress_path,
                 {
@@ -151,7 +195,33 @@ def run_resumable_inference(
                     "effective_batch_size": effective_batch_size,
                 },
             )
+            attempted_failures = sum(
+                1 for image in attempted_this_run if image in failures and image not in completed
+            )
+            completed_count = sum(str(path) in completed for path in paths)
+            _report_inference_progress(
+                progress_callback,
+                phase="prediction",
+                message=f"Predicted {completed_count} of {len(paths)} images",
+                total=len(paths),
+                completed=completed_count,
+                failed=attempted_failures,
+                device=getattr(detector, "device_name", config.device),
+                effective_batch_size=effective_batch_size or batch_size,
+            )
 
+    _report_inference_progress(
+        progress_callback,
+        phase="saving_results",
+        message="Saving prediction results",
+        total=len(paths),
+        completed=sum(str(path) in completed for path in paths),
+        failed=sum(
+            1 for image in attempted_this_run if image in failures and image not in completed
+        ),
+        device=getattr(detector, "device_name", config.device),
+        effective_batch_size=effective_batch_size or batch_size,
+    )
     predictions_csv = write_predictions_csv(records, artifact / "predictions.csv")
     summary = {
         "run_id": config.run_id,

@@ -64,6 +64,42 @@ a { color: inherit; }
 .mobile-brand { display: none; align-items: center; gap: 7px; color: var(--marsh-deep); }
 .brand-mark.small { width: 28px; height: 28px; }
 .project-switcher { display: flex; align-items: center; gap: 11px; min-width: 0; }
+.activity-wrap { position: relative; flex: none; }
+.activity-toggle { display: inline-flex; align-items: center; gap: 8px; min-height: 36px; padding: 7px 10px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--marsh-deep); font-size: 12px; font-weight: 650; cursor: pointer; }
+.activity-toggle:hover, .activity-toggle[aria-expanded="true"] { border-color: var(--line); background: var(--surface); }
+.activity-indicator { width: 7px; height: 7px; border-radius: 50%; background: #a5afa7; }
+.activity-toggle.has-running .activity-indicator { background: var(--reed); box-shadow: 0 0 0 3px var(--reed-wash); animation: activity-pulse 1.8s ease-in-out infinite; }
+.activity-count { display: grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 10px; background: var(--marsh-wash); color: var(--marsh-deep); font-size: 10px; }
+.activity-panel { position: absolute; z-index: 12; top: calc(100% + 10px); right: -130px; width: min(470px, calc(100vw - 28px)); max-height: min(78vh, 720px); overflow: hidden; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); box-shadow: var(--shadow); }
+.activity-panel[hidden] { display: none; }
+.activity-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 15px; padding: 17px 19px 13px; border-bottom: 1px solid var(--line); background: #fbfcf8; }
+.activity-heading .eyebrow { margin: 0 0 3px; }
+.activity-heading h2 { font-size: 17px; }
+.activity-heading p:last-child { margin: 4px 0 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.activity-list { max-height: calc(min(78vh, 720px) - 82px); overflow: auto; padding: 0 17px 12px; }
+.activity-card { padding: 14px 2px 15px; border-bottom: 1px solid #e9ede7; }
+.activity-card:last-child { border-bottom: 0; }
+.activity-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.activity-card-head strong { font-size: 12px; font-weight: 680; }
+.activity-state { float: right; margin-left: 8px; color: var(--muted); font-size: 10px; text-transform: capitalize; }
+.activity-state.is-completed { color: var(--success); }
+.activity-state.is-failed, .activity-error { color: var(--error); }
+.activity-message, .activity-context { margin: 5px 0 0; color: var(--muted); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
+.activity-context { color: #48574c; }
+.activity-card .progress-track { margin-top: 9px; }
+.activity-card > .button { margin-top: 9px; }
+.activity-error { margin: 6px 0 0; font-size: 11px; overflow-wrap: anywhere; }
+.activity-details { margin-top: 9px; }
+.activity-details summary { color: var(--marsh-deep); font-size: 11px; font-weight: 620; cursor: pointer; }
+.activity-live { margin-top: 10px; padding: 8px 10px; border-radius: 8px; background: var(--surface-soft, #f2f5ef); }
+.activity-live-label { margin: 0 0 5px; color: var(--marsh-deep); font-size: 10px; font-weight: 650; }
+.activity-live .activity-timeline { max-height: none; overflow: visible; margin-top: 0; }
+.activity-timeline { display: grid; gap: 6px; max-height: 175px; overflow: auto; margin: 8px 0 0; padding: 0; list-style: none; }
+.activity-timeline li { display: grid; grid-template-columns: 58px minmax(0, 1fr); gap: 8px; color: var(--muted); font-size: 10px; line-height: 1.4; }
+.activity-timeline time { color: var(--quiet); font-variant-numeric: tabular-nums; }
+.activity-log { max-height: 190px; overflow: auto; margin: 9px 0 0; padding: 9px 10px; border-radius: 5px; background: #edf1eb; color: #435248; white-space: pre-wrap; overflow-wrap: anywhere; font: 10px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.activity-empty { margin: 0; padding: 19px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+@keyframes activity-pulse { 50% { box-shadow: 0 0 0 5px rgba(168, 135, 78, .11); } }
 .project-label { color: var(--muted); font-size: 12px; }
 .project-name { max-width: min(34vw, 350px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 630; }
 .text-button { padding: 5px 7px; border: 0; background: transparent; color: var(--marsh-deep); font-size: 12px; font-weight: 640; cursor: pointer; border-radius: 4px; }
@@ -216,6 +252,7 @@ h3 { margin: 0; font-size: 15px; line-height: 1.4; font-weight: 650; }
 .job-state.is-completed .status-dot { background: var(--success); box-shadow: 0 0 0 3px #dce9df; }
 .job-state.is-failed .status-dot { background: var(--error); box-shadow: 0 0 0 3px #f5dfd9; }
 .job-description, .job-detail { margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+.job-card .activity-details { margin-top: 12px; }
 .progress-track { height: 5px; margin-top: 14px; overflow: hidden; border-radius: 4px; background: #e4e9e2; }
 .progress-fill { height: 100%; background: #779681; transition: width .3s ease; }
 .progress-fill.indeterminate { width: 34%; animation: progress-travel 1.5s ease-in-out infinite alternate; }
@@ -285,6 +322,7 @@ h3 { margin: 0; font-size: 15px; line-height: 1.4; font-weight: 650; }
   .project-switcher { gap: 7px; }
   .project-label { display: none; }
   .project-name { max-width: 42vw; font-size: 12px; }
+  .activity-panel { right: -88px; }
   .content { padding: 30px 19px 50px; }
   .view-head { align-items: flex-start; flex-direction: column; gap: 14px; margin-bottom: 22px; }
   .hero-panel { grid-template-columns: minmax(0, 1fr) 190px; min-height: 218px; }
@@ -301,6 +339,8 @@ h3 { margin: 0; font-size: 15px; line-height: 1.4; font-weight: 650; }
   .mobile-brand { font-size: 16px; }
   .brand-mark.small { width: 24px; height: 24px; }
   .project-name { max-width: 34vw; }
+  .activity-toggle { gap: 6px; padding: 6px 7px; font-size: 11px; }
+  .activity-panel { right: -110px; }
   .content { padding: 26px 14px 40px; }
   .hero-panel { display: block; min-height: 0; }
   .hero-copy { padding: 22px 20px 19px; }

@@ -361,7 +361,89 @@ class CloudTrainingService:
             return self._save(record)
         record.remote_state = str(result.get("remote_state", result.get("state", "")))
         record.progress = result.get("progress")
-        record.log_tail = str(result.get("log_tail", ""))[-8000:]
+        details = result.get("progress_details")
+        if not isinstance(details, dict):
+            details = {
+                key: result[key]
+                for key in (
+                    "updated_at",
+                    "phase",
+                    "message",
+                    "epoch",
+                    "epochs",
+                    "metrics",
+                    "progress",
+                    "device",
+                    "gpu",
+                    "error",
+                    "environment",
+                )
+                if key in result
+            }
+        progress_keys = {
+            "updated_at",
+            "phase",
+            "message",
+            "error",
+            "progress",
+            "phase_progress",
+            "completed",
+            "failed",
+            "total",
+            "remaining",
+            "eta_seconds",
+            "epoch",
+            "epochs",
+            "metrics",
+            "device",
+            "gpu",
+            "batch",
+        }
+        record.progress_details = {
+            key: value for key, value in details.items() if key in progress_keys
+        }
+        record.log_tail = str(details.get("log_tail", result.get("log_tail", "")))[-8000:]
+        if details.get("error"):
+            record.error = str(details["error"])[-2000:]
+        event = {
+            key: value
+            for key, value in record.progress_details.items()
+            if key in {
+                "phase",
+                "message",
+                "error",
+                "epoch",
+                "epochs",
+                "metrics",
+                "device",
+                "gpu",
+                "progress",
+                "completed",
+                "failed",
+                "total",
+                "remaining",
+                "updated_at",
+            }
+        }
+        if event:
+            event_key = (
+                event.get("phase"),
+                event.get("epoch"),
+                event.get("completed"),
+                event.get("failed"),
+                event.get("message"),
+            )
+            prior = record.progress_events[-1] if record.progress_events else {}
+            prior_key = (
+                prior.get("phase"),
+                prior.get("epoch"),
+                prior.get("completed"),
+                prior.get("failed"),
+                prior.get("message"),
+            )
+            if event_key != prior_key:
+                record.progress_events.append(event)
+                del record.progress_events[:-100]
         record.environment = {
             str(key): str(value) for key, value in dict(result.get("environment", {})).items()
         }

@@ -88,6 +88,8 @@ class CloudJobRecord:
     remote_state: str = ""
     phase: str = "created"
     progress: float | None = None
+    progress_details: dict[str, Any] = field(default_factory=dict)
+    progress_events: list[dict[str, Any]] = field(default_factory=list)
     error: str = ""
     log_tail: str = ""
     environment: dict[str, str] = field(default_factory=dict)

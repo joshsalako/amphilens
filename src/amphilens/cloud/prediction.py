@@ -8,6 +8,7 @@ import math
 import re
 import shutil
 import time
+from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -47,6 +48,7 @@ def download_verified_hosted_checkpoint(
     *,
     hf_hub_download=None,
     cache_commit=lambda: None,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> Path:
     """Fetch a public checkpoint at its pinned revision and cache only verified bytes."""
     if hf_hub_download is None:
@@ -59,25 +61,51 @@ def download_verified_hosted_checkpoint(
     verified.parent.mkdir(parents=True, exist_ok=True)
     if verified.is_file():
         if _sha256_file(verified) == model.sha256:
+            if progress_callback is not None:
+                progress_callback(
+                    {"phase": "model_setup", "message": "Using verified cached model weights"}
+                )
             return verified
         verified.unlink()
     revision = model.to_summary()["revision"]
-    downloaded = Path(
-        hf_hub_download(
-            repo_id=model.repo_id,
-            filename=model.artifact,
-            repo_type="model",
-            revision=revision,
-            token=False,
-            cache_dir=str(root / "huggingface"),
+    download_options = {
+        "repo_id": model.repo_id,
+        "filename": model.artifact,
+        "repo_type": "model",
+        "revision": revision,
+        "token": False,
+        "cache_dir": str(root / "huggingface"),
+    }
+    if progress_callback is not None:
+        from ..models.hosted_models import _progress_tqdm_class
+
+        progress_callback(
+            {
+                "phase": "model_download",
+                "message": f"Downloading {model.repo_id} from Hugging Face",
+            }
         )
-    )
+        download_options["tqdm_class"] = _progress_tqdm_class(
+            lambda values: progress_callback(
+                {
+                    "phase": "model_download",
+                    "message": values.get("message", f"Downloading {model.repo_id}"),
+                    "phase_progress": values.get("progress"),
+                }
+            ),
+            model.model_id,
+        )
+    downloaded = Path(hf_hub_download(**download_options))
     if not downloaded.is_file() or _sha256_file(downloaded) != model.sha256:
         raise RuntimeError(
             f"The public Hugging Face checkpoint failed SHA-256 verification: {model.model_id}"
         )
     shutil.copy2(downloaded, verified)
     cache_commit()
+    if progress_callback is not None:
+        progress_callback(
+            {"phase": "model_setup", "message": "Verified and cached model weights"}
+        )
     return verified
 
 
@@ -93,6 +121,7 @@ def run_remote_prediction_batch(
     detector,
     volume_reload=lambda: None,
     volume_commit=lambda: None,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Verify and predict one committed image batch, then remove its image data."""
     root = Path(volume_root).resolve()
@@ -163,6 +192,14 @@ def run_remote_prediction_batch(
             metadata=dict(config_data.get("metadata", {})),
         )
 
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "phase": "prediction",
+                    "message": f"Running GPU prediction on {len(paths)} images in this batch",
+                    "batch_count": len(paths),
+                }
+            )
         records = []
         for record in detector.predict(paths, config):
             image_id = id_by_path.get(str(Path(record.image_path).resolve()))
@@ -172,15 +209,28 @@ def run_remote_prediction_batch(
             row.pop("image_path", None)
             row.pop("image_id", None)
             records.append({"local_image_id": image_id, **row})
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "phase": "prediction",
+                    "message": "Modal finished this prediction batch",
+                    "batch_count": len(paths),
+                }
+            )
         return {
             "state": "finished",
             "records": records,
             "elapsed_seconds": round(time.monotonic() - started, 3),
         }
     except Exception as exc:  # noqa: BLE001 - return only sanitized, bounded error details
+        safe_error = _safe_error(exc, root)
+        if progress_callback is not None:
+            progress_callback(
+                {"phase": "failed", "message": "Modal prediction batch failed", "error": safe_error}
+            )
         return {
             "state": "failed",
-            "error": _safe_error(exc, root),
+            "error": safe_error,
             "elapsed_seconds": round(time.monotonic() - started, 3),
         }
     finally:
@@ -206,6 +256,7 @@ class ModalPredictionDetector:
         timeout_seconds: int,
         max_cost_usd: float,
         output_dir: str | Path,
+        seconds_per_image: float | None = None,
         progress_callback=None,
         image_count: int = 0,
         cancellation_requested=None,
@@ -218,6 +269,11 @@ class ModalPredictionDetector:
         self.max_cost_usd = float(max_cost_usd)
         self.output_dir = Path(output_dir).resolve()
         self.progress_callback = progress_callback
+        self.seconds_per_image = (
+            max(0.0, float(seconds_per_image))
+            if seconds_per_image is not None and math.isfinite(float(seconds_per_image))
+            else None
+        )
         self.image_count = image_count
         self.cancellation_requested = cancellation_requested or (lambda: False)
         self.model_id = str(model_spec["model_id"])
@@ -306,6 +362,20 @@ class ModalPredictionDetector:
         self._batch_number += 1
         batch_id = f"batch-{self._batch_number:08d}"
         local_paths: dict[str, Path] = {}
+        if self.progress_callback:
+            self.progress_callback(
+                {
+                    "phase": "image_transfer",
+                    "message": f"Uploading batch {self._batch_number} to Modal",
+                    "completed": self._uploaded_images,
+                    "failed": 0,
+                    "total": self.image_count,
+                    "remaining": max(0, self.image_count - self._uploaded_images),
+                    "batch": self._batch_number,
+                    "gpu": self.gpu,
+                    "device": self.device_name,
+                }
+            )
         try:
             uploaded = self.transport.upload_prediction_batch(self.job_key, batch_id, paths)
             for item, path in zip(uploaded, paths, strict=True):
@@ -323,16 +393,55 @@ class ModalPredictionDetector:
             if self.progress_callback:
                 self.progress_callback(
                     {
+                        "phase": "image_transfer",
                         "message": (
                             f"Uploading batch {self._batch_number}; "
                             f"{self._uploaded_images} of {self.image_count} images completed."
                         ),
                         "completed": self._uploaded_images,
+                        "failed": 0,
                         "total": self.image_count,
+                        "remaining": max(0, self.image_count - self._uploaded_images),
+                        "batch": self._batch_number,
+                        "gpu": self.gpu,
+                        "device": self.device_name,
                     }
                 )
+
+            def report_remote(values: dict[str, Any]) -> None:
+                if self.progress_callback is None:
+                    return
+                event = dict(values)
+                phase = str(event.get("phase", "model_setup"))
+                if phase == "model_download" and "progress" in event:
+                    event["phase_progress"] = event.pop("progress")
+                event.update(
+                    {
+                        "completed": self._uploaded_images,
+                        "failed": 0,
+                        "total": self.image_count,
+                        "remaining": max(0, self.image_count - self._uploaded_images),
+                        "progress": (
+                            self._uploaded_images / self.image_count
+                            if self.image_count
+                            else 0.0
+                        ),
+                        "batch": self._batch_number,
+                        "gpu": self.gpu,
+                        "device": event.get("device") or self.device_name,
+                    }
+                )
+                if self.seconds_per_image is not None:
+                    event["eta_seconds"] = round(
+                        self.seconds_per_image * max(0, self.image_count - self._uploaded_images),
+                        1,
+                    )
+                self.progress_callback(event)
+
             result = self.transport.predict_batch(
-                payload, cancellation_requested=self.cancellation_requested
+                payload,
+                cancellation_requested=self.cancellation_requested,
+                progress_callback=report_remote,
             )
         finally:
             self.transport.cleanup_prediction_batch(self.job_key, batch_id)
@@ -379,12 +488,25 @@ class ModalPredictionDetector:
         if self.progress_callback:
             self.progress_callback(
                 {
+                    "phase": "prediction",
                     "message": f"Processed {self._uploaded_images} of {self.image_count} images; "
                     f"estimated Modal spend ${self.estimated_cost_usd:.2f} of "
                     f"${self.max_cost_usd:.2f}.",
                     "completed": self._uploaded_images,
+                    "failed": 0,
                     "total": self.image_count,
+                    "remaining": max(0, self.image_count - self._uploaded_images),
+                    "progress": (
+                        self._uploaded_images / self.image_count if self.image_count else 1.0
+                    ),
                     "estimated_cost_usd": round(self.estimated_cost_usd, 4),
+                    "gpu": self.gpu,
+                    "device": self.device_name,
                 }
             )
         return records
+
+    def cleanup_progress(self) -> None:
+        cleanup = getattr(self.transport, "cleanup_prediction_progress", None)
+        if callable(cleanup):
+            cleanup(self.job_key)

@@ -74,14 +74,37 @@ def train_and_register(
         if key == "cloud" and not isinstance(value, dict):
             raise ValidationError("Cloud training provenance must be a mapping")
         training_config[key] = value
+    def report(values: dict[str, Any]) -> None:
+        if progress_callback is None:
+            return
+        progress_callback({"phase": "training", **values})
+
     train_options = {"resume_from": resume_from}
     if progress_callback is not None:
-        train_options["progress_callback"] = progress_callback
-    checkpoint = (
-        Path(detector.train(dataset_yaml, output, training_config, **train_options))
-        .expanduser()
-        .resolve()
-    )
+        progress_callback(
+            {"phase": "training", "message": "Starting model training", "progress": 0.0}
+        )
+        train_options["progress_callback"] = report
+    try:
+        checkpoint = (
+            Path(detector.train(dataset_yaml, output, training_config, **train_options))
+            .expanduser()
+            .resolve()
+        )
+    except Exception as exc:
+        if progress_callback is not None:
+            progress_callback(
+                {"phase": "failed", "message": "Model training failed", "error": str(exc)}
+            )
+        raise
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "phase": "finalizing",
+                "message": "Saving the trained model and metrics",
+                "progress": 1.0,
+            }
+        )
     return finalize_training_outputs(
         detector,
         checkpoint=checkpoint,
@@ -155,10 +178,41 @@ def train_snapshot_and_register(
     """Prepare an immutable snapshot and train through the existing adapter contract."""
     output = Path(output_dir).expanduser().resolve()
     selected = PreprocessingConfig.from_any(preprocessing or config.preprocessing)
-    dataset_yaml = snapshot.to_yolo_dataset(
-        output / "prepared-dataset",
-        preprocessing=selected,
-    )
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "phase": "dataset_preparation",
+                "message": f"Preparing {len(snapshot.manifest.images)} labeled images",
+                "completed": 0,
+                "total": len(snapshot.manifest.images),
+                "progress": 0.0,
+            }
+        )
+    try:
+        dataset_yaml = snapshot.to_yolo_dataset(
+            output / "prepared-dataset",
+            preprocessing=selected,
+        )
+    except Exception as exc:
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "phase": "failed",
+                    "message": "Preparing the training dataset failed",
+                    "error": str(exc),
+                }
+            )
+        raise
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "phase": "dataset_preparation",
+                "message": "Labeled images are ready for training",
+                "completed": len(snapshot.manifest.images),
+                "total": len(snapshot.manifest.images),
+                "progress": 1.0,
+            }
+        )
     return train_and_register(
         detector,
         dataset_yaml=dataset_yaml,

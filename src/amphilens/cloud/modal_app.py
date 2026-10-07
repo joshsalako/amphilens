@@ -96,6 +96,30 @@ class PredictionEngine:
     """One warm container loads a selected model once and serves its image batches."""
 
     model_spec_json: str = modal.parameter()
+    job_key: str = modal.parameter()
+    gpu_type: str = modal.parameter()
+
+    def _report_progress(self, values: dict) -> None:
+        import re
+        from datetime import datetime, timezone
+
+        from ..core import atomic_write_json
+
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", self.job_key):
+            return
+        job_root = Path(PREDICTION_MOUNT).resolve() / "prediction-jobs" / self.job_key
+        job_root.mkdir(parents=True, exist_ok=True)
+        safe_values = dict(values)
+        safe_values.setdefault("gpu", self.gpu_type)
+        atomic_write_json(
+            job_root / "progress.json",
+            {
+                "state": "running",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                **safe_values,
+            },
+        )
+        prediction_volume.commit()
 
     @modal.enter()
     def load_model(self):
@@ -114,6 +138,13 @@ class PredictionEngine:
         started = time.monotonic()
         prediction_volume.reload()
         model_cache_volume.reload()
+        self._report_progress(
+            {
+                "phase": "model_setup",
+                "message": "Starting model setup on the Modal GPU",
+                "gpu": self.gpu_type,
+            }
+        )
         spec = json.loads(self.model_spec_json)
         source = str(spec["source"])
         classes = list(spec["classes"])
@@ -131,6 +162,7 @@ class PredictionEngine:
                 hosted,
                 cache_root,
                 cache_commit=model_cache_volume.commit,
+                progress_callback=self._report_progress,
             )
             detector = load_detector(
                 verified,
@@ -162,6 +194,12 @@ class PredictionEngine:
                 preprocessing=spec.get("preprocessing"),
             )
         elif source == "preset":
+            self._report_progress(
+                {
+                    "phase": "model_download",
+                    "message": "Loading pretrained weights; first use may download them",
+                }
+            )
             detector = load_preset_detector(
                 ModelCatalog().get(str(spec["model_id"])), classes=classes
             )
@@ -175,6 +213,14 @@ class PredictionEngine:
             self._gpu_name = torch.cuda.get_device_name(0)
         except Exception:
             self._gpu_name = "GPU"
+        self._report_progress(
+            {
+                "phase": "model_setup",
+                "message": "Model is ready on the Modal GPU",
+                "phase_progress": 1.0,
+                "device": self._gpu_name,
+            }
+        )
 
     @modal.method()
     def predict_batch(self, payload: dict) -> dict:
@@ -187,6 +233,7 @@ class PredictionEngine:
             detector=self.detector,
             volume_reload=prediction_volume.reload,
             volume_commit=prediction_volume.commit,
+            progress_callback=self._report_progress,
         )
         result["setup_seconds"] = self._setup_seconds
         result["gpu_name"] = self._gpu_name

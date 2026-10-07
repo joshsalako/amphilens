@@ -14,11 +14,14 @@
     hostedModels: [],
     modalGpus: [],
     jobs: new Map(),
+    jobMeta: new Map(),
     activeJob: null,
     cvatProjects: null,
     cvatServerUrl: "",
     cloudEstimate: null,
     cloudJobs: [],
+    cloudRefreshTimer: null,
+    cloudRefreshRunning: false,
     bootstrapped: false,
   };
 
@@ -61,7 +64,6 @@
 
   function setPage(view) {
     app.view = view;
-    app.activeJob = null;
     document.querySelectorAll("[data-view]").forEach((button) => {
       const active = button.dataset.view === view;
       button.classList.toggle("is-active", active);
@@ -72,6 +74,114 @@
     });
     render();
     document.getElementById("main-content").focus({ preventScroll: true });
+  }
+
+  function activeLocalJob(job) {
+    return !["completed", "failed", "canceled"].includes(String(job?.state || "").toLowerCase());
+  }
+
+  function activeCloudJob(job) {
+    return !["finished", "verified", "incomplete", "failed", "canceled", "timed_out"].includes(String(job?.state || "").toLowerCase());
+  }
+
+  function progressDetails(job, cloud = false) {
+    return cloud ? (job?.progress_details || job?.progress || {}) : (job?.progress || {});
+  }
+
+  function formatDuration(seconds) {
+    const value = Math.max(0, Math.round(Number(seconds)));
+    if (!Number.isFinite(value)) return "";
+    if (value < 60) return `${value}s`;
+    if (value < 3600) return `${Math.floor(value / 60)}m ${value % 60}s`;
+    return `${Math.floor(value / 3600)}h ${Math.floor((value % 3600) / 60)}m`;
+  }
+
+  function humanize(value) {
+    const text = String(value || "").replace(/[_-]+/g, " ");
+    return text ? text[0].toUpperCase() + text.slice(1) : "";
+  }
+
+  function displayDevice(value) {
+    const text = String(value || "").trim();
+    if (/^modal\s+/i.test(text)) return text.replace(/^modal\s+/i, "");
+    if (/^cuda(?::\d+)?$/i.test(text)) return "CUDA GPU";
+    if (/^mps(?::\d+)?$/i.test(text)) return "Apple MPS GPU";
+    if (/^cpu$/i.test(text)) return "CPU";
+    return text;
+  }
+
+  function activityProgress(job, cloud = false) {
+    const details = progressDetails(job, cloud);
+    const countPhase = ["prediction", "image_transfer", "saving_results"].includes(details.phase);
+    const completed = countPhase ? Number(details.completed) : NaN;
+    const failed = countPhase ? Number(details.failed || 0) : NaN;
+    const remaining = countPhase ? Number(details.remaining) : NaN;
+    const total = countPhase ? Number(details.total) : NaN;
+    const counts = [
+      Number.isFinite(completed) ? `${formatNumber(completed)} done` : "",
+      Number.isFinite(failed) && failed > 0 ? `${formatNumber(failed)} failed` : "",
+      Number.isFinite(remaining) ? `${formatNumber(remaining)} remaining` : "",
+    ].filter(Boolean).join(" · ");
+    const epoch = Number(details.epoch);
+    const epochs = Number(details.epochs);
+    const epochText = Number.isFinite(epoch) && Number.isFinite(epochs) && epochs > 0
+      ? `Epoch ${formatNumber(epoch)} of ${formatNumber(epochs)}` : "";
+    const metricEntries = Object.entries(details.metrics || {}).slice(0, 5);
+    const metrics = metricEntries.map(([key, value]) => `${key.replace(/[_-]+/g, " ")} ${typeof value === "number" ? Number(value).toFixed(4).replace(/0+$/, "").replace(/\.$/, "") : value}`).join(" · ");
+    const overallPercent = cloud ? (job.progress ?? details.progress) : (typeof job.progress === "number" ? job.progress : details.progress);
+    let percent = overallPercent == null ? NaN : Number(overallPercent);
+    if (!Number.isFinite(percent) && Number.isFinite(completed) && Number.isFinite(total) && total > 0) percent = completed / total;
+    if (Number.isFinite(percent)) percent = Math.max(0, Math.min(100, percent <= 1 ? percent * 100 : percent));
+    const rawPhasePercent = details.phase_progress;
+    const phasePercent = rawPhasePercent == null || !Number.isFinite(Number(rawPhasePercent))
+      ? null : Math.max(0, Math.min(100, Number(rawPhasePercent) <= 1 ? Number(rawPhasePercent) * 100 : Number(rawPhasePercent)));
+    const eta = Number(details.eta_seconds);
+    return { details, counts, epochText, metrics, percent, phasePercent, device: displayDevice(details.device || details.gpu), eta: Number.isFinite(eta) && eta >= 0 ? formatDuration(eta) : "" };
+  }
+
+  function activityTimeline(job, cloud = false) {
+    return window.AmphiLensActivityView?.renderTimeline(job, cloud) || "";
+  }
+
+  function activityCard(job, { cloud = false, id = "", title = "Run", kind = "" } = {}) {
+    const progress = activityProgress(job, cloud);
+    const state = String(cloud ? job.state || job.phase || "saved" : job.state || "queued").replace(/[_-]+/g, " ");
+    const active = cloud ? activeCloudJob(job) : activeLocalJob(job);
+    const phase = humanize(progress.details.phase || job.phase || state);
+    const message = progress.details.message || job.error || job.result?.message || job.message || (active ? "Working in the background" : state);
+    const statusClass = /failed|incomplete|timed out/.test(state) ? "is-failed" : /finished|verified|completed/.test(state) ? "is-completed" : "";
+    const shownPercent = progress.phasePercent ?? progress.percent;
+    const bar = shownPercent == null
+      ? (active ? `<div class="progress-track" aria-label="Progress"><div class="progress-fill indeterminate"></div></div>` : "")
+      : `<div class="progress-track" role="progressbar" aria-label="${escapeHtml(title)} progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(shownPercent)}"><div class="progress-fill" style="width:${shownPercent}%"></div></div>`;
+    const context = [cloud || app.jobMeta.get(id)?.execution === "modal" ? "Modal" : "This computer", progress.device, phase, progress.phasePercent != null ? `Step ${Math.round(progress.phasePercent)}%` : "", progress.epochText, progress.counts, progress.metrics, progress.eta ? `About ${progress.eta} left` : ""].filter(Boolean).join(" · ");
+    const error = job.error ? `<p class="activity-error">${escapeHtml(job.error)}</p>` : "";
+    const cancel = !cloud && active && kind === "predict" && app.jobMeta.get(id)?.execution === "modal"
+      ? `<button class="button small" type="button" data-cancel-job="${escapeHtml(id)}">Cancel after current batch</button>` : "";
+    return `<article class="activity-card" data-activity-id="${cloud ? "cloud" : "local"}:${escapeHtml(id)}"><div class="activity-card-head"><div><strong>${escapeHtml(title)}</strong><span class="activity-state ${statusClass}">${escapeHtml(state)}</span></div></div><p class="activity-message">${escapeHtml(message)}</p><p class="activity-context">${escapeHtml(context)}</p>${bar}${error}${cancel}${activityTimeline(job, cloud)}</article>`;
+  }
+
+  function renderActivity() {
+    const panel = document.getElementById("activity-content");
+    const count = document.querySelector("[data-activity-count]");
+    if (!panel) return;
+    const openRuns = new Set([...panel.querySelectorAll(".activity-details[open]")].map((details) => details.closest("[data-activity-id]")?.dataset.activityId).filter(Boolean));
+    const scrollTop = panel.querySelector(".activity-list")?.scrollTop || 0;
+    const local = [...app.jobs.entries()].slice(-12).reverse().map(([id, job]) => {
+      const meta = app.jobMeta.get(id) || {};
+      return activityCard(job, { id, title: meta.title || (meta.kind === "training" ? "Model training" : meta.kind === "predict" ? "Wildlife prediction" : "Workspace task"), kind: meta.kind || "" });
+    });
+    const cloud = app.cloudJobs.slice(0, 12).map((job) => activityCard(job, { cloud: true, id: job.run_id, title: cloudJobTitle(job), kind: "training" }));
+    const running = [...app.jobs.values()].filter(activeLocalJob).length + app.cloudJobs.filter(activeCloudJob).length;
+    if (count) { count.textContent = running ? String(running) : ""; count.hidden = !running; }
+    const toggle = document.querySelector("[data-activity-toggle]");
+    if (toggle) toggle.classList.toggle("has-running", running > 0);
+    panel.innerHTML = `<div class="activity-heading"><div><p class="eyebrow">Run monitor</p><h2>Activity</h2><p>${running ? `${running} run${running === 1 ? " is" : "s are"} active. Updates appear here while you work.` : "Recent prediction and training runs appear here."}</p></div><button class="icon-button" type="button" data-activity-close aria-label="Close activity panel">×</button></div>${local.length || cloud.length ? `<div class="activity-list">${local.join("")}${cloud.join("")}</div>` : `<p class="activity-empty">No runs yet. Start a prediction or training run to follow its progress here.</p>`}`;
+    for (const details of panel.querySelectorAll(".activity-details")) {
+      if (openRuns.has(details.closest("[data-activity-id]")?.dataset.activityId)) details.open = true;
+    }
+    const list = panel.querySelector(".activity-list");
+    if (list) list.scrollTop = scrollTop;
   }
 
   async function refreshBootstrap() {
@@ -92,6 +202,7 @@
       updateProjectHeader();
       populateModelPreset();
       render();
+      if (app.project) loadCloudJobs();
     } catch (error) {
       root.innerHTML = `<section class="surface empty-state"><div class="empty-illustration" aria-hidden="true">!</div><h2>Workspace could not load</h2><p>${escapeHtml(error.message)}. Check that the local AmphiLens service is running, then try again.</p><button class="button primary" type="button" data-retry-bootstrap>Try again</button></section>`;
     } finally {
@@ -102,6 +213,10 @@
   function updateProjectHeader() {
     document.getElementById("current-project").textContent = app.project ? app.project.name || basename(app.project.path) : "No project open";
     document.getElementById("close-project-wrap").hidden = !app.project;
+    if (!app.project && app.cloudRefreshTimer) {
+      window.clearInterval(app.cloudRefreshTimer);
+      app.cloudRefreshTimer = null;
+    }
   }
 
   function populateModelPreset() {
@@ -204,6 +319,27 @@
     mapping.innerHTML = `<div><span class="field-title">Map model labels to project classes</span><p class="field-help">Exact label matches are preselected. Map every other label or choose Ignore.</p></div><div class="cvat-label-list">${rows}</div>`;
   }
 
+  function predictionPreferenceScope() {
+    return app.project?.path || app.project?.name || "";
+  }
+
+  function savePredictionPreferences(form) {
+    if (!form || !predictionPreferenceScope()) return;
+    window.AmphiLensPredictionPreferences?.save(predictionPreferenceScope(), form);
+  }
+
+  function restorePredictionPreferences(form) {
+    if (!form || !predictionPreferenceScope()) return;
+    window.AmphiLensPredictionPreferences?.restore(predictionPreferenceScope(), form);
+  }
+
+  function syncPredictionExecutionControls(form) {
+    if (!form) return;
+    const cloud = form.elements.execution?.value === "modal";
+    form.querySelector("[data-modal-prediction-settings]")?.toggleAttribute("hidden", !cloud);
+    form.querySelector("[data-local-prediction-settings]")?.toggleAttribute("hidden", cloud);
+  }
+
   function renderPredict() {
     if (projectRequired()) return;
     const roots = app.project.image_roots || [];
@@ -226,7 +362,15 @@
           <div class="form-actions"><button class="button primary" type="submit">Run detection</button><span class="muted" style="font-size:12px">You can leave this page while it runs.</span></div>
         </form><div id="job-slot" aria-live="polite"></div>
       </section><aside class="surface side-note"><h3>What you will get</h3><p>Predictions include image names, detected classes, confidence scores and bounding boxes. AmphiLens can also save a run summary and visual evidence when available.</p><div class="note-rule"></div><h3>Choosing a model</h3><p>Use general pretrained weights to begin, an AmphiLens fine-tuned model for its trained classes, or a project checkpoint you have already trained.</p></aside></div>`;
+    const form = root.querySelector('form[data-form="predict"]');
+    restorePredictionPreferences(form);
     renderPredictionModelSelection();
+    restorePredictionPreferences(form);
+    const confidenceOutput = form?.querySelector('output[for="confidence"]');
+    if (confidenceOutput && form.elements.confidence) {
+      confidenceOutput.value = Number(form.elements.confidence.value).toFixed(2);
+    }
+    syncPredictionExecutionControls(form);
   }
 
   function renderImport() {
@@ -327,7 +471,7 @@
         <div class="form-actions"><button class="button primary" type="submit">Train model</button></div>
       </form><div id="job-slot" aria-live="polite"></div>
     </section><aside class="surface side-note"><h3>Before you start</h3><p>Training is available only from a validated labeled snapshot. Empty annotations can be valid for reviewed images with no target wildlife.</p><div class="note-rule"></div><p>Evaluation is reported as not evaluated when no holdout dataset is supplied.</p></aside></div>
-      <section class="surface panel cloud-jobs-panel"><div class="panel-heading"><div><h2>Cloud jobs</h2><p>Refresh, cancel or collect a saved Modal training job.</p></div><button class="button small" type="button" data-refresh-cloud-jobs>Refresh jobs</button></div><div id="cloud-jobs-slot" aria-live="polite"><p class="empty-inline">Loading saved cloud jobs…</p></div></section>` : `<section class="surface empty-state" style="margin-top:0"><div class="empty-illustration" aria-hidden="true">↗</div><h2>No labeled dataset yet</h2><p>Import a reviewed archive or CVAT project first. You can still use Find wildlife with a pretrained model while you gather annotations.</p><div class="project-actions"><button class="button primary" type="button" data-view="import">Import labeled images</button><button class="button" type="button" data-view="predict">Find wildlife</button></div></section>`;
+      <section class="surface panel cloud-jobs-panel"><div class="panel-heading"><div><h2>Cloud jobs</h2><p>Active Modal training progress refreshes automatically while AmphiLens is open.</p></div><button class="button small" type="button" data-refresh-cloud-jobs>Refresh jobs</button></div><div id="cloud-jobs-slot" aria-live="polite"><p class="empty-inline">Loading saved cloud jobs…</p></div></section>` : `<section class="surface empty-state" style="margin-top:0"><div class="empty-illustration" aria-hidden="true">↗</div><h2>No labeled dataset yet</h2><p>Import a reviewed archive or CVAT project first. You can still use Find wildlife with a pretrained model while you gather annotations.</p><div class="project-actions"><button class="button primary" type="button" data-view="import">Import labeled images</button><button class="button" type="button" data-view="predict">Find wildlife</button></div></section>`;
     root.innerHTML = `${pageHead("Label & improve", "Train a model", "Fine-tune a model using a validated labeled dataset snapshot. Prediction-only projects do not need to train.")}${workflow}`;
     syncTrainingSourceControls(root.querySelector('form[data-form="training"]'));
     if (datasets.length) loadCloudJobs();
@@ -416,11 +560,12 @@
     if (!slot) return;
     const rows = app.cloudJobs.map((job) => {
       const runId = job.run_id || job.id || job.job_id;
-      const status = cloudJobStatus(job);
-      const phase = job.phase || "";
-      const terminal = /complete|success|finish|verified/i.test(`${status} ${phase}`);
-      const busy = /running|queued|pending/i.test(String(status));
-      const verified = status === "verified" || phase === "artifacts-verified-and-registered";
+      const state = cloudJobStatus(job);
+      const status = humanize(state);
+      const phase = humanize(job.phase || "");
+      const terminal = /complete|success|finish|verified/i.test(`${state} ${job.phase || ""}`);
+      const busy = /running|queued|pending/i.test(String(state));
+      const verified = state === "verified" || job.phase === "artifacts-verified-and-registered";
       const detail = job.gpu || job.training_config?.gpu || "";
       const consent = job.consent && typeof job.consent === "object" ? [job.consent.uploads_dataset ? "dataset upload approved" : "", job.consent.acknowledged ? "estimate acknowledged" : ""].filter(Boolean).join(" · ") : "";
       const error = job.error ? `<p class="job-detail">${escapeHtml(job.error)}</p>` : "";
@@ -445,9 +590,41 @@
       const result = await api("/api/cloud/jobs", { method: "GET", headers: {} });
       app.cloudJobs = Array.isArray(result.jobs) ? result.jobs : [];
       renderCloudJobs();
+      renderActivity();
+      if (app.cloudJobs.some(activeCloudJob) && !app.cloudRefreshTimer) {
+        app.cloudRefreshTimer = window.setInterval(refreshActiveCloudJobs, 3000);
+        window.setTimeout(refreshActiveCloudJobs, 0);
+      } else if (!app.cloudJobs.some(activeCloudJob) && app.cloudRefreshTimer) {
+        window.clearInterval(app.cloudRefreshTimer);
+        app.cloudRefreshTimer = null;
+      }
     } catch (error) {
       const slot = document.getElementById("cloud-jobs-slot");
       if (slot) slot.innerHTML = `<div class="notice warning"><span class="notice-mark" aria-hidden="true">!</span><p>Saved cloud jobs could not be loaded: ${escapeHtml(error.message)}</p></div>${renderCloudActionResult()}`;
+    }
+  }
+
+  async function refreshActiveCloudJobs() {
+    if (app.cloudRefreshRunning || !app.cloudJobs.some(activeCloudJob)) return;
+    app.cloudRefreshRunning = true;
+    try {
+      const current = app.cloudJobs.filter(activeCloudJob);
+      for (const job of current) {
+        const runId = job.run_id || job.id || job.job_id;
+        if (!runId) continue;
+        const result = await api(`/api/cloud/jobs/${encodeURIComponent(runId)}/refresh`, { method: "POST", body: "{}" });
+        if (result.job) app.cloudJobs = [result.job, ...app.cloudJobs.filter((item) => (item.run_id || item.id || item.job_id) !== runId)];
+      }
+      renderCloudJobs();
+      renderActivity();
+      if (!app.cloudJobs.some(activeCloudJob) && app.cloudRefreshTimer) {
+        window.clearInterval(app.cloudRefreshTimer);
+        app.cloudRefreshTimer = null;
+      }
+    } catch {
+      // Keep the most recent remote progress visible and retry on the next interval.
+    } finally {
+      app.cloudRefreshRunning = false;
     }
   }
 
@@ -552,6 +729,8 @@
     if (!app.bootstrapped) return;
     const pages = { home: renderHome, predict: renderPredict, import: renderImport, training: renderTraining, review: renderReview, cvat: renderCvat, health: renderHealth };
     (pages[app.view] || renderHome)();
+    renderJobSlot();
+    renderActivity();
     document.querySelectorAll("[data-view]").forEach((button) => {
       const active = button.dataset.view === app.view;
       button.classList.toggle("is-active", active);
@@ -772,18 +951,28 @@
         if (slot) slot.innerHTML = renderCloudEstimate();
         if (result.job && result.job.run_id) app.cloudJobs = [result.job, ...app.cloudJobs.filter((item) => (item.run_id || item.id) !== result.job.run_id)];
         await loadCloudJobs();
+        renderActivity();
         toast(result.message || "Cloud training job submitted.");
         return;
       }
       if (result.job_id) {
         app.activeJob = { id: result.job_id, kind: form.dataset.form, execution: values.execution };
+        app.jobMeta.set(result.job_id, {
+          kind: form.dataset.form,
+          execution: values.execution || "local",
+          title: form.dataset.form === "predict" ? "Wildlife prediction" : form.dataset.form === "training" ? "Model training" : "Workspace task",
+        });
         app.jobs.set(result.job_id, { ...result });
         renderJobSlot();
+        renderActivity();
         pollJob(result.job_id);
       } else if (result.job) {
-        app.jobs.set(result.job.job_id || form.dataset.form, result.job);
-        app.activeJob = { id: result.job.job_id || form.dataset.form, kind: form.dataset.form };
+        const id = result.job.job_id || form.dataset.form;
+        app.jobs.set(id, result.job);
+        app.jobMeta.set(id, { kind: form.dataset.form, title: form.dataset.form === "training" ? "Model training" : form.dataset.form === "predict" ? "Wildlife prediction" : "Workspace task" });
+        app.activeJob = { id, kind: form.dataset.form };
         renderJobSlot(result.job);
+        renderActivity();
         toast(result.job.message || "Request started.");
       } else {
         toast(result.message || "Request completed.");
@@ -802,18 +991,23 @@
     const completed = state === "completed";
     const failed = state === "failed";
     const canceled = state === "canceled";
-    const rawProgress = typeof job.progress === "number" ? job.progress : Number(job.progress?.percent ?? (job.progress?.total ? job.progress.completed / job.progress.total * 100 : NaN));
+    const activity = activityProgress(job);
+    const rawProgress = activity.phasePercent ?? activity.percent;
     const hasProgress = Number.isFinite(rawProgress);
     const progress = hasProgress ? Math.max(0, Math.min(100, rawProgress < 1 ? rawProgress * 100 : rawProgress)) : null;
     const result = job.result || {};
+    const details = activity.details;
     const downloads = Array.isArray(result.downloads) ? result.downloads : [];
     const paths = result.paths && typeof result.paths === "object" ? Object.entries(result.paths) : [];
     const progressText = typeof job.progress === "object" ? job.progress.message || job.progress.label || "" : "";
+    const progressContext = [activity.device, humanize(details.phase), activity.phasePercent != null ? `Step ${Math.round(activity.phasePercent)}%` : "", activity.epochText, activity.counts, activity.metrics, activity.eta ? `About ${activity.eta} left` : ""].filter(Boolean).join(" · ");
     return `<section class="job-card" aria-label="Job status"><div class="job-head"><div class="job-title"><span class="status-dot" aria-hidden="true"></span>${failed ? "This run needs attention" : canceled ? "Prediction canceled" : completed ? "Run complete" : "Working on your request"}</div><span class="job-state ${completed ? "is-completed" : failed ? "is-failed" : ""}"><span class="status-dot" aria-hidden="true"></span>${escapeHtml(state)}</span></div>
       ${result.message ? `<p class="job-description">${escapeHtml(result.message)}</p>` : progressText ? `<p class="job-description">${escapeHtml(progressText)}</p>` : `<p class="job-description">${failed ? "The job could not be completed." : completed ? "Your files are ready in the project." : "You can continue using AmphiLens while this runs."}</p>`}
+      ${progressContext ? `<p class="job-description">${escapeHtml(progressContext)}</p>` : ""}
       ${!completed && !failed && !canceled ? `<div class="progress-track" role="progressbar" aria-label="Job progress" aria-valuemin="0" aria-valuemax="100"${hasProgress ? ` aria-valuenow="${Math.round(progress)}"` : ""}><div class="progress-fill${hasProgress ? "" : " indeterminate"}" ${hasProgress ? `style="width:${progress}%"` : ""}></div></div>` : ""}
-      ${!completed && !failed && !canceled && app.activeJob?.kind === "predict" && app.activeJob?.execution === "modal" ? `<button class="button small" type="button" data-cancel-job="${escapeHtml(job.job_id || "")}">Cancel after current batch</button>` : ""}
+      ${!completed && !failed && !canceled && app.activeJob?.kind === "predict" && app.jobMeta.get(app.activeJob.id)?.execution === "modal" ? `<button class="button small" type="button" data-cancel-job="${escapeHtml(job.job_id || "")}">Cancel after current batch</button>` : ""}
       ${job.error ? `<p class="job-detail">${escapeHtml(job.error)}</p>` : ""}
+      ${activityTimeline(job)}
       ${paths.length ? `<ul class="path-list">${paths.map(([label, value]) => `<li><span>${escapeHtml(String(label).replace(/[_-]+/g, " "))}</span><span>${escapeHtml(value)}</span></li>`).join("")}</ul>` : ""}
       ${downloads.length ? `<div class="download-list">${downloads.map((item) => `<a class="download-link" href="${escapeHtml(safeHref(item.url))}" download="${escapeHtml(item.filename || "")}">${escapeHtml(item.label || item.filename || "Download file")}</a>`).join("")}</div>` : ""}
       ${app.activeJob?.kind === "cvat" && (job.result?.task_url || job.result?.cvat_url || job.result?.server_url || app.managedCvatUrl) ? `<div class="download-list"><a class="download-link" href="${escapeHtml(safeHref(job.result?.task_url || job.result?.cvat_url || job.result?.server_url || app.managedCvatUrl))}" target="_blank" rel="noopener noreferrer">Open CVAT</a></div>` : ""}
@@ -824,8 +1018,15 @@
   function renderJobSlot(explicitJob = null) {
     const slot = document.getElementById(app.activeJob?.kind === "initial-cvat" ? "cvat-import-job-slot" : "job-slot");
     if (!slot) return;
+    const belongsToView = app.activeJob && (app.activeJob.kind === app.view || (app.activeJob.kind === "initial-cvat" && app.view === "import"));
+    if (!belongsToView) { slot.innerHTML = ""; return; }
+    const historyWasOpen = Boolean(slot.querySelector(".activity-details")?.open);
     const job = explicitJob || (app.activeJob ? app.jobs.get(app.activeJob.id) : null);
     slot.innerHTML = job ? jobPanel(job) : "";
+    if (historyWasOpen) {
+      const history = slot.querySelector(".activity-details");
+      if (history) history.open = true;
+    }
   }
 
   async function pollJob(jobId) {
@@ -835,6 +1036,7 @@
         const job = await api(`/api/jobs/${encodeURIComponent(jobId)}`, { method: "GET", headers: {} });
         app.jobs.set(jobId, job);
         if (app.activeJob?.id === jobId) renderJobSlot();
+        renderActivity();
         if (["completed", "failed", "canceled"].includes(String(job.state).toLowerCase())) {
           if (job.state === "completed") await refreshProjectDetails(jobId);
           return;
@@ -846,6 +1048,7 @@
         job.error = `Could not refresh status: ${error.message}`;
         app.jobs.set(jobId, job);
         if (app.activeJob?.id === jobId) renderJobSlot();
+        renderActivity();
         return;
       }
     }
@@ -859,7 +1062,6 @@
       updateProjectHeader();
       if (jobId && app.activeJob?.id === jobId) {
         render();
-        renderJobSlot();
       }
     } catch { /* the completed job details remain visible */ }
   }
@@ -886,6 +1088,24 @@
 
   document.addEventListener("submit", handleSubmit);
   document.addEventListener("click", async (event) => {
+    const activityPanel = document.getElementById("activity-panel");
+    const activityToggle = event.target.closest("[data-activity-toggle]");
+    if (activityToggle) {
+      const opening = activityPanel.hidden;
+      activityPanel.hidden = !opening;
+      activityToggle.setAttribute("aria-expanded", String(opening));
+      if (opening) renderActivity();
+      return;
+    }
+    if (event.target.closest("[data-activity-close]")) {
+      activityPanel.hidden = true;
+      document.querySelector("[data-activity-toggle]")?.setAttribute("aria-expanded", "false");
+      return;
+    }
+    if (!event.target.closest(".activity-wrap") && activityPanel && !activityPanel.hidden) {
+      activityPanel.hidden = true;
+      document.querySelector("[data-activity-toggle]")?.setAttribute("aria-expanded", "false");
+    }
     const pathButton = event.target.closest("[data-path-picker]");
     if (pathButton) {
       event.preventDefault();
@@ -979,6 +1199,7 @@
       const output = document.querySelector('output[for="confidence"]');
       if (output) output.value = Number(event.target.value).toFixed(2);
     }
+    savePredictionPreferences(event.target.closest('form[data-form="predict"]'));
   });
   document.addEventListener("change", (event) => {
     if (event.target.id === "cvat-action") {
@@ -998,9 +1219,7 @@
     }
     if (event.target.id === "prediction-model") renderPredictionModelSelection();
     if (event.target.id === "prediction-execution") {
-      const cloud = event.target.value === "modal";
-      document.querySelector("[data-modal-prediction-settings]")?.toggleAttribute("hidden", !cloud);
-      document.querySelector("[data-local-prediction-settings]")?.toggleAttribute("hidden", cloud);
+      syncPredictionExecutionControls(event.target.form);
     }
     if (event.target.id === "training-source" || event.target.id === "training-hosted-model") {
       const form = event.target.closest('form[data-form="training"]');
@@ -1030,6 +1249,18 @@
         app.cloudEstimateSignature = null;
         const slot = document.getElementById("cloud-estimate-slot");
         if (slot) slot.innerHTML = renderCloudEstimate();
+      }
+    }
+    savePredictionPreferences(event.target.closest('form[data-form="predict"]'));
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      const panel = document.getElementById("activity-panel");
+      if (panel && !panel.hidden) {
+        panel.hidden = true;
+        document.querySelector("[data-activity-toggle]")?.setAttribute("aria-expanded", "false");
+        document.querySelector("[data-activity-toggle]")?.focus();
       }
     }
   });
