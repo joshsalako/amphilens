@@ -81,15 +81,17 @@ The same preprocessing configuration is used when preparing training data and
 when running inference:
 
 ```text
-load image -> maximum-dimension resize -> optional grayscale -> optional CLAHE
+load image -> configured-side resize -> optional grayscale -> optional CLAHE
 ```
 
-The defaults are:
+New browser-created projects use these defaults:
 
-1. maximum dimension: `640`;
+1. short-side dimension: `640` pixels;
 2. no upscaling of smaller images;
 3. grayscale: enabled and replicated to three channels; and
 4. CLAHE: disabled for generic projects.
+
+Existing projects retain their saved resize mode and dimensions.
 
 When CLAHE is enabled, the paper-aligned settings are `clip_limit=2.0` and an
 `(8, 8)` tile grid. Resizing happens before CLAHE to reduce processing time. A

@@ -188,17 +188,18 @@ configuration; it is not included in model requests or cloud-training uploads.
 When using an AmphiLens model for prediction, map every source class to a project
 class or choose **Ignore**. Exact class-name matches are preselected.
 
-For each project, choose:
+For projects created in the browser app, choose:
 
-- maximum image dimension, default `640`;
+- short-side image dimension, default `640` pixels;
 - grayscale conversion, on by default;
 - CLAHE, off for generic projects and on for the paper-aligned preset;
 - confidence threshold; and
 - CPU or CUDA device.
 
-Images are resized without enlarging them, aspect ratio is preserved, and
-grayscale images are replicated into three channels. If CLAHE is enabled,
-resizing happens first to reduce processing time. These choices are saved in
+For larger images, the shorter side is resized to the selected dimension;
+smaller images are not enlarged and aspect ratio is preserved. Grayscale images
+are replicated into three channels. If CLAHE is enabled, resizing happens first
+to reduce processing time. These choices are saved in
 the project and run metadata.
 
 When you train or find wildlife, AmphiLens loads these saved choices

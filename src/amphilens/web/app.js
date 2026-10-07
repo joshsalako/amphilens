@@ -7,6 +7,7 @@
     view: "home",
     project: null,
     doctor: null,
+    modalConnectivity: null,
     defaultProjectRoot: "",
     defaultModelId: "",
     models: [],
@@ -78,6 +79,9 @@
       const data = await api("/api/bootstrap", { method: "GET", headers: {} });
       app.project = data.project || null;
       app.doctor = data.doctor || {};
+      if (app.modalConnectivity !== null) {
+        app.doctor.modal_connectivity = app.modalConnectivity;
+      }
       app.defaultProjectRoot = data.default_project_root || "";
       app.defaultModelId = data.default_model_id || "";
       app.models = app.project?.models || data.models || [];
@@ -512,6 +516,9 @@
         const safeValue = Object.fromEntries(Object.entries(value).filter(([key]) => !/token|secret|password|credential.value/i.test(key)));
         return safeCheck({ name, ...safeValue });
       }
+      if (name === "modal_connectivity" && typeof value === "string") {
+        return safeCheck({ name, status: value });
+      }
       return safeCheck({ name, status: typeof value === "boolean" ? (value ? "ready" : "attention") : "info", message: typeof value === "string" ? value : "" });
     }).filter(Boolean);
     return [];
@@ -644,7 +651,7 @@
         const values = formData(form);
         values.classes = String(values.classes || "").split(",").map((item) => item.trim()).filter(Boolean);
         if (!values.classes.length) throw new Error("Add at least one wildlife class.");
-        values.max_dimension = numberOrUndefined(values.max_dimension);
+        values.short_side_dimension = numberOrUndefined(values.short_side_dimension);
         values.grayscale = form.elements.grayscale.checked;
         values.clahe = form.elements.clahe.checked;
         if (!values.image_root?.trim()) throw new Error("Choose an image folder for this project.");
@@ -832,15 +839,19 @@
   }
 
   async function refreshCloud() {
-    const slot = document.getElementById("cloud-status");
+    let slot = document.getElementById("cloud-status");
     if (slot) slot.innerHTML = `<p class="job-description">Checking the optional cloud connection…</p>`;
     try {
       const data = await api("/api/environment/check-cloud", { method: "POST", body: "{}" });
-      app.doctor = { ...(app.doctor || {}), cloud: data.doctor };
+      const report = data.doctor || {};
+      app.modalConnectivity = report.modal_connectivity ?? "not checked";
+      app.doctor = { ...(app.doctor || {}), ...report };
+      render();
+      slot = document.getElementById("cloud-status");
       if (slot) {
-        const checks = doctorChecks(data.doctor);
-        const message = checks.map((item) => [item.name || item.label, item.message || item.status].filter(Boolean).join(": ")).filter(Boolean).join(" · ") || data.doctor?.message || "Cloud check complete.";
-        slot.innerHTML = `<div class="notice ${statusTone(data.doctor?.status) === "bad" ? "error" : ""}" style="margin-top:12px"><span class="notice-mark" aria-hidden="true">i</span><p>${escapeHtml(message)}</p></div>`;
+        const checks = doctorChecks(report);
+        const message = checks.map((item) => [item.name || item.label, item.message || item.status].filter(Boolean).join(": ")).filter(Boolean).join(" · ") || report.message || "Cloud check complete.";
+        slot.innerHTML = `<div class="notice ${statusTone(report.modal_connectivity) === "bad" ? "error" : ""}" style="margin-top:12px"><span class="notice-mark" aria-hidden="true">i</span><p>${escapeHtml(message)}</p></div>`;
       }
     } catch (error) {
       if (slot) slot.innerHTML = `<div class="notice error" style="margin-top:12px"><span class="notice-mark" aria-hidden="true">!</span><p>${escapeHtml(error.message)}</p></div>`;

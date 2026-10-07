@@ -430,7 +430,8 @@ class ProjectCreateRequest:
     image_root: str
     classes: list[str]
     model_preset: str = "yolo26-l"
-    max_dimension: int = 640
+    image_dimension: int = 640
+    compatibility_mode: Literal["max-dimension", "shortest-side"] = "max-dimension"
     grayscale: bool = True
     clahe: bool = False
 
@@ -618,13 +619,16 @@ def _request(cls, payload: dict[str, Any]):
         classes = payload.get("classes")
         if not isinstance(classes, list) or any(not isinstance(value, str) for value in classes):
             raise ValueError("classes must be a list of names")
+        uses_short_side = "short_side_dimension" in payload
+        dimension_key = "short_side_dimension" if uses_short_side else "max_dimension"
         request = cls(
             name=_string(payload, "name"),
             path=_string(payload, "path"),
             image_root=_string(payload, "image_root"),
             classes=classes,
             model_preset=_string(payload, "model_preset", required=False, default="yolo26-l"),
-            max_dimension=_integer(payload, "max_dimension", 640, minimum=32),
+            image_dimension=_integer(payload, dimension_key, 640, minimum=32),
+            compatibility_mode="shortest-side" if uses_short_side else "max-dimension",
             grayscale=_boolean(payload, "grayscale", True),
             clahe=_boolean(payload, "clahe", False),
         )
@@ -1535,9 +1539,10 @@ def create_app(
             catalog = ModelCatalog()
             catalog.get(body.model_preset)
             preprocessing = PreprocessingConfig(
-                max_dimension=body.max_dimension,
+                max_dimension=body.image_dimension,
                 grayscale_enabled=body.grayscale,
                 clahe_enabled=body.clahe,
+                compatibility_mode=body.compatibility_mode,
             )
             config = ProjectConfig(
                 classes=classes,
