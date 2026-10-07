@@ -12,6 +12,7 @@
     defaultModelId: "",
     models: [],
     hostedModels: [],
+    modalGpus: [],
     jobs: new Map(),
     activeJob: null,
     cvatProjects: null,
@@ -86,6 +87,7 @@
       app.defaultModelId = data.default_model_id || "";
       app.models = app.project?.models || data.models || [];
       app.hostedModels = data.hosted_models || app.project?.hosted_models || [];
+      app.modalGpus = data.modal_gpus || [];
       app.bootstrapped = true;
       updateProjectHeader();
       populateModelPreset();
@@ -176,7 +178,7 @@
     const dimensions = model.preprocessing?.compatibility_mode === "shortest-side"
       ? "640 px short side, rounded up to a multiple of 32"
       : "640 px maximum side, rounded up to a multiple of 32";
-    return `<p class="hosted-model-facts"><strong>${escapeHtml(model.architecture)}</strong><span>${escapeHtml(model.size)}</span><span>Inference size ${formatNumber(model.inference_image_size)} px</span><span>${escapeHtml(dimensions)}</span></p><div class="notice hosted-access-note"><span class="notice-mark" aria-hidden="true">i</span><p>This model is in a private Hugging Face repository. Sign in on this computer with <code>hf auth login</code>; your token stays local. Your Hugging Face account also needs read access.</p></div>`;
+    return `<p class="hosted-model-facts"><strong>${escapeHtml(model.architecture)}</strong><span>${escapeHtml(model.size)}</span><span>Inference size ${formatNumber(model.inference_image_size)} px</span><span>${escapeHtml(dimensions)}</span></p><div class="notice hosted-access-note"><span class="notice-mark" aria-hidden="true">i</span><p>This public Hugging Face model can be downloaded directly by Modal for cloud prediction. Modal uses the model card revision recorded by AmphiLens and verifies the checkpoint SHA-256. Local prediction downloads it to this computer.</p></div>`;
   }
 
   function renderPredictionModelSelection() {
@@ -213,10 +215,13 @@
           <div class="field"><label for="prediction-model">Model</label><select id="prediction-model" name="model_choice">${modelOptions()}</select></div>
           <div id="prediction-hosted-details" class="hosted-model-panel" hidden></div>
           <div id="prediction-class-mapping" class="hosted-class-mapping" hidden></div>
+          <div class="field"><label for="prediction-execution">Where to run</label><select id="prediction-execution" name="execution"><option value="local">This computer</option><option value="modal">Modal cloud GPU</option></select><span class="field-help">Cloud prediction transfers images in small batches. Images remain in this project on your computer.</span></div>
           <details class="advanced-settings"><summary>Detection settings</summary><div class="advanced-body">
             <div class="field"><label for="confidence">Confidence threshold</label><div class="range-field"><input id="confidence" name="confidence" type="range" min="0.05" max="0.95" step="0.05" value="0.25"><output class="range-value" for="confidence">0.25</output></div><span class="field-help">Higher values keep only more confident detections.</span></div>
             <div class="field"><label for="prediction-output">Save results in <span class="optional">optional</span></label>${pathPickerControl("prediction-output", "output_dir", "directory", "Use the project runs folder", { label: "a results folder" })}</div>
-            <div class="field"><label for="prediction-device">Run on</label><select id="prediction-device" name="device"><option value="auto">Choose automatically</option><option value="cpu">CPU</option><option value="cuda">CUDA GPU</option></select></div>
+            <div class="field" data-local-prediction-settings><label for="prediction-device">Local device</label><select id="prediction-device" name="device"><option value="auto">Auto</option><option value="cpu">CPU</option>${app.doctor?.cuda_available ? `<option value="cuda">CUDA GPU</option>` : ""}${app.doctor?.mps_available ? `<option value="mps">Apple MPS GPU</option>` : ""}</select><span class="field-help">Auto uses CUDA or Apple MPS when available, then CPU.</span></div>
+            <div class="field"><label for="prediction-batch-size">Batch size</label><select id="prediction-batch-size" name="batch_size"><option value="auto" selected>Auto</option>${Array.from({ length: 32 }, (_, index) => `<option value="${index + 1}">${index + 1}</option>`).join("")}</select><span class="field-help">Auto starts at up to 8 images on GPU and reduces the batch if memory is low. CPU always processes one image at a time.</span></div>
+            <div class="modal-prediction-settings" data-modal-prediction-settings hidden><div class="field"><label for="prediction-gpu">Modal GPU</label><select id="prediction-gpu" name="gpu">${app.modalGpus.map((gpu) => `<option value="${escapeHtml(gpu.name)}"${gpu.name === "L4" ? " selected" : ""}>${escapeHtml(gpu.name)} · $${Number(gpu.usd_per_hour).toFixed(3)}/GPU hour</option>`).join("")}</select><span class="field-help">One remote GPU worker processes one image batch at a time.</span></div><div class="field"><label for="prediction-max-cost">Spending limit (USD)</label><input id="prediction-max-cost" name="max_cost_usd" type="number" min="0.01" step="0.01" value="5.00" required><span class="field-help">The worker stops scheduling batches when its runtime-based estimate reaches this amount.</span></div></div>
           </div></details>
           <div class="form-actions"><button class="button primary" type="submit">Run detection</button><span class="muted" style="font-size:12px">You can leave this page while it runs.</span></div>
         </form><div id="job-slot" aria-live="polite"></div>
@@ -540,7 +545,7 @@
     const checks = doctorChecks(app.doctor);
     root.innerHTML = `${pageHead("System health", "Check your setup", "Review local tools and optional services used by AmphiLens. Prediction-only work does not require CVAT or cloud credentials.", `<button class="button" type="button" data-health-refresh>Refresh check</button>`)}
       <div class="content-grid"><section class="surface panel"><div class="panel-heading"><div><h2>Local environment</h2><p>Tools AmphiLens can use on this computer.</p></div></div>${checks.length ? `<div class="health-list">${checks.map((check) => { const status = check.status || "info"; const name = check.name || "System check"; const message = check.message || ""; return `<div class="health-row"><span class="health-indicator ${statusTone(status)}" aria-hidden="true"></span><div class="health-copy"><strong>${escapeHtml(String(name).replace(/[_-]+/g, " "))}</strong><span>${escapeHtml(message)}</span></div><span class="health-status">${escapeHtml(status)}</span></div>`; }).join("")}</div>` : `<div class="notice warning"><span class="notice-mark" aria-hidden="true">!</span><p>Health details are not available yet. Refresh the check to ask the local service for the latest status.</p></div>`}</section>
-      <aside class="surface panel"><div class="panel-heading"><div><h2>Optional connections</h2><p>Only needed for the workflows you choose.</p></div></div><div class="health-list"><div class="health-row"><span class="health-indicator" aria-hidden="true"></span><div class="health-copy"><strong>CVAT</strong><span>Needed to send annotation queues or import a CVAT project. Local archive import remains available.</span></div><span class="health-status">Optional</span></div><div class="health-row"><span class="health-indicator" aria-hidden="true"></span><div class="health-copy"><strong>Cloud GPU</strong><span>Needed only if you choose remote model training. Upload and cost consent are required each time.</span></div><span class="health-status">Optional</span></div></div><details class="advanced-settings credential-settings"><summary>Configure Modal credentials</summary><form class="form-stack" data-form="cloud-credentials" style="margin-top:13px"><div class="field"><label for="modal-token-id">Token ID</label><input id="modal-token-id" name="token_id" type="password" autocomplete="new-password" required></div><div class="field"><label for="modal-token-secret">Token secret</label><input id="modal-token-secret" name="token_secret" type="password" autocomplete="new-password" required></div><span class="field-help">Credentials are sent only to the local AmphiLens service and are never shown back here.</span><button class="button" type="submit">Save credentials</button></form></details><button class="button panel-action" type="button" data-check-cloud>Check cloud connection</button><div id="cloud-status" aria-live="polite"></div></aside></div>`;
+      <aside class="surface panel"><div class="panel-heading"><div><h2>Optional connections</h2><p>Only needed for the workflows you choose.</p></div></div><div class="health-list"><div class="health-row"><span class="health-indicator" aria-hidden="true"></span><div class="health-copy"><strong>CVAT</strong><span>Needed to send annotation queues or import a CVAT project. Local archive import remains available.</span></div><span class="health-status">Optional</span></div><div class="health-row"><span class="health-indicator" aria-hidden="true"></span><div class="health-copy"><strong>Cloud GPU</strong><span>Needed for Modal training or prediction. Each cloud prediction asks before transferring images and requires a spending limit.</span></div><span class="health-status">Optional</span></div></div><details class="advanced-settings credential-settings"><summary>Configure Modal credentials</summary><form class="form-stack" data-form="cloud-credentials" style="margin-top:13px"><div class="field"><label for="modal-token-id">Token ID</label><input id="modal-token-id" name="token_id" type="password" autocomplete="new-password" required></div><div class="field"><label for="modal-token-secret">Token secret</label><input id="modal-token-secret" name="token_secret" type="password" autocomplete="new-password" required></div><span class="field-help">Credentials are sent only to the local AmphiLens service and are never shown back here.</span><button class="button" type="submit">Save credentials</button></form></details><button class="button panel-action" type="button" data-check-cloud>Check cloud connection</button><div id="cloud-status" aria-live="polite"></div></aside></div>`;
   }
 
   function render() {
@@ -703,7 +708,26 @@
           output_dir: values.output_dir || undefined,
           confidence: numberOrUndefined(values.confidence),
           device: values.device || undefined,
+          execution: values.execution || "local",
+          batch_size: values.batch_size === "auto" ? "auto" : numberOrUndefined(values.batch_size),
+          gpu: values.gpu || "L4",
+          max_cost_usd: numberOrUndefined(values.max_cost_usd) ?? 5,
         };
+        if (payload.execution === "modal") {
+          const preview = await api("/api/predictions/preflight", { method: "POST", body: JSON.stringify(payload) });
+          const bytes = Number(preview.total_bytes || 0);
+          const formattedBytes = bytes < 1024 ? `${bytes} bytes` : bytes < 1024 ** 2 ? `${(bytes / 1024).toFixed(1)} KB` : bytes < 1024 ** 3 ? `${(bytes / 1024 ** 2).toFixed(2)} MB` : `${(bytes / 1024 ** 3).toFixed(2)} GB`;
+          const estimate = preview.estimated_cost_usd == null
+            ? "No timing history is available for this model and GPU."
+            : `Estimated cost from prior timing: $${Number(preview.estimated_cost_usd).toFixed(4)}.`;
+          const checkpointNotice = kind === "checkpoint" ? " The selected local checkpoint will also be uploaded once and SHA-256 verified." : "";
+          const approved = window.confirm(`Modal cloud prediction\n\nImages to transfer: ${formatNumber(preview.image_count)} (${formattedBytes})\nGPU: ${preview.gpu}\n${estimate}\nSpending limit: $${Number(payload.max_cost_usd).toFixed(2)}.${checkpointNotice}\n\nImages are uploaded in bounded batches and deleted from the Modal volume after each batch. The estimate and execution timeout are not guaranteed billing caps. Continue?`);
+          if (!approved) return;
+          payload.acknowledged = true;
+          payload.uploads_dataset = true;
+          payload.expected_image_count = preview.image_count;
+          payload.expected_total_bytes = preview.total_bytes;
+        }
       } else if (form.dataset.form === "import") {
         endpoint = "/api/datasets/import";
         const mapping = parseClassMapping(values.class_mapping);
@@ -752,7 +776,7 @@
         return;
       }
       if (result.job_id) {
-        app.activeJob = { id: result.job_id, kind: form.dataset.form };
+        app.activeJob = { id: result.job_id, kind: form.dataset.form, execution: values.execution };
         app.jobs.set(result.job_id, { ...result });
         renderJobSlot();
         pollJob(result.job_id);
@@ -777,6 +801,7 @@
     const state = String(job.state || "queued").toLowerCase();
     const completed = state === "completed";
     const failed = state === "failed";
+    const canceled = state === "canceled";
     const rawProgress = typeof job.progress === "number" ? job.progress : Number(job.progress?.percent ?? (job.progress?.total ? job.progress.completed / job.progress.total * 100 : NaN));
     const hasProgress = Number.isFinite(rawProgress);
     const progress = hasProgress ? Math.max(0, Math.min(100, rawProgress < 1 ? rawProgress * 100 : rawProgress)) : null;
@@ -784,9 +809,10 @@
     const downloads = Array.isArray(result.downloads) ? result.downloads : [];
     const paths = result.paths && typeof result.paths === "object" ? Object.entries(result.paths) : [];
     const progressText = typeof job.progress === "object" ? job.progress.message || job.progress.label || "" : "";
-    return `<section class="job-card" aria-label="Job status"><div class="job-head"><div class="job-title"><span class="status-dot" aria-hidden="true"></span>${failed ? "This run needs attention" : completed ? "Run complete" : "Working on your request"}</div><span class="job-state ${completed ? "is-completed" : failed ? "is-failed" : ""}"><span class="status-dot" aria-hidden="true"></span>${escapeHtml(state)}</span></div>
+    return `<section class="job-card" aria-label="Job status"><div class="job-head"><div class="job-title"><span class="status-dot" aria-hidden="true"></span>${failed ? "This run needs attention" : canceled ? "Prediction canceled" : completed ? "Run complete" : "Working on your request"}</div><span class="job-state ${completed ? "is-completed" : failed ? "is-failed" : ""}"><span class="status-dot" aria-hidden="true"></span>${escapeHtml(state)}</span></div>
       ${result.message ? `<p class="job-description">${escapeHtml(result.message)}</p>` : progressText ? `<p class="job-description">${escapeHtml(progressText)}</p>` : `<p class="job-description">${failed ? "The job could not be completed." : completed ? "Your files are ready in the project." : "You can continue using AmphiLens while this runs."}</p>`}
-      ${!completed && !failed ? `<div class="progress-track" role="progressbar" aria-label="Job progress" aria-valuemin="0" aria-valuemax="100"${hasProgress ? ` aria-valuenow="${Math.round(progress)}"` : ""}><div class="progress-fill${hasProgress ? "" : " indeterminate"}" ${hasProgress ? `style="width:${progress}%"` : ""}></div></div>` : ""}
+      ${!completed && !failed && !canceled ? `<div class="progress-track" role="progressbar" aria-label="Job progress" aria-valuemin="0" aria-valuemax="100"${hasProgress ? ` aria-valuenow="${Math.round(progress)}"` : ""}><div class="progress-fill${hasProgress ? "" : " indeterminate"}" ${hasProgress ? `style="width:${progress}%"` : ""}></div></div>` : ""}
+      ${!completed && !failed && !canceled && app.activeJob?.kind === "predict" && app.activeJob?.execution === "modal" ? `<button class="button small" type="button" data-cancel-job="${escapeHtml(job.job_id || "")}">Cancel after current batch</button>` : ""}
       ${job.error ? `<p class="job-detail">${escapeHtml(job.error)}</p>` : ""}
       ${paths.length ? `<ul class="path-list">${paths.map(([label, value]) => `<li><span>${escapeHtml(String(label).replace(/[_-]+/g, " "))}</span><span>${escapeHtml(value)}</span></li>`).join("")}</ul>` : ""}
       ${downloads.length ? `<div class="download-list">${downloads.map((item) => `<a class="download-link" href="${escapeHtml(safeHref(item.url))}" download="${escapeHtml(item.filename || "")}">${escapeHtml(item.label || item.filename || "Download file")}</a>`).join("")}</div>` : ""}
@@ -809,7 +835,7 @@
         const job = await api(`/api/jobs/${encodeURIComponent(jobId)}`, { method: "GET", headers: {} });
         app.jobs.set(jobId, job);
         if (app.activeJob?.id === jobId) renderJobSlot();
-        if (["completed", "failed"].includes(String(job.state).toLowerCase())) {
+        if (["completed", "failed", "canceled"].includes(String(job.state).toLowerCase())) {
           if (job.state === "completed") await refreshProjectDetails(jobId);
           return;
         }
@@ -918,6 +944,22 @@
     if (event.target.closest("[data-cloud-estimate]")) { requestCloudEstimate(event.target.closest("[data-cloud-estimate]")); return; }
     if (event.target.closest("[data-refresh-cloud-jobs]")) { loadCloudJobs(); return; }
     if (event.target.closest("[data-cloud-action]")) { cloudJobAction(event.target.closest("[data-cloud-action]")); return; }
+    if (event.target.closest("[data-cancel-job]")) {
+      const button = event.target.closest("[data-cancel-job]");
+      button.disabled = true;
+      button.textContent = "Stopping after active batch…";
+      try {
+        const result = await api(`/api/jobs/${encodeURIComponent(button.dataset.cancelJob)}/cancel`, { method: "POST", body: "{}" });
+        const job = app.jobs.get(button.dataset.cancelJob);
+        if (job) job.cancel_requested = result.cancel_requested;
+        toast("Cancellation requested. The active batch will be cleaned up before stopping.");
+      } catch (error) {
+        toast(error.message, true);
+        button.disabled = false;
+        button.textContent = "Cancel after current batch";
+      }
+      return;
+    }
     if (event.target.closest("[data-poll-job-id]")) {
       const button = event.target.closest("[data-poll-job-id]");
       const jobId = button.dataset.pollJobId;
@@ -955,6 +997,11 @@
       document.querySelector('[data-form="training"] .form-actions button[type="submit"]')?.replaceChildren(document.createTextNode(event.target.value === "cloud" ? "Submit cloud training" : "Train model"));
     }
     if (event.target.id === "prediction-model") renderPredictionModelSelection();
+    if (event.target.id === "prediction-execution") {
+      const cloud = event.target.value === "modal";
+      document.querySelector("[data-modal-prediction-settings]")?.toggleAttribute("hidden", !cloud);
+      document.querySelector("[data-local-prediction-settings]")?.toggleAttribute("hidden", cloud);
+    }
     if (event.target.id === "training-source" || event.target.id === "training-hosted-model") {
       const form = event.target.closest('form[data-form="training"]');
       syncTrainingSourceControls(form);

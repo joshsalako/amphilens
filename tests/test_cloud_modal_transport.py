@@ -1,4 +1,6 @@
+import hashlib
 import io
+import json
 import sys
 from contextlib import contextmanager
 from types import SimpleNamespace
@@ -41,7 +43,21 @@ class FakeVolume:
 
     def remove_file(self, path, recursive=False):
         self.removed.append((path, recursive))
-        self.files.pop(path, None)
+        if recursive:
+            matches = [
+                name
+                for name in self.files
+                if name == path or name.startswith(path.rstrip("/") + "/")
+            ]
+            if not matches:
+                raise FakeModalInvalidError("No such file or directory.")
+            for name in matches:
+                self.files.pop(name, None)
+        else:
+            self.files.pop(path, None)
+
+    def commit(self):
+        raise RuntimeError("commit() can only be called on a mounted volume inside a container")
 
 
 class FakeCall:
@@ -60,6 +76,10 @@ class FakeCall:
 
 
 class FakeModalNotFoundError(Exception):
+    pass
+
+
+class FakeModalInvalidError(Exception):
     pass
 
 
@@ -97,10 +117,14 @@ def make_transport(monkeypatch):
     volume = FakeVolume()
     modal = SimpleNamespace(
         Client=SimpleNamespace(from_credentials=lambda token_id, secret: (token_id, secret)),
-        exception=SimpleNamespace(NotFoundError=FakeModalNotFoundError),
+        exception=SimpleNamespace(
+            NotFoundError=FakeModalNotFoundError,
+            InvalidError=FakeModalInvalidError,
+        ),
         FunctionCall=SimpleNamespace(from_id=lambda call_id, client=None: call),
         Volume=SimpleNamespace(from_name=lambda name, create_if_missing=False, client=None: volume),
     )
+    transport._modal = modal
     app_module = SimpleNamespace(app=app, train=function)
     monkeypatch.setattr(transport, "_load_modal", lambda: modal)
     monkeypatch.setattr(transport, "_load_app_module", lambda: app_module)
@@ -151,6 +175,78 @@ def test_modal_upload_replaces_stale_sentinel_without_reading_remote_payload(tmp
 
     assert transport.upload(source, "jobs/key/payload.zip", "new-digest") is True
     assert volume.files["jobs/key/payload.zip"] == b"replacement"
+
+
+def test_prediction_batch_upload_uses_opaque_ids_and_cleans_only_the_batch(tmp_path, monkeypatch):
+    transport, _, _, _, volume = make_transport(monkeypatch)
+    first = tmp_path / "local-camera-001.jpg"
+    second = tmp_path / "local-camera-002.jpg"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+
+    entries = transport.upload_prediction_batch("pred-abc", "batch-0001", [first, second])
+
+    manifest_path = "prediction-jobs/pred-abc/batch-0001/manifest.json"
+    manifest = json.loads(volume.files[manifest_path])
+    assert len(entries) == 2
+    assert manifest["images"] == entries
+    assert str(first) not in volume.files[manifest_path].decode()
+    for entry, source in zip(entries, [first, second], strict=True):
+        assert volume.files[entry["remote_path"]] == source.read_bytes()
+        assert volume.files[f"{entry['remote_path']}.sha256"] == (
+            hashlib.sha256(source.read_bytes()).hexdigest().encode() + b"\n"
+        )
+    transport.cleanup_prediction_batch("pred-abc", "batch-0001")
+
+    assert not any(name.startswith("prediction-jobs/pred-abc/batch-0001/") for name in volume.files)
+
+
+def test_prediction_batch_cleanup_is_idempotent_after_worker_cleanup(monkeypatch):
+    transport, _, _, _, _ = make_transport(monkeypatch)
+
+    transport.cleanup_prediction_batch("pred-abc", "batch-already-removed")
+
+
+def test_prediction_call_uses_selected_gpu_model_spec_and_one_container(monkeypatch):
+    transport, _, _, app, _ = make_transport(monkeypatch)
+    call = FakeCall(result={"state": "finished", "records": []})
+
+    class FakePredictionMethod(FakeFunction):
+        pass
+
+    class FakeEngine:
+        def __init__(self, model_spec_json):
+            self.model_spec_json = model_spec_json
+            self.predict_batch = FakePredictionMethod(call)
+
+    class FakeEngineClass:
+        options = None
+        model_spec_json = None
+
+        def with_options(self, **kwargs):
+            self.options = kwargs
+            return self
+
+        def __call__(self, *, model_spec_json):
+            self.model_spec_json = model_spec_json
+            return FakeEngine(model_spec_json)
+
+    engine_class = FakeEngineClass()
+    module = SimpleNamespace(app=app, PredictionEngine=engine_class)
+    monkeypatch.setattr(transport, "_load_app_module", lambda: module)
+    payload = {
+        "gpu": "A10",
+        "timeout_seconds": 120,
+        "model_spec": {"source": "hosted", "model_id": "public-model"},
+        "images": [],
+    }
+
+    result = transport.predict_batch(payload)
+
+    assert result["state"] == "finished"
+    assert engine_class.options["gpu"] == "A10"
+    assert engine_class.options["max_containers"] == 1
+    assert json.loads(engine_class.model_spec_json) == payload["model_spec"]
 
 
 def test_modal_download_streams_volume_chunks_to_disk(tmp_path, monkeypatch):

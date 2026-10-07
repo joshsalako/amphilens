@@ -29,6 +29,42 @@ class RecoverableDetector:
             )
 
 
+class BatchRecordingDetector:
+    model_id = "batch-recording"
+
+    def __init__(self, *, fail_above=None):
+        self.calls = []
+        self.fail_above = fail_above
+
+    def predict(self, image_paths, config):
+        paths = list(image_paths)
+        self.calls.append([path.name for path in paths])
+        if self.fail_above is not None and len(paths) > self.fail_above:
+            raise RuntimeError("CUDA out of memory")
+        for path in paths:
+            yield DetectionRecord(
+                image_path=str(path),
+                image_id=path.name,
+                class_id=0,
+                class_name="toad",
+                confidence=0.9,
+                bbox_xyxy=[1, 2, 11, 22],
+                image_width=20,
+                image_height=40,
+                model_id=self.model_id,
+                run_id=config.run_id,
+            )
+
+
+def _images(tmp_path: Path, count: int):
+    paths = []
+    for index in range(count):
+        path = tmp_path / f"{index:02}.jpg"
+        path.write_bytes(b"fixture")
+        paths.append(path)
+    return paths
+
+
 def test_resumable_inference_records_failures_and_resumes(tmp_path: Path):
     images = []
     for name in ("a.jpg", "b.jpg"):
@@ -52,3 +88,39 @@ def test_resumable_inference_records_failures_and_resumes(tmp_path: Path):
     progress = json.loads((tmp_path / "artifacts" / "progress.json").read_text())
     assert len(progress["completed_images"]) == 2
     assert json.loads(second.run_manifest.read_text())["status"] == "completed"
+
+
+def test_resumable_inference_sends_configured_batches_and_preserves_order(tmp_path: Path):
+    images = _images(tmp_path, 5)
+    detector = BatchRecordingDetector()
+
+    result = run_resumable_inference(
+        detector,
+        images,
+        InferenceConfig(model_id="batch-recording", batch_size=2, run_id="run-batches"),
+        tmp_path / "batch-artifacts",
+    )
+
+    assert detector.calls == [["00.jpg", "01.jpg"], ["02.jpg", "03.jpg"], ["04.jpg"]]
+    assert result.completed_images == 5
+    recorded = [
+        json.loads(line)["image_id"]
+        for line in (result.predictions_csv.parent / "predictions.jsonl").read_text().splitlines()
+    ]
+    assert recorded == [path.name for path in images]
+
+
+def test_resumable_inference_halves_gpu_batch_after_out_of_memory(tmp_path: Path):
+    images = _images(tmp_path, 4)
+    detector = BatchRecordingDetector(fail_above=2)
+
+    result = run_resumable_inference(
+        detector,
+        images,
+        InferenceConfig(model_id="batch-recording", batch_size=4, device="cuda", run_id="run-oom"),
+        tmp_path / "oom-artifacts",
+    )
+
+    assert [len(call) for call in detector.calls] == [4, 2, 2]
+    assert result.completed_images == 4
+    assert result.failed_images == []

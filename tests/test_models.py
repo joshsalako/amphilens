@@ -41,7 +41,10 @@ class FakeUltralyticsModel:
 
     def predict(self, **kwargs):
         self.calls.append(kwargs)
-        return [SimpleNamespace(boxes=self.boxes, names=self.names)]
+        sources = kwargs["source"]
+        if not isinstance(sources, list):
+            sources = [sources]
+        return [SimpleNamespace(boxes=self.boxes, names=self.names) for _ in sources]
 
     def train(self, **kwargs):
         self.train_calls = kwargs
@@ -123,7 +126,7 @@ def test_ultralytics_adapter_preprocesses_before_prediction_and_maps_boxes(tmp_p
         )
     )
 
-    assert fake_model.calls[0]["source"].size == (40, 20)
+    assert fake_model.calls[0]["source"][0].size == (40, 20)
     assert records[0].bbox_xyxy == [0.0, 0.0, 40.0, 40.0]
     assert (
         records[0].preprocessing
@@ -131,6 +134,29 @@ def test_ultralytics_adapter_preprocesses_before_prediction_and_maps_boxes(tmp_p
             model_id="fixture", preprocessing={"max_dimension": 40}
         ).preprocessing_fingerprint
     )
+
+
+def test_ultralytics_adapter_runs_a_batch_and_maps_each_result(tmp_path: Path):
+    images = []
+    for name in ("first.jpg", "second.jpg"):
+        image = tmp_path / name
+        Image.new("RGB", (40, 30), color="black").save(image)
+        images.append(image)
+    detector = UltralyticsDetector(tmp_path / "best.pt", "yolo", ["toad"])
+    detector._model = FakeUltralyticsModel(FakeBoxes([[1, 2, 20, 25]], [0.75], [0]))
+
+    records = list(
+        detector.predict(
+            images,
+            InferenceConfig(model_id="fixture", batch_size=2, device="cuda", run_id="run-batch"),
+        )
+    )
+
+    assert len(detector._model.calls) == 1
+    assert len(detector._model.calls[0]["source"]) == 2
+    assert detector._model.calls[0]["batch"] == 2
+    assert detector._model.calls[0]["device"] == "cuda"
+    assert [record.image_id for record in records] == ["first.jpg", "second.jpg"]
 
 
 def test_ultralytics_adapter_passes_resume_checkpoint_to_training(tmp_path: Path):
@@ -231,6 +257,28 @@ def test_torch_device_selection_fails_closed_for_unavailable_cuda():
     assert _select_torch_device(fake_torch, "auto") == "cpu"
     with pytest.raises(OptionalDependencyError, match="CUDA"):
         _select_torch_device(fake_torch, "cuda")
+
+
+def test_torch_device_auto_uses_mps_when_cuda_is_unavailable():
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(is_available=lambda: False),
+        backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: True)),
+        device=lambda value: value,
+    )
+
+    assert _select_torch_device(fake_torch, "auto") == "mps"
+    assert _select_torch_device(fake_torch, "mps") == "mps"
+
+
+def test_torch_device_selection_fails_closed_for_unavailable_mps():
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(is_available=lambda: False),
+        backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: False)),
+        device=lambda value: value,
+    )
+
+    with pytest.raises(OptionalDependencyError, match="MPS"):
+        _select_torch_device(fake_torch, "mps")
 
 
 def test_faster_rcnn_dataset_spec_is_stable_for_yolo_layout(tmp_path: Path):

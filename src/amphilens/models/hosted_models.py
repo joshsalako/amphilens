@@ -1,4 +1,4 @@
-"""Private Hugging Face checkpoints distributed with AmphiLens."""
+"""Public Hugging Face checkpoints distributed with AmphiLens."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ _MANIFEST_PATH = Path(__file__).with_name("amphilens-models.json")
 
 
 class HuggingFaceAccessError(ValueError):
-    """A private Hub model could not be read with the current local login."""
+    """A public Hub checkpoint could not be downloaded from Hugging Face."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,9 +232,8 @@ def download_hosted_checkpoint(
 
         if HfHubHTTPError and isinstance(exc, HfHubHTTPError):
             raise HuggingFaceAccessError(
-                f"Could not read {model.repo_id}. If the repository is private, run "
-                "`hf auth login` and confirm that your Hugging Face account has read "
-                "access to the AmphiLens model repository."
+                f"Could not download the public Hugging Face model {model.repo_id}. "
+                "Check the network connection and confirm the repository is available."
             ) from exc
         raise
     if not path.is_file():

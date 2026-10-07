@@ -1,16 +1,24 @@
 """The only module that imports Modal and declares the remote training function."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import modal
 
-from .constants import IMAGE_APT_PACKAGES, IMAGE_PINS, MODAL_APP_NAME, VOLUME_MOUNT, VOLUME_NAME
+from .constants import (
+    IMAGE_APT_PACKAGES,
+    IMAGE_PINS,
+    MODAL_APP_NAME,
+    MODEL_CACHE_MOUNT,
+    MODEL_CACHE_VOLUME_NAME,
+    PREDICTION_MOUNT,
+    PREDICTION_VOLUME_NAME,
+    VOLUME_MOUNT,
+    VOLUME_NAME,
+)
 from .estimate import MAX_FUNCTION_TIMEOUT_SECONDS
 from .worker import run_remote_training
 
-training_image = (
+base_image = (
     modal.Image.debian_slim(python_version=IMAGE_PINS["python"])
     .apt_install(*IMAGE_APT_PACKAGES)
     .uv_pip_install(
@@ -21,12 +29,25 @@ training_image = (
         f"Pillow=={IMAGE_PINS['pillow']}",
         f"numpy=={IMAGE_PINS['numpy']}",
         f"opencv-python-headless=={IMAGE_PINS['opencv-python-headless']}",
+        f"huggingface-hub=={IMAGE_PINS['huggingface-hub']}",
     )
-    .add_local_python_source("amphilens")
 )
+training_image = base_image.add_local_python_source("amphilens")
 
 app = modal.App(MODAL_APP_NAME)
 training_volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
+prediction_volume = modal.Volume.from_name(PREDICTION_VOLUME_NAME, create_if_missing=True)
+model_cache_volume = modal.Volume.from_name(MODEL_CACHE_VOLUME_NAME, create_if_missing=True)
+
+
+def _sha256_file(path: Path) -> str:
+    import hashlib
+
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 @app.function(
@@ -44,3 +65,130 @@ def train(payload: dict) -> dict:
         volume_root=Path(VOLUME_MOUNT),
         volume_commit=training_volume.commit,
     )
+
+
+def _build_prediction_image(image, environment):
+    return image.env(environment).add_local_python_source("amphilens")
+
+
+prediction_image = _build_prediction_image(
+    base_image,
+    {
+        "YOLO_CONFIG_DIR": f"{MODEL_CACHE_MOUNT}/ultralytics",
+        "TORCH_HOME": f"{MODEL_CACHE_MOUNT}/torch",
+        "HF_HOME": f"{MODEL_CACHE_MOUNT}/huggingface",
+    },
+)
+
+
+@app.cls(
+    image=prediction_image,
+    timeout=MAX_FUNCTION_TIMEOUT_SECONDS,
+    retries=0,
+    max_containers=1,
+    scaledown_window=30,
+    volumes={
+        PREDICTION_MOUNT: prediction_volume,
+        MODEL_CACHE_MOUNT: model_cache_volume,
+    },
+)
+class PredictionEngine:
+    """One warm container loads a selected model once and serves its image batches."""
+
+    model_spec_json: str = modal.parameter()
+
+    @modal.enter()
+    def load_model(self):
+        import json
+        import os
+        import time
+        from pathlib import Path
+
+        from ..models import ModelCatalog, load_detector, load_preset_detector
+        from ..models.hosted_models import (
+            HostedClassMappedDetector,
+            get_hosted_model,
+            resolve_class_mapping,
+        )
+
+        started = time.monotonic()
+        prediction_volume.reload()
+        model_cache_volume.reload()
+        spec = json.loads(self.model_spec_json)
+        source = str(spec["source"])
+        classes = list(spec["classes"])
+        cache_root = Path(MODEL_CACHE_MOUNT).resolve()
+        cache_root.mkdir(parents=True, exist_ok=True)
+        os.environ["YOLO_CONFIG_DIR"] = str(cache_root / "ultralytics")
+        os.environ["TORCH_HOME"] = str(cache_root / "torch")
+        os.environ["HF_HOME"] = str(cache_root / "huggingface")
+
+        if source == "hosted":
+            hosted = get_hosted_model(str(spec["hosted_model_id"]))
+            from .prediction import download_verified_hosted_checkpoint
+
+            verified = download_verified_hosted_checkpoint(
+                hosted,
+                cache_root,
+                cache_commit=model_cache_volume.commit,
+            )
+            detector = load_detector(
+                verified,
+                architecture=hosted.architecture,
+                classes=list(hosted.source_classes),
+                model_id=hosted.model_id,
+                preprocessing=hosted.preprocessing.to_dict(),
+            )
+            mapping = resolve_class_mapping(
+                hosted.source_classes,
+                classes,
+                spec.get("class_mapping"),
+            )
+            detector = HostedClassMappedDetector(detector, mapping, classes)
+        elif source == "checkpoint":
+            relative = Path(str(spec["checkpoint_remote_path"]))
+            if relative.is_absolute() or ".." in relative.parts:
+                raise RuntimeError("The uploaded checkpoint path is unsafe")
+            checkpoint = (cache_root / relative).resolve()
+            if not checkpoint.is_relative_to(cache_root) or not checkpoint.is_file():
+                raise RuntimeError("The uploaded project checkpoint is missing")
+            if _sha256_file(checkpoint) != str(spec["checkpoint_sha256"]):
+                raise RuntimeError("The uploaded project checkpoint failed SHA-256 verification")
+            detector = load_detector(
+                checkpoint,
+                architecture=str(spec["architecture"]),
+                classes=classes,
+                model_id=str(spec["model_id"]),
+                preprocessing=spec.get("preprocessing"),
+            )
+        elif source == "preset":
+            detector = load_preset_detector(
+                ModelCatalog().get(str(spec["model_id"])), classes=classes
+            )
+        else:
+            raise RuntimeError("Unsupported remote prediction model source")
+        self.detector = detector
+        self._setup_seconds = round(time.monotonic() - started, 3)
+        try:
+            import torch
+
+            self._gpu_name = torch.cuda.get_device_name(0)
+        except Exception:
+            self._gpu_name = "GPU"
+
+    @modal.method()
+    def predict_batch(self, payload: dict) -> dict:
+        from .prediction import run_remote_prediction_batch
+
+        result = run_remote_prediction_batch(
+            payload,
+            volume_root=PREDICTION_MOUNT,
+            model_cache_root=MODEL_CACHE_MOUNT,
+            detector=self.detector,
+            volume_reload=prediction_volume.reload,
+            volume_commit=prediction_volume.commit,
+        )
+        result["setup_seconds"] = self._setup_seconds
+        result["gpu_name"] = self._gpu_name
+        self._setup_seconds = 0.0
+        return result

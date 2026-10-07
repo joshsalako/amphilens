@@ -19,6 +19,7 @@ class DoctorReport:
     free_disk_gb: float
     torch_installed: bool
     cuda_available: bool
+    mps_available: bool
     ultralytics_installed: bool
     browser_app_installed: bool
     cvat_exchange: bool = True
@@ -38,13 +39,17 @@ def run_doctor(path: str | Path = ".", *, check_cloud: bool = False) -> DoctorRe
     usage = shutil.disk_usage(Path(path).expanduser().resolve())
     torch_installed = importlib.util.find_spec("torch") is not None
     cuda_available = False
+    mps_available = False
     if torch_installed:
         try:
             import torch
 
             cuda_available = bool(torch.cuda.is_available())
+            mps = getattr(getattr(torch, "backends", None), "mps", None)
+            mps_available = bool(mps and mps.is_available())
         except Exception:
             cuda_available = False
+            mps_available = False
     try:
         from .cloud.credentials import CloudCredentialsStore
 
@@ -70,6 +75,7 @@ def run_doctor(path: str | Path = ".", *, check_cloud: bool = False) -> DoctorRe
         free_disk_gb=round(usage.free / (1024**3), 2),
         torch_installed=torch_installed,
         cuda_available=cuda_available,
+        mps_available=mps_available,
         ultralytics_installed=importlib.util.find_spec("ultralytics") is not None,
         browser_app_installed=(
             importlib.util.find_spec("starlette") is not None

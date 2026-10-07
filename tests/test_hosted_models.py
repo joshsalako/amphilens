@@ -208,7 +208,7 @@ def test_private_repository_access_error_is_actionable_without_leaking_token(
 
     monkeypatch.setattr(hosted, "_hub_runtime", lambda: (raise_access_error, lambda: "local-token"))
 
-    with pytest.raises(HuggingFaceAccessError, match="hf auth login") as error:
+    with pytest.raises(HuggingFaceAccessError, match="public Hugging Face model") as error:
         download_hosted_checkpoint("amphilens-yolo26-m")
     assert "private-secret" not in str(error.value)
-    assert "read access" in str(error.value)
+    assert "network connection" in str(error.value)

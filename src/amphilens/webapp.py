@@ -7,6 +7,7 @@ import csv
 import ipaddress
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -255,6 +256,7 @@ class _Job:
     progress: dict[str, Any] | None = None
     downloads: dict[str, DownloadArtifact] = field(default_factory=dict)
     future: Future | None = None
+    cancel_event: threading.Event = field(default_factory=threading.Event)
 
 
 class JobManager:
@@ -301,11 +303,19 @@ class JobManager:
         with_progress: bool,
     ) -> None:
         with self._lock:
-            self._jobs[job_id].state = "running"
+            job = self._jobs[job_id]
+            job.state = "running"
         try:
+            if job.cancel_event.is_set():
+                with self._lock:
+                    job.state = "canceled"
+                    job.error = "Canceled before the workflow started."
+                return
 
             def report_progress(value: dict[str, Any]) -> None:
                 self.update_progress(job_id, value)
+
+            report_progress.cancel_requested = job.cancel_event.is_set
 
             output = operation(report_progress) if with_progress else operation()
             if isinstance(output, JobOutput):
@@ -333,7 +343,7 @@ class JobManager:
                 job = self._jobs[job_id]
                 job.result = result
                 job.downloads = download_map
-                job.state = "completed"
+                job.state = "canceled" if result.get("cancelled") else "completed"
         except Exception as exc:  # keep workflow failures inside the job status contract
             _LOG.error(
                 "Local job failed (%s): %s",
@@ -343,7 +353,7 @@ class JobManager:
             with self._lock:
                 job = self._jobs[job_id]
                 job.error = safe_error(exc)
-                job.state = "failed"
+                job.state = "canceled" if job.cancel_event.is_set() else "failed"
         finally:
             self._capacity.release()
 
@@ -352,7 +362,11 @@ class JobManager:
             job = self._jobs.get(job_id)
             if job is None:
                 return None
-            payload: dict[str, Any] = {"job_id": job.job_id, "state": job.state}
+            payload: dict[str, Any] = {
+                "job_id": job.job_id,
+                "state": job.state,
+                "cancel_requested": job.cancel_event.is_set(),
+            }
             if job.result is not None:
                 payload["result"] = dict(job.result)
             if job.error is not None:
@@ -360,6 +374,14 @@ class JobManager:
             if job.progress is not None:
                 payload["progress"] = dict(job.progress)
             return payload
+
+    def cancel(self, job_id: str) -> bool:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None or job.state in {"completed", "failed", "canceled"}:
+                return False
+            job.cancel_event.set()
+            return True
 
     def update_progress(self, job_id: str, progress: dict[str, Any]) -> None:
         with self._lock:
@@ -406,7 +428,11 @@ class JobManager:
 
     def _prune(self) -> None:
         terminal = sorted(
-            (job for job in self._jobs.values() if job.state in {"completed", "failed"}),
+            (
+                job
+                for job in self._jobs.values()
+                if job.state in {"completed", "failed", "canceled"}
+            ),
             key=lambda job: job.created_at,
         )
         while len(self._jobs) >= self._max_history and terminal:
@@ -442,7 +468,15 @@ class PredictionsRequest:
     checkpoint: str | None = None
     output_dir: str | None = None
     confidence: float | None = None
-    device: Literal["auto", "cpu", "cuda"] | None = None
+    device: Literal["auto", "cpu", "cuda", "mps"] | None = None
+    execution: Literal["local", "modal"] = "local"
+    batch_size: int | None = None
+    gpu: str = "L4"
+    max_cost_usd: float = 5.0
+    acknowledged: bool = False
+    uploads_dataset: bool = False
+    expected_image_count: int | None = None
+    expected_total_bytes: int | None = None
     model_preset: str | None = None
     hosted_model_id: str | None = None
     class_mapping: dict[str, str | None] | None = None
@@ -638,14 +672,41 @@ def _request(cls, payload: dict[str, Any]):
         if confidence is not None and confidence > 1:
             raise ValueError("confidence must be between 0 and 1")
         device = _optional_string(payload, "device")
-        if device is not None and device not in {"auto", "cpu", "cuda"}:
-            raise ValueError("device must be auto, cpu, or cuda")
+        if device is not None and device not in {"auto", "cpu", "cuda", "mps"}:
+            raise ValueError("device must be auto, cpu, cuda, or mps")
+        execution = _string(payload, "execution", required=False, default="local")
+        if execution not in {"local", "modal"}:
+            raise ValueError("execution must be local or modal")
+        raw_batch_size = payload.get("batch_size", "auto")
+        batch_size = None
+        if raw_batch_size != "auto":
+            batch_size = _integer(payload, "batch_size", minimum=1)
+            if batch_size is not None and batch_size > 32:
+                raise ValueError("batch_size must be between 1 and 32")
+        gpu = _string(payload, "gpu", required=False, default="L4")
+        from .cloud.estimate import GPU_RATES_PER_SECOND
+
+        if gpu not in GPU_RATES_PER_SECOND:
+            raise ValueError(f"Unsupported Modal GPU: {gpu}")
+        max_cost_usd = _number(payload, "max_cost_usd", 5.0, minimum=0.01)
+        if execution == "modal" and "max_cost_usd" not in payload:
+            raise ValueError("Set a spending limit before choosing Modal prediction")
+        if max_cost_usd is None or not math.isfinite(max_cost_usd):
+            raise ValueError("max_cost_usd must be a positive finite number")
         return cls(
             image_root=_optional_string(payload, "image_root"),
             checkpoint=_optional_string(payload, "checkpoint"),
             output_dir=_optional_string(payload, "output_dir"),
             confidence=confidence,
             device=device,
+            execution=execution,
+            batch_size=batch_size,
+            gpu=gpu,
+            max_cost_usd=max_cost_usd,
+            acknowledged=_boolean(payload, "acknowledged", False),
+            uploads_dataset=_boolean(payload, "uploads_dataset", False),
+            expected_image_count=_integer(payload, "expected_image_count", minimum=1),
+            expected_total_bytes=_integer(payload, "expected_total_bytes", minimum=0),
             model_preset=_optional_string(payload, "model_preset"),
             hosted_model_id=_optional_string(payload, "hosted_model_id"),
             class_mapping=_mapping(payload, "class_mapping"),
@@ -887,15 +948,117 @@ def _project_snapshot(store: ProjectStore, snapshot_path: str | Path):
     return snapshot
 
 
+def prediction_preflight(
+    store: ProjectStore,
+    request: PredictionsRequest,
+    *,
+    credentials_store=None,
+    check_connection: bool = False,
+) -> dict[str, Any]:
+    """Count local inputs and report available history before any cloud upload."""
+    if request.execution != "modal":
+        raise ValueError("Cloud prediction preflight is only available for Modal execution")
+    from .cloud.estimate import (
+        CPU_CORES,
+        GPU_RATES_PER_SECOND,
+        MEMORY_GIB,
+        MODAL_CPU_RATE_PER_CORE_SECOND,
+        MODAL_MEMORY_RATE_PER_GIB_SECOND,
+    )
+    from .configuration import discover_checkpoint_manifest
+    from .core import iter_images
+
+    project = store.load_manifest()
+    image_root = request.image_root or project.image_roots[0]
+    image_root_path = Path(image_root).expanduser().resolve()
+    if not image_root_path.is_dir():
+        raise ValueError(f"Image folder was not found: {image_root_path}")
+    paths = iter_images([image_root_path])
+    if not paths:
+        raise ValueError(f"No supported images were found in: {image_root_path}")
+    total_bytes = 0
+    for path in paths:
+        try:
+            total_bytes += path.stat().st_size
+        except OSError as exc:
+            raise ValueError(
+                "An image changed or became unavailable while preparing consent"
+            ) from exc
+
+    if request.hosted_model_id:
+        model_id = request.hosted_model_id
+    elif request.checkpoint:
+        checkpoint = Path(request.checkpoint).expanduser().resolve()
+        checkpoint_manifest = discover_checkpoint_manifest(checkpoint)
+        model_id = (
+            checkpoint_manifest.model_id
+            if checkpoint_manifest
+            else request.model_preset or project.project_config.model_preset
+        )
+    else:
+        model_id = request.model_preset or project.project_config.model_preset
+
+    timing_samples = []
+    for path in (store.root / "runs").glob("*/cloud-cost.json"):
+        try:
+            sample = json.loads(path.read_text(encoding="utf-8"))
+            if (
+                sample.get("provider") == "modal"
+                and sample.get("gpu") == request.gpu
+                and sample.get("model_id") == model_id
+                and int(sample.get("completed_images", 0)) > 0
+                and float(sample.get("elapsed_seconds", 0.0)) > 0
+            ):
+                timing_samples.append(
+                    float(sample["elapsed_seconds"]) / int(sample["completed_images"])
+                )
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            continue
+    estimated_cost = None
+    if timing_samples:
+        rate = (
+            GPU_RATES_PER_SECOND[request.gpu]
+            + MODAL_CPU_RATE_PER_CORE_SECOND * CPU_CORES
+            + MODAL_MEMORY_RATE_PER_GIB_SECOND * MEMORY_GIB
+        )
+        estimated_cost = round(sum(timing_samples) / len(timing_samples) * len(paths) * rate, 4)
+
+    if check_connection:
+        if credentials_store is None:
+            raise ValueError("Modal credentials are not configured")
+        credentials = credentials_store.resolve()
+        if credentials is None:
+            raise ValueError("Modal credentials are not configured; save them in System health")
+        from .cloud.modal_transport import ModalTransport
+
+        ModalTransport(credentials).probe()
+    return {
+        "image_count": len(paths),
+        "total_bytes": total_bytes,
+        "gpu": request.gpu,
+        "model_id": model_id,
+        "timing_history_count": len(timing_samples),
+        "estimated_cost_usd": estimated_cost,
+        "max_cost_usd": request.max_cost_usd,
+        "estimate_note": (
+            "Estimate based on prior Modal timing for this model and GPU; actual billing can vary."
+            if estimated_cost is not None
+            else "No timing history is available for this model and GPU."
+        ),
+    }
+
+
 def run_prediction_job(
     store: ProjectStore,
     request: PredictionsRequest,
     *,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    cloud_transport=None,
 ) -> JobOutput:
     from .configuration import discover_checkpoint_manifest, resolve_effective_configuration
     from .core import InferenceConfig, iter_images
     from .models import load_detector, load_preset_detector
+    from .models.backends import describe_device_name, resolve_device_name
     from .models.hosted_models import (
         HostedClassMappedDetector,
         download_hosted_checkpoint,
@@ -913,6 +1076,19 @@ def run_prediction_job(
     image_paths = iter_images([image_root_path])
     if not image_paths:
         raise ValueError(f"No supported images were found in: {image_root_path}")
+    if request.execution == "modal":
+        if not request.acknowledged or not request.uploads_dataset:
+            raise ValueError("Explicit image upload and Modal spending-limit consent is required")
+        if cloud_transport is None:
+            raise ValueError("Modal credentials are not configured for cloud prediction")
+        total_bytes = sum(path.stat().st_size for path in image_paths)
+        if (
+            request.expected_image_count != len(image_paths)
+            or request.expected_total_bytes != total_bytes
+        ):
+            raise ValueError(
+                "The selected images changed after cloud prediction consent; review the total again"
+            )
     checkpoint = request.checkpoint.strip() if request.checkpoint else ""
     if request.hosted_model_id and (checkpoint or request.model_preset):
         raise ValueError("Choose either an AmphiLens pretrained model or another model")
@@ -923,8 +1099,17 @@ def run_prediction_job(
     overrides: dict[str, Any] = {}
     if request.confidence is not None:
         overrides["confidence"] = request.confidence
-    if request.device is not None:
-        overrides["device"] = request.device
+    if request.execution == "modal":
+        actual_device = "cuda"
+        requested_batch_size = request.batch_size or 8
+    else:
+        actual_device = resolve_device_name(request.device or project.project_config.device)
+        requested_batch_size = request.batch_size or (
+            8 if actual_device.startswith("cuda") or actual_device == "mps" else 1
+        )
+    effective_batch_size = 1 if actual_device == "cpu" else requested_batch_size
+    overrides["device"] = actual_device
+    overrides["batch_size"] = effective_batch_size
     if request.model_preset is not None:
         overrides["model_preset"] = request.model_preset
     class_mapping = None
@@ -940,20 +1125,21 @@ def run_prediction_job(
             use_source_classes=True,
             overrides=overrides,
         )
-        checkpoint = str(
-            download_hosted_checkpoint(
-                hosted_model.model_id,
-                progress_callback=progress_callback,
+        if request.execution == "local":
+            checkpoint = str(
+                download_hosted_checkpoint(
+                    hosted_model.model_id,
+                    progress_callback=progress_callback,
+                )
             )
-        )
-        detector = load_detector(
-            checkpoint,
-            architecture=effective.architecture,
-            classes=list(effective.classes),
-            model_id=effective.model_id,
-            preprocessing=effective.preprocessing.to_dict(),
-        )
-        detector = HostedClassMappedDetector(detector, class_mapping, project.classes)
+            detector = load_detector(
+                checkpoint,
+                architecture=effective.architecture,
+                classes=list(effective.classes),
+                model_id=effective.model_id,
+                preprocessing=effective.preprocessing.to_dict(),
+            )
+            detector = HostedClassMappedDetector(detector, class_mapping, project.classes)
     else:
         effective = resolve_effective_configuration(
             project,
@@ -961,23 +1147,27 @@ def run_prediction_job(
             checkpoint_path=checkpoint or None,
             overrides=overrides,
         )
-        detector = (
-            load_detector(
-                checkpoint,
-                architecture=effective.architecture,
-                classes=list(effective.classes),
-                model_id=effective.model_id,
-                checkpoint_manifest=checkpoint_manifest,
-                preprocessing=effective.preprocessing.to_dict(),
+        if request.execution == "local":
+            detector = (
+                load_detector(
+                    checkpoint,
+                    architecture=effective.architecture,
+                    classes=list(effective.classes),
+                    model_id=effective.model_id,
+                    checkpoint_manifest=checkpoint_manifest,
+                    preprocessing=effective.preprocessing.to_dict(),
+                )
+                if checkpoint
+                else load_preset_detector(
+                    ModelCatalog().get(effective.model_preset), classes=list(effective.classes)
+                )
             )
-            if checkpoint
-            else load_preset_detector(
-                ModelCatalog().get(effective.model_preset), classes=list(effective.classes)
-            )
-        )
     run_metadata = {
         "effective_configuration": effective.to_dict(),
         "class_mapping": class_mapping,
+        "execution": request.execution,
+        "gpu": request.gpu if request.execution == "modal" else None,
+        "requested_batch_size": request.batch_size or "auto",
     }
     import hashlib
     import json
@@ -987,6 +1177,63 @@ def run_prediction_job(
     ).hexdigest()[:12]
     run_id = f"predict-{effective.model_id}-{run_signature}"
     output_dir = request.output_dir or str(store.root / "runs" / run_id)
+    if request.execution == "modal":
+        from .cloud.estimate import MAX_FUNCTION_TIMEOUT_SECONDS
+        from .cloud.prediction import ModalPredictionDetector
+
+        cancel_check = getattr(progress_callback, "cancel_requested", None)
+        if callable(cancel_check) and cancel_check():
+            from .runs import InferenceInterruption
+
+            raise InferenceInterruption("Prediction canceled before starting cloud work.")
+
+        if hosted_model is not None:
+            model_spec = {
+                "source": "hosted",
+                "model_id": effective.model_id,
+                "hosted_model_id": hosted_model.model_id,
+                "classes": list(project.classes),
+                "class_mapping": class_mapping,
+            }
+        elif checkpoint:
+            import hashlib
+
+            checkpoint_path = Path(checkpoint).expanduser().resolve()
+            digest = hashlib.sha256()
+            with checkpoint_path.open("rb") as source:
+                for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            checkpoint_sha256 = digest.hexdigest()
+            checkpoint_remote_path = cloud_transport.upload_model_checkpoint(
+                checkpoint_path, checkpoint_sha256
+            )
+            model_spec = {
+                "source": "checkpoint",
+                "model_id": effective.model_id,
+                "architecture": effective.architecture,
+                "classes": list(effective.classes),
+                "preprocessing": effective.preprocessing.to_dict(),
+                "checkpoint_remote_path": checkpoint_remote_path,
+                "checkpoint_sha256": checkpoint_sha256,
+            }
+        else:
+            model_spec = {
+                "source": "preset",
+                "model_id": effective.model_preset,
+                "classes": list(effective.classes),
+            }
+        detector = ModalPredictionDetector(
+            cloud_transport,
+            job_key=f"pred-{uuid.uuid4().hex}",
+            gpu=request.gpu,
+            model_spec=model_spec,
+            timeout_seconds=MAX_FUNCTION_TIMEOUT_SECONDS,
+            max_cost_usd=request.max_cost_usd,
+            output_dir=output_dir,
+            progress_callback=progress_callback,
+            image_count=len(image_paths),
+            cancellation_requested=cancel_check if callable(cancel_check) else None,
+        )
     summary = run_resumable_inference(
         detector,
         image_paths,
@@ -995,6 +1242,7 @@ def run_prediction_job(
             image_size=effective.image_size,
             confidence=effective.confidence,
             device=effective.device,
+            batch_size=effective.batch_size,
             preprocessing=effective.preprocessing,
             run_id=run_id,
             metadata=run_metadata,
@@ -1004,11 +1252,41 @@ def run_prediction_job(
     report = write_report(summary.predictions_csv, Path(output_dir) / "report")
     markdown = Path(report["markdown"])
     json_report = Path(report["summary_json"])
+    if summary.interruption_reason:
+        message = (
+            f"Prediction paused after {summary.completed_images} of {summary.image_count} images. "
+            f"{summary.interruption_reason}"
+        )
+    elif request.execution == "modal":
+        message = (
+            f"Processed {summary.completed_images} images on {detector.device_name}; "
+            f"found {summary.detection_count} detections. Estimated Modal spend: "
+            f"${detector.estimated_cost_usd:.2f} of ${request.max_cost_usd:.2f}."
+        )
+    else:
+        message = (
+            f"Processed {summary.completed_images} images on "
+            f"{describe_device_name(effective.device)} with batch size "
+            f"{effective.batch_size}; found {summary.detection_count} detections."
+        )
     return JobOutput(
         result={
-            "message": (
-                f"Processed {summary.completed_images} images and "
-                f"found {summary.detection_count} detections."
+            "message": message,
+            "completed_images": summary.completed_images,
+            "image_count": summary.image_count,
+            "cancelled": bool(
+                summary.interruption_reason and "cancel" in summary.interruption_reason.lower()
+            ),
+            "effective_batch_size": json.loads(summary.summary_json.read_text()).get(
+                "effective_batch_size", 0
+            ),
+            "estimated_modal_cost_usd": (
+                round(detector.estimated_cost_usd, 4) if request.execution == "modal" else None
+            ),
+            "device": (
+                detector.device_name
+                if request.execution == "modal"
+                else describe_device_name(effective.device)
             ),
             "paths": {
                 "csv": str(summary.predictions_csv),
@@ -1505,6 +1783,8 @@ def create_app(
                     else None
                 )
             report = run_doctor(".", check_cloud=False).to_dict()
+            from .cloud.estimate import GPU_RATES_PER_SECOND
+
             payload = {
                 "project": project,
                 "doctor": report,
@@ -1512,6 +1792,10 @@ def create_app(
                 "models": _model_summaries(),
                 "hosted_models": _hosted_model_summaries(),
                 "default_model_id": ModelCatalog().default.model_id,
+                "modal_gpus": [
+                    {"name": name, "usd_per_hour": round(rate * 3600, 3)}
+                    for name, rate in GPU_RATES_PER_SECOND.items()
+                ],
             }
             if app.state.restore_warning:
                 payload["restore_warning"] = app.state.restore_warning
@@ -1586,6 +1870,43 @@ def create_app(
             body = _request(PredictionsRequest, await _read_body(request))
             store = active_store()
             # Snapshot availability is deliberately not checked: prediction-only works alone.
+            if body.execution == "modal":
+                if not body.acknowledged or not body.uploads_dataset:
+                    raise ValueError(
+                        "Explicit consent is required. Review and approve the Modal image "
+                        "transfer and spending limit first"
+                    )
+                if body.expected_image_count is None or body.expected_total_bytes is None:
+                    raise ValueError(
+                        "Review the image count and transfer size before cloud prediction"
+                    )
+                preview = prediction_preflight(store, body)
+                if (
+                    preview["image_count"] != body.expected_image_count
+                    or preview["total_bytes"] != body.expected_total_bytes
+                ):
+                    raise ValueError(
+                        "The selected images changed; review the updated transfer total"
+                    )
+                credentials = app.state.cloud_credentials_store.resolve()
+                if credentials is None:
+                    raise ValueError(
+                        "Modal credentials are not configured; save them in System health"
+                    )
+                from .cloud.modal_transport import ModalTransport
+
+                transport = ModalTransport(credentials)
+                return _json(
+                    submit(
+                        lambda report: run_prediction_job(
+                            store,
+                            body,
+                            progress_callback=report,
+                            cloud_transport=transport,
+                        ),
+                        with_progress=True,
+                    )
+                )
             return _json(
                 submit(
                     lambda report: run_prediction_job(
@@ -1596,6 +1917,20 @@ def create_app(
                     with_progress=True,
                 )
             )
+        except Exception as exc:
+            return _failure(exc)
+
+    async def predictions_preflight(request: Request) -> Response:
+        try:
+            body = _request(PredictionsRequest, await _read_body(request))
+            store = active_store()
+            result = prediction_preflight(
+                store,
+                body,
+                credentials_store=app.state.cloud_credentials_store,
+                check_connection=True,
+            )
+            return _json(result)
         except Exception as exc:
             return _failure(exc)
 
@@ -1666,6 +2001,15 @@ def create_app(
         if job is None:
             return _json({"detail": "Workflow job was not found"}, 404)
         return _json(job)
+
+    async def job_cancel(request: Request) -> Response:
+        job_id = request.path_params["job_id"]
+        if not app.state.jobs.cancel(job_id):
+            current = app.state.jobs.snapshot(job_id)
+            if current is None:
+                return _json({"detail": "Workflow job was not found"}, 404)
+            return _json({"detail": "Workflow job is already finished"}, 409)
+        return _json({"job_id": job_id, "cancel_requested": True})
 
     async def job_download(request: Request) -> Response:
         artifact = app.state.jobs.download(
@@ -1794,6 +2138,7 @@ def create_app(
     app.add_route("/api/projects/create", project_create, methods=["POST"])
     app.add_route("/api/projects/close", project_close, methods=["POST"])
     app.add_route("/api/predictions", predictions, methods=["POST"])
+    app.add_route("/api/predictions/preflight", predictions_preflight, methods=["POST"])
     app.add_route("/api/datasets/import", dataset_import, methods=["POST"])
     app.add_route("/api/datasets/import-cvat", dataset_import_cvat, methods=["POST"])
     app.add_route("/api/cvat/projects", cvat_projects, methods=["POST"])
@@ -1801,6 +2146,7 @@ def create_app(
     app.add_route("/api/active-learning/select", active_learning, methods=["POST"])
     app.add_route("/api/cvat/cycle", cvat_cycle, methods=["POST"])
     app.add_route("/api/jobs/{job_id:str}", job_status, methods=["GET"])
+    app.add_route("/api/jobs/{job_id:str}/cancel", job_cancel, methods=["POST"])
     app.add_route(
         "/api/jobs/{job_id:str}/downloads/{download_id:str}", job_download, methods=["GET"]
     )

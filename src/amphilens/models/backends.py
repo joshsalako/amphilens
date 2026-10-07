@@ -49,16 +49,49 @@ def _training_only_trainer(base_trainer):
 
 
 def _select_torch_device(torch, requested: str):
-    available = bool(torch.cuda.is_available())
+    cuda_available = bool(torch.cuda.is_available())
+    mps_backend = getattr(getattr(torch, "backends", None), "mps", None)
+    mps_available = bool(mps_backend and mps_backend.is_available())
     if requested == "auto":
-        return torch.device("cuda" if available else "cpu")
+        return torch.device("cuda" if cuda_available else "mps" if mps_available else "cpu")
     if requested == "cuda" or requested.startswith("cuda:"):
-        if not available:
+        if not cuda_available:
             raise OptionalDependencyError("CUDA was requested but no CUDA device is available")
         return torch.device(requested)
+    if requested == "mps":
+        if not mps_available:
+            raise OptionalDependencyError("Apple MPS was requested but no MPS device is available")
+        return torch.device("mps")
     if requested == "cpu":
         return torch.device("cpu")
     raise ValidationError(f"Unsupported device: {requested}")
+
+
+def resolve_device_name(requested: str) -> str:
+    """Resolve a requested local device while keeping torch optional at import time."""
+    try:
+        import torch
+    except ImportError as exc:
+        if requested == "auto":
+            return "cpu"
+        raise OptionalDependencyError(
+            f"{requested.upper()} was requested but PyTorch is not installed"
+        ) from exc
+    return str(_select_torch_device(torch, requested))
+
+
+def describe_device_name(requested: str) -> str:
+    """Return a concise device label suitable for saved run and UI summaries."""
+    if requested.startswith("cuda"):
+        try:
+            import torch
+
+            return f"CUDA · {torch.cuda.get_device_name(0)}"
+        except Exception:
+            return "CUDA GPU"
+    if requested == "mps":
+        return "Apple MPS GPU"
+    return "CPU"
 
 
 def _image_size(path: Path) -> tuple[int, int]:
@@ -161,50 +194,61 @@ class UltralyticsDetector:
 
     def predict(self, image_paths: Iterable[Path], config: InferenceConfig):
         model = self._load()
-        for path in image_paths:
-            width, height = _image_size(path)
-            transformed = PreprocessingService(config.preprocessing_config).transform(path)
+        paths = list(image_paths)
+        batch_size = max(1, config.batch_size)
+        for offset in range(0, len(paths), batch_size):
+            batch_paths = paths[offset : offset + batch_size]
+            dimensions = [_image_size(path) for path in batch_paths]
+            transformed_images = [
+                PreprocessingService(config.preprocessing_config).transform(path)
+                for path in batch_paths
+            ]
             results = model.predict(
-                source=transformed.image,
+                source=[item.image for item in transformed_images],
                 imgsz=config.image_size,
                 conf=config.confidence,
                 device=None if config.device == "auto" else config.device,
+                batch=len(batch_paths),
                 verbose=False,
             )
-            result = results[0]
-            boxes = getattr(result, "boxes", None)
-            if boxes is None:
-                continue
-            names = getattr(result, "names", getattr(model, "names", {}))
-            for box, confidence, class_id in zip(
-                boxes.xyxy.cpu().tolist(),
-                boxes.conf.cpu().tolist(),
-                boxes.cls.cpu().tolist(),
+            if len(results) != len(batch_paths):
+                raise RuntimeError("Model returned a different number of results than input images")
+            for path, (width, height), transformed, result in zip(
+                batch_paths, dimensions, transformed_images, results
             ):
-                class_index = int(class_id)
-                class_name = (
-                    names[class_index]
-                    if isinstance(names, (list, tuple))
-                    else names.get(
-                        class_index,
-                        self.classes[class_index]
-                        if class_index < len(self.classes)
-                        else f"class_{class_index}",
+                boxes = getattr(result, "boxes", None)
+                if boxes is None:
+                    continue
+                names = getattr(result, "names", getattr(model, "names", {}))
+                for box, confidence, class_id in zip(
+                    boxes.xyxy.cpu().tolist(),
+                    boxes.conf.cpu().tolist(),
+                    boxes.cls.cpu().tolist(),
+                ):
+                    class_index = int(class_id)
+                    class_name = (
+                        names[class_index]
+                        if isinstance(names, (list, tuple))
+                        else names.get(
+                            class_index,
+                            self.classes[class_index]
+                            if class_index < len(self.classes)
+                            else f"class_{class_index}",
+                        )
                     )
-                )
-                yield DetectionRecord(
-                    image_path=str(path),
-                    image_id=path.name,
-                    class_id=class_index,
-                    class_name=str(class_name),
-                    confidence=float(confidence),
-                    bbox_xyxy=transformed.map_box_to_original(box),
-                    image_width=width,
-                    image_height=height,
-                    model_id=self.model_id,
-                    run_id=config.run_id,
-                    preprocessing=config.preprocessing_fingerprint,
-                )
+                    yield DetectionRecord(
+                        image_path=str(path),
+                        image_id=path.name,
+                        class_id=class_index,
+                        class_name=str(class_name),
+                        confidence=float(confidence),
+                        bbox_xyxy=transformed.map_box_to_original(box),
+                        image_width=width,
+                        image_height=height,
+                        model_id=self.model_id,
+                        run_id=config.run_id,
+                        preprocessing=config.preprocessing_fingerprint,
+                    )
 
     def train(
         self,
@@ -348,36 +392,51 @@ class FasterRCNNDetector:
         model = self._load()
         device = _select_torch_device(torch, config.device)
         model.to(device)
-        for path in image_paths:
-            with Image.open(path) as image:
-                width, height = image.size
-            transformed = PreprocessingService(config.preprocessing_config).transform(path)
-            rgb = np.array(transformed.image, copy=True)
-            tensor = torch.from_numpy(rgb).permute(2, 0, 1).float().div(255).to(device)
+        paths = list(image_paths)
+        batch_size = 1 if str(device) == "cpu" else max(1, config.batch_size)
+        for offset in range(0, len(paths), batch_size):
+            batch_paths = paths[offset : offset + batch_size]
+            dimensions = []
+            transformed_images = []
+            tensors = []
+            for path in batch_paths:
+                with Image.open(path) as image:
+                    dimensions.append(image.size)
+                transformed = PreprocessingService(config.preprocessing_config).transform(path)
+                transformed_images.append(transformed)
+                rgb = np.array(transformed.image, copy=True)
+                tensors.append(torch.from_numpy(rgb).permute(2, 0, 1).float().div(255).to(device))
             with torch.no_grad():
-                output = model([tensor])[0]
-            for box, confidence, label in zip(output["boxes"], output["scores"], output["labels"]):
-                score = float(confidence.cpu())
-                if score < config.confidence:
-                    continue
-                class_id = int(label.cpu()) - 1
-                yield DetectionRecord(
-                    image_path=str(path),
-                    image_id=path.name,
-                    class_id=class_id,
-                    class_name=(
-                        self.classes[class_id]
-                        if 0 <= class_id < len(self.classes)
-                        else f"class_{class_id}"
-                    ),
-                    confidence=score,
-                    bbox_xyxy=transformed.map_box_to_original(box.cpu().tolist()),
-                    image_width=width,
-                    image_height=height,
-                    model_id=self.model_id,
-                    run_id=config.run_id,
-                    preprocessing=config.preprocessing_fingerprint,
-                )
+                outputs = model(tensors)
+            if len(outputs) != len(batch_paths):
+                raise RuntimeError("Model returned a different number of results than input images")
+            for path, (width, height), transformed, output in zip(
+                batch_paths, dimensions, transformed_images, outputs
+            ):
+                for box, confidence, label in zip(
+                    output["boxes"], output["scores"], output["labels"]
+                ):
+                    score = float(confidence.cpu())
+                    if score < config.confidence:
+                        continue
+                    class_id = int(label.cpu()) - 1
+                    yield DetectionRecord(
+                        image_path=str(path),
+                        image_id=path.name,
+                        class_id=class_id,
+                        class_name=(
+                            self.classes[class_id]
+                            if 0 <= class_id < len(self.classes)
+                            else f"class_{class_id}"
+                        ),
+                        confidence=score,
+                        bbox_xyxy=transformed.map_box_to_original(box.cpu().tolist()),
+                        image_width=width,
+                        image_height=height,
+                        model_id=self.model_id,
+                        run_id=config.run_id,
+                        preprocessing=config.preprocessing_fingerprint,
+                    )
 
     def train(
         self, dataset_yaml, output_dir, config, resume_from=None, progress_callback=None

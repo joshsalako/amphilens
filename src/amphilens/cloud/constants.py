@@ -11,6 +11,7 @@ IMAGE_PINS = {
     "pillow": "12.3.0",
     "numpy": "2.3.5",
     "opencv-python-headless": "5.0.0.93",
+    "huggingface-hub": "0.35.3",
 }
 
 IMAGE_APT_PACKAGES = ("libgl1", "libglib2.0-0")
@@ -19,3 +20,8 @@ VOLUME_NAME = "amphilens-cloud-training"
 VOLUME_MOUNT = "/mnt/amphilens"
 MODAL_APP_NAME = "amphilens-cloud-training"
 MODAL_FUNCTION_NAME = "train"
+
+PREDICTION_VOLUME_NAME = "amphilens-prediction-images"
+PREDICTION_MOUNT = "/mnt/amphilens-predictions"
+MODEL_CACHE_VOLUME_NAME = "amphilens-model-cache"
+MODEL_CACHE_MOUNT = "/mnt/amphilens-model-cache"

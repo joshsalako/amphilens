@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .core import (
@@ -30,6 +30,11 @@ class RunSummary:
     predictions_csv: Path
     summary_json: Path
     run_manifest: Path
+    interruption_reason: str | None = None
+
+
+class InferenceInterruption(RuntimeError):
+    """Stop before scheduling more images while preserving completed progress."""
 
 
 def _load_jsonl(path: Path) -> list[DetectionRecord]:
@@ -40,6 +45,32 @@ def _load_jsonl(path: Path) -> list[DetectionRecord]:
         for line in path.read_text().splitlines()
         if line
     ]
+
+
+def _is_out_of_memory(error: Exception) -> bool:
+    name = type(error).__name__.lower()
+    message = str(error).lower()
+    return "outofmemory" in name or "out of memory" in message or "memory allocation" in message
+
+
+def _predict_resiliently(detector, paths: list[Path], config: InferenceConfig):
+    """Yield successful sub-batches and per-image failures after shrinking failed batches."""
+    try:
+        batch_config = replace(config, batch_size=len(paths))
+        return [(paths, list(detector.predict(paths, batch_config)), None)]
+    except Exception as exc:  # noqa: BLE001 - isolated below and persisted per image
+        if isinstance(exc, InferenceInterruption):
+            raise
+        if len(paths) == 1:
+            return [(paths, [], exc)]
+        if _is_out_of_memory(exc):
+            midpoint = max(1, len(paths) // 2)
+            return _predict_resiliently(detector, paths[:midpoint], config) + _predict_resiliently(
+                detector, paths[midpoint:], config
+            )
+        return [
+            result for path in paths for result in _predict_resiliently(detector, [path], config)
+        ]
 
 
 def run_resumable_inference(
@@ -83,32 +114,43 @@ def run_resumable_inference(
     completed = set(progress.get("completed_images", []))
     failures = dict(progress.get("failed_images", {}))
     records = _load_jsonl(records_path)
-    recorded_paths = {record.image_path for record in records}
+    pending = [path for path in paths if str(path) not in completed]
+    batch_size = min(config.batch_size, 32)
+    if config.device == "cpu":
+        batch_size = 1
+    effective_batch_size = int(progress.get("effective_batch_size", 0))
 
-    for path in paths:
-        image_path = str(path)
-        if image_path in completed:
-            continue
+    interruption_reason = None
+    for offset in range(0, len(pending), batch_size):
+        requested_paths = pending[offset : offset + batch_size]
         try:
-            new_records = list(detector.predict([path], config))
-            with records_path.open("a", encoding="utf-8") as handle:
-                for record in new_records:
-                    handle.write(json.dumps(record.to_dict()) + "\n")
-            records.extend(new_records)
-            recorded_paths.add(image_path)
-            completed.add(image_path)
-            failures.pop(image_path, None)
-        except Exception as exc:  # noqa: BLE001 - persisted as a user-visible image failure
-            failures[image_path] = f"{type(exc).__name__}: {exc}"
-        atomic_write_json(
-            progress_path,
-            {
-                "run_id": config.run_id,
-                "model_id": config.model_id,
-                "completed_images": sorted(completed),
-                "failed_images": failures,
-            },
-        )
+            results = _predict_resiliently(detector, requested_paths, config)
+        except InferenceInterruption as exc:
+            interruption_reason = str(exc)
+            break
+        for successful_paths, new_records, error in results:
+            if error is None:
+                with records_path.open("a", encoding="utf-8") as handle:
+                    for record in new_records:
+                        handle.write(json.dumps(record.to_dict()) + "\n")
+                records.extend(new_records)
+                completed.update(str(path) for path in successful_paths)
+                for path in successful_paths:
+                    failures.pop(str(path), None)
+                effective_batch_size = max(effective_batch_size, len(successful_paths))
+            else:
+                failures[str(successful_paths[0])] = f"{type(error).__name__}: {error}"
+            atomic_write_json(
+                progress_path,
+                {
+                    "run_id": config.run_id,
+                    "model_id": config.model_id,
+                    "completed_images": sorted(completed),
+                    "failed_images": failures,
+                    "requested_batch_size": config.batch_size,
+                    "effective_batch_size": effective_batch_size,
+                },
+            )
 
     predictions_csv = write_predictions_csv(records, artifact / "predictions.csv")
     summary = {
@@ -118,10 +160,16 @@ def run_resumable_inference(
         "completed_images": len(completed),
         "failed_images": failures,
         "detection_count": len(records),
+        "requested_batch_size": config.batch_size,
+        "effective_batch_size": effective_batch_size,
+        "status": "interrupted"
+        if interruption_reason
+        else ("completed_with_failures" if failures else "completed"),
+        "interruption_reason": interruption_reason,
         "predictions_csv": str(predictions_csv),
     }
     summary_path = artifact / "summary.json"
-    run_manifest.status = "completed" if not failures else "completed_with_failures"
+    run_manifest.status = summary["status"]
     run_manifest.finished_at = utc_now()
     atomic_write_json(run_manifest_path, run_manifest.to_dict())
     atomic_write_json(summary_path, summary)
@@ -134,4 +182,5 @@ def run_resumable_inference(
         predictions_csv=predictions_csv,
         summary_json=summary_path,
         run_manifest=run_manifest_path,
+        interruption_reason=interruption_reason,
     )

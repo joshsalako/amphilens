@@ -9,6 +9,8 @@ pytest.importorskip("starlette")
 from starlette.testclient import TestClient
 
 import amphilens.webapp as webapp
+from amphilens.core import ProjectManifest, ProjectStore
+from amphilens.runs import InferenceInterruption
 from amphilens.state import UserStateStore
 from amphilens.webapp import DownloadArtifact, JobManager, JobOutput, create_app
 
@@ -60,7 +62,8 @@ def test_static_frontend_and_assets_are_served(client):
     assert 'name="training_source"' in script
     assert 'name="hosted_model_id"' in script
     assert "__ignore__" in script
-    assert "hf auth login" in script
+    assert "downloaded directly by Modal" in script
+    assert "private Hugging Face repository" not in script
     assert client.get("/static/app.css").status_code == 200
     assert client.get("/static/favicon.svg").status_code == 200
 
@@ -122,6 +125,29 @@ def test_job_manager_exposes_download_progress_to_status_clients(jobs):
     finish.set()
 
 
+def test_job_manager_exposes_cancellation_to_an_active_workflow(jobs):
+    import threading
+
+    started = threading.Event()
+
+    def operation(report_progress):
+        started.set()
+        while not report_progress.cancel_requested():
+            time.sleep(0.005)
+        raise InferenceInterruption("Prediction canceled")
+
+    job_id = jobs.submit(operation, with_progress=True)
+    assert started.wait(timeout=1)
+    assert jobs.cancel(job_id)
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline:
+        snapshot = jobs.snapshot(job_id)
+        if snapshot["state"] == "canceled":
+            break
+        time.sleep(0.01)
+    assert snapshot["state"] == "canceled"
+
+
 def test_api_parses_hosted_inference_and_training_source_fields():
     prediction = webapp._request(
         webapp.PredictionsRequest,
@@ -144,6 +170,101 @@ def test_api_parses_hosted_inference_and_training_source_fields():
     assert training.training_source == "amphilens-pretrained"
     assert training.hosted_model_id == "amphilens-yolo26-m"
     assert webapp.select_training_source(None, None, None) == "general-pretrained"
+
+
+def test_prediction_request_parses_local_gpu_batching_and_modal_execution():
+    local = webapp._request(
+        webapp.PredictionsRequest,
+        {"device": "mps", "batch_size": "auto"},
+    )
+    cloud = webapp._request(
+        webapp.PredictionsRequest,
+        {
+            "execution": "modal",
+            "gpu": "L4",
+            "batch_size": 6,
+            "max_cost_usd": 3.5,
+            "acknowledged": True,
+            "uploads_dataset": True,
+        },
+    )
+
+    assert local.device == "mps"
+    assert local.batch_size is None
+    assert cloud.execution == "modal"
+    assert cloud.gpu == "L4"
+    assert cloud.batch_size == 6
+    assert cloud.max_cost_usd == 3.5
+    assert cloud.acknowledged is True
+    assert cloud.uploads_dataset is True
+
+
+def test_prediction_request_rejects_unsupported_modal_gpu_and_batch_size():
+    with pytest.raises(ValueError, match="Unsupported Modal GPU"):
+        webapp._request(webapp.PredictionsRequest, {"execution": "modal", "gpu": "invented"})
+    with pytest.raises(ValueError, match="between 1 and 32"):
+        webapp._request(webapp.PredictionsRequest, {"batch_size": 33})
+    with pytest.raises(ValueError, match="spending limit"):
+        webapp._request(webapp.PredictionsRequest, {"execution": "modal"})
+
+
+def test_prediction_preflight_reports_bytes_and_only_uses_matching_timing_history(tmp_path):
+    image_root = tmp_path / "images"
+    image_root.mkdir()
+    (image_root / "one.jpg").write_bytes(b"12345")
+    (image_root / "two.jpg").write_bytes(b"1234567")
+    store = ProjectStore(tmp_path / "project")
+    store.create(ProjectManifest.create("sample", [image_root], ["toad"]))
+    request = webapp.PredictionsRequest(
+        image_root=str(image_root),
+        execution="modal",
+        gpu="L4",
+        max_cost_usd=2.0,
+        model_preset="yolo26-l",
+    )
+
+    preview = webapp.prediction_preflight(store, request)
+
+    assert preview["image_count"] == 2
+    assert preview["total_bytes"] == 12
+    assert preview["gpu"] == "L4"
+    assert preview["estimated_cost_usd"] is None
+    assert "No timing history" in preview["estimate_note"]
+
+    history = store.root / "runs" / "predict-prior" / "cloud-cost.json"
+    history.parent.mkdir(parents=True)
+    history.write_text(
+        '{"provider":"modal","gpu":"L4","model_id":"yolo26-l",'
+        '"elapsed_seconds":8,"completed_images":4}',
+        encoding="utf-8",
+    )
+    preview_with_history = webapp.prediction_preflight(store, request)
+    assert preview_with_history["timing_history_count"] == 1
+    assert preview_with_history["estimated_cost_usd"] > 0
+
+
+def test_modal_prediction_api_requires_preflight_consent_before_job_submission(client, tmp_path):
+    image_root = tmp_path / "consent-images"
+    image_root.mkdir()
+    project_path = tmp_path / "consent-project"
+    created = client.post(
+        "/api/projects/create",
+        json={
+            "name": "Consent",
+            "path": str(project_path),
+            "image_root": str(image_root),
+            "classes": ["toad"],
+        },
+    )
+    assert created.status_code == 200
+
+    response = client.post(
+        "/api/predictions",
+        json={"execution": "modal", "max_cost_usd": 1.0},
+    )
+
+    assert response.status_code == 400
+    assert "consent" in response.json()["detail"].lower()
 
 
 def test_cloud_estimate_uses_catalog_input_size_for_hosted_model():
