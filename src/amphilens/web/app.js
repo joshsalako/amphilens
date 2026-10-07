@@ -10,6 +10,7 @@
     defaultProjectRoot: "",
     defaultModelId: "",
     models: [],
+    hostedModels: [],
     jobs: new Map(),
     activeJob: null,
     cvatProjects: null,
@@ -80,6 +81,7 @@
       app.defaultProjectRoot = data.default_project_root || "";
       app.defaultModelId = data.default_model_id || "";
       app.models = app.project?.models || data.models || [];
+      app.hostedModels = data.hosted_models || app.project?.hosted_models || [];
       app.bootstrapped = true;
       updateProjectHeader();
       populateModelPreset();
@@ -154,9 +156,46 @@
   function modelOptions() {
     const saved = app.project?.checkpoints || [];
     const presets = app.models;
+    const hosted = app.hostedModels || [];
     const preferred = app.project?.model_preset || app.defaultModelId;
     const presetOptions = presets.map((item) => `<option value="preset:${escapeHtml(item.model_id)}"${item.model_id === preferred ? " selected" : ""}>${escapeHtml(item.name || item.model_id)}</option>`).join("");
-    return `${presetOptions ? `<optgroup label="Pretrained models">${presetOptions}</optgroup>` : ""}${saved.length ? `<optgroup label="Project checkpoints">${saved.map((item) => `<option value="checkpoint:${escapeHtml(item.path)}">${escapeHtml(item.name || item.model_id || basename(item.path))}</option>`).join("")}</optgroup>` : ""}`;
+    const hostedOptions = hosted.map((item) => `<option value="hosted:${escapeHtml(item.model_id)}">${escapeHtml(item.name || item.model_id)}</option>`).join("");
+    return `${presetOptions ? `<optgroup label="General pretrained models">${presetOptions}</optgroup>` : ""}${hostedOptions ? `<optgroup label="AmphiLens fine-tuned models">${hostedOptions}</optgroup>` : ""}${saved.length ? `<optgroup label="Project checkpoints">${saved.map((item) => `<option value="checkpoint:${escapeHtml(item.path)}">${escapeHtml(item.name || item.model_id || basename(item.path))}</option>`).join("")}</optgroup>` : ""}`;
+  }
+
+  function hostedModelById(modelId) {
+    return (app.hostedModels || []).find((item) => item.model_id === modelId) || null;
+  }
+
+  function hostedModelDetails(model) {
+    if (!model) return "";
+    const dimensions = model.preprocessing?.compatibility_mode === "shortest-side"
+      ? "640 px short side, rounded up to a multiple of 32"
+      : "640 px maximum side, rounded up to a multiple of 32";
+    return `<p class="hosted-model-facts"><strong>${escapeHtml(model.architecture)}</strong><span>${escapeHtml(model.size)}</span><span>Inference size ${formatNumber(model.inference_image_size)} px</span><span>${escapeHtml(dimensions)}</span></p><div class="notice hosted-access-note"><span class="notice-mark" aria-hidden="true">i</span><p>This model is in a private Hugging Face repository. Sign in on this computer with <code>hf auth login</code>; your token stays local. Your Hugging Face account also needs read access.</p></div>`;
+  }
+
+  function renderPredictionModelSelection() {
+    const select = document.getElementById("prediction-model");
+    const details = document.getElementById("prediction-hosted-details");
+    const mapping = document.getElementById("prediction-class-mapping");
+    if (!select || !details || !mapping) return;
+    const [, kind, selected] = String(select.value || "").match(/^(preset|checkpoint|hosted):(.*)$/s) || [];
+    const model = kind === "hosted" ? hostedModelById(selected) : null;
+    details.hidden = !model;
+    details.innerHTML = model ? hostedModelDetails(model) : "";
+    mapping.hidden = !model;
+    if (!model) {
+      mapping.innerHTML = "";
+      return;
+    }
+    const projectClasses = app.project?.classes || [];
+    const rows = (model.source_class_order || []).map((source, index) => {
+      const exact = projectClasses.includes(source);
+      const targetOptions = projectClasses.map((name) => `<option value="${escapeHtml(name)}"${name === source ? " selected" : ""}>${escapeHtml(name)}</option>`).join("");
+      return `<div class="cvat-label-row"><label for="hosted-class-map-${index}">${escapeHtml(source)}${exact ? `<span class="class-match">Exact match</span>` : ""}</label><select id="hosted-class-map-${index}" name="hosted_mapping_${index}" data-class-map-source="${escapeHtml(source)}" required><option value="">Choose a project class or Ignore</option>${targetOptions}<option value="__ignore__">Ignore detections</option></select></div>`;
+    }).join("");
+    mapping.innerHTML = `<div><span class="field-title">Map model labels to project classes</span><p class="field-help">Exact label matches are preselected. Map every other label or choose Ignore.</p></div><div class="cvat-label-list">${rows}</div>`;
   }
 
   function renderPredict() {
@@ -168,6 +207,8 @@
         <form class="form-stack" data-form="predict">
           <div class="field"><label for="prediction-root">Image folder</label>${pathPickerControl("prediction-root", "image_root", "directory", "/path/to/camera-trap-images", { value: currentRoot, required: true, label: "an image folder" })}<span class="field-help">Choose a folder visible to the computer running AmphiLens.</span></div>
           <div class="field"><label for="prediction-model">Model</label><select id="prediction-model" name="model_choice">${modelOptions()}</select></div>
+          <div id="prediction-hosted-details" class="hosted-model-panel" hidden></div>
+          <div id="prediction-class-mapping" class="hosted-class-mapping" hidden></div>
           <details class="advanced-settings"><summary>Detection settings</summary><div class="advanced-body">
             <div class="field"><label for="confidence">Confidence threshold</label><div class="range-field"><input id="confidence" name="confidence" type="range" min="0.05" max="0.95" step="0.05" value="0.25"><output class="range-value" for="confidence">0.25</output></div><span class="field-help">Higher values keep only more confident detections.</span></div>
             <div class="field"><label for="prediction-output">Save results in <span class="optional">optional</span></label>${pathPickerControl("prediction-output", "output_dir", "directory", "Use the project runs folder", { label: "a results folder" })}</div>
@@ -175,7 +216,8 @@
           </div></details>
           <div class="form-actions"><button class="button primary" type="submit">Run detection</button><span class="muted" style="font-size:12px">You can leave this page while it runs.</span></div>
         </form><div id="job-slot" aria-live="polite"></div>
-      </section><aside class="surface side-note"><h3>What you will get</h3><p>Predictions include image names, detected classes, confidence scores and bounding boxes. AmphiLens can also save a run summary and visual evidence when available.</p><div class="note-rule"></div><h3>Choosing a model</h3><p>Use a pretrained model to begin. A project checkpoint appears here after you train one from a labeled dataset.</p></aside></div>`;
+      </section><aside class="surface side-note"><h3>What you will get</h3><p>Predictions include image names, detected classes, confidence scores and bounding boxes. AmphiLens can also save a run summary and visual evidence when available.</p><div class="note-rule"></div><h3>Choosing a model</h3><p>Use general pretrained weights to begin, an AmphiLens fine-tuned model for its trained classes, or a project checkpoint you have already trained.</p></aside></div>`;
+    renderPredictionModelSelection();
   }
 
   function renderImport() {
@@ -229,6 +271,30 @@
     return "";
   }
 
+  function trainingImageSize(form) {
+    if (form.elements.training_source?.value !== "amphilens-pretrained") return 640;
+    return hostedModelById(form.elements.hosted_model_id?.value)?.inference_image_size || 640;
+  }
+
+  function syncTrainingSourceControls(form) {
+    if (!form) return;
+    const source = form.elements.training_source?.value || "general-pretrained";
+    const hostedWrap = form.querySelector("[data-training-hosted]");
+    const checkpointWrap = form.querySelector("[data-training-checkpoint]");
+    const hostedSelect = form.elements.hosted_model_id;
+    const checkpointSelect = form.elements.checkpoint;
+    const hostedDetails = form.querySelector("[data-training-hosted-details]");
+    if (hostedWrap) hostedWrap.hidden = source !== "amphilens-pretrained";
+    if (checkpointWrap) checkpointWrap.hidden = source !== "project-checkpoint";
+    if (hostedSelect) hostedSelect.required = source === "amphilens-pretrained";
+    if (checkpointSelect) checkpointSelect.required = source === "project-checkpoint";
+    const model = hostedSelect ? hostedModelById(hostedSelect.value) : null;
+    if (hostedDetails) {
+      hostedDetails.hidden = source !== "amphilens-pretrained" || !model;
+      hostedDetails.innerHTML = source === "amphilens-pretrained" && model ? hostedModelDetails(model) : "";
+    }
+  }
+
   function renderTraining() {
     if (projectRequired()) return;
     const datasets = app.project.datasets || [];
@@ -236,7 +302,10 @@
     const workflow = datasets.length ? `<div class="form-layout"><section class="surface form-panel"><div class="panel-heading"><div><h2>Training setup</h2><p>Each run saves its configuration and checkpoint lineage in this project.</p></div></div>
       <form class="form-stack" data-form="training">
         <div class="field"><label for="training-snapshot">Labeled dataset snapshot</label><select id="training-snapshot" name="snapshot_path" required><option value="">Choose a dataset</option>${datasets.map((item) => `<option value="${escapeHtml(item.path)}">${escapeHtml(item.name || basename(item.path))} · ${formatNumber(item.image_count)} images</option>`).join("")}</select></div>
-        <div class="field"><label for="training-checkpoint">Start from a checkpoint <span class="optional">optional</span></label><select id="training-checkpoint" name="checkpoint"><option value="">Use the selected model preset</option>${checkpoints.map((item) => `<option value="${escapeHtml(item.path)}">${escapeHtml(item.name || item.model_id || basename(item.path))}</option>`).join("")}</select></div>
+        <div class="field"><label for="training-source">Training source</label><select id="training-source" name="training_source"><option value="general-pretrained" selected>General pretrained weights</option><option value="amphilens-pretrained">AmphiLens pretrained model</option><option value="project-checkpoint"${checkpoints.length ? "" : " disabled"}>Existing project checkpoint</option></select><span class="field-help">General pretrained weights are the default and use this project’s selected architecture.</span></div>
+        <div class="field" data-training-hosted hidden><label for="training-hosted-model">AmphiLens model</label><select id="training-hosted-model" name="hosted_model_id"><option value="">Choose a model</option>${(app.hostedModels || []).map((item) => `<option value="${escapeHtml(item.model_id)}">${escapeHtml(item.name || item.model_id)}</option>`).join("")}</select><span class="field-help">The model supplies the architecture, size, and input preprocessing for this run.</span></div>
+        <div class="hosted-model-panel" data-training-hosted-details hidden></div>
+        <div class="field" data-training-checkpoint hidden><label for="training-checkpoint">Project checkpoint</label><select id="training-checkpoint" name="checkpoint"><option value="">Choose a saved checkpoint</option>${checkpoints.map((item) => `<option value="${escapeHtml(item.path)}">${escapeHtml(item.name || item.model_id || basename(item.path))}</option>`).join("")}</select></div>
         <div class="field"><label for="training-execution">Where should it run?</label><select id="training-execution" name="execution"><option value="local">On this computer</option><option value="cloud">Modal cloud GPU</option></select></div>
         <details class="advanced-settings"><summary>Training settings</summary><div class="advanced-body"><div class="field-row"><div class="field"><label for="training-epochs">Epochs</label><input id="training-epochs" name="epochs" type="number" min="1" max="1000" value="50"></div><div class="field"><label for="training-batch">Batch size</label><input id="training-batch" name="batch_size" type="number" min="1" max="256" value="8"></div></div><div class="field"><label for="training-output">Save run in <span class="optional">optional</span></label>${pathPickerControl("training-output", "output_dir", "directory", "Use the project runs folder", { label: "a run folder" })}</div><div class="field"><label for="training-device">Local device</label><select id="training-device" name="device"><option value="auto">Choose automatically</option><option value="cpu">CPU</option><option value="cuda">CUDA GPU</option></select></div></div></details>
         <div class="cloud-settings hidden" data-cloud-settings>
@@ -251,6 +320,7 @@
     </section><aside class="surface side-note"><h3>Before you start</h3><p>Training is available only from a validated labeled snapshot. Empty annotations can be valid for reviewed images with no target wildlife.</p><div class="note-rule"></div><p>Evaluation is reported as not evaluated when no holdout dataset is supplied.</p></aside></div>
       <section class="surface panel cloud-jobs-panel"><div class="panel-heading"><div><h2>Cloud jobs</h2><p>Refresh, cancel or collect a saved Modal training job.</p></div><button class="button small" type="button" data-refresh-cloud-jobs>Refresh jobs</button></div><div id="cloud-jobs-slot" aria-live="polite"><p class="empty-inline">Loading saved cloud jobs…</p></div></section>` : `<section class="surface empty-state" style="margin-top:0"><div class="empty-illustration" aria-hidden="true">↗</div><h2>No labeled dataset yet</h2><p>Import a reviewed archive or CVAT project first. You can still use Find wildlife with a pretrained model while you gather annotations.</p><div class="project-actions"><button class="button primary" type="button" data-view="import">Import labeled images</button><button class="button" type="button" data-view="predict">Find wildlife</button></div></section>`;
     root.innerHTML = `${pageHead("Label & improve", "Train a model", "Fine-tune a model using a validated labeled dataset snapshot. Prediction-only projects do not need to train.")}${workflow}`;
+    syncTrainingSourceControls(root.querySelector('form[data-form="training"]'));
     if (datasets.length) loadCloudJobs();
   }
 
@@ -260,6 +330,11 @@
       gpu: form.elements.gpu?.value || "",
       epochs: numberOrUndefined(form.elements.epochs?.value),
       max_cost_usd: numberOrUndefined(form.elements.max_cost_usd?.value),
+      training_source: form.elements.training_source?.value || "general-pretrained",
+      hosted_model_id: form.elements.training_source?.value === "amphilens-pretrained"
+        ? form.elements.hosted_model_id?.value || ""
+        : "",
+      image_size: trainingImageSize(form),
     });
   }
 
@@ -292,6 +367,11 @@
       gpu: form.elements.gpu.value,
       epochs: numberOrUndefined(form.elements.epochs.value),
       max_cost_usd: numberOrUndefined(form.elements.max_cost_usd.value),
+      training_source: form.elements.training_source?.value || "general-pretrained",
+      hosted_model_id: form.elements.training_source?.value === "amphilens-pretrained"
+        ? form.elements.hosted_model_id?.value || undefined
+        : undefined,
+      image_size: trainingImageSize(form),
     };
     const requestedSignature = cloudEstimateSignature(form);
     if (!payload.max_cost_usd || payload.max_cost_usd <= 0) { toast("Enter a positive maximum budget.", true); return; }
@@ -599,11 +679,20 @@
         payload = { project_id: values.project_id, ...(Object.keys(mapping).length ? { class_mapping: mapping } : {}), ...(app.cvatServerUrl ? { server_url: app.cvatServerUrl } : {}) };
       } else if (form.dataset.form === "predict") {
         endpoint = "/api/predictions";
-        const [, kind, selection] = String(values.model_choice || "").match(/^(preset|checkpoint):(.*)$/s) || [];
+        const [, kind, selection] = String(values.model_choice || "").match(/^(preset|checkpoint|hosted):(.*)$/s) || [];
+        const classMapping = {};
+        if (kind === "hosted") {
+          form.querySelectorAll("[data-class-map-source]").forEach((select) => {
+            if (!select.value) throw new Error(`Map “${select.dataset.classMapSource}” to a project class or choose Ignore.`);
+            classMapping[select.dataset.classMapSource] = select.value === "__ignore__" ? null : select.value;
+          });
+        }
         payload = {
           image_root: values.image_root || undefined,
           checkpoint: kind === "checkpoint" ? selection : undefined,
           model_preset: kind === "preset" ? selection : undefined,
+          hosted_model_id: kind === "hosted" ? selection : undefined,
+          class_mapping: kind === "hosted" ? classMapping : undefined,
           output_dir: values.output_dir || undefined,
           confidence: numberOrUndefined(values.confidence),
           device: values.device || undefined,
@@ -613,14 +702,21 @@
         const mapping = parseClassMapping(values.class_mapping);
         payload = { archive: values.archive, ...(Object.keys(mapping).length ? { class_mapping: mapping } : {}) };
       } else if (form.dataset.form === "training") {
-        const common = { snapshot_path: values.snapshot_path, checkpoint: values.checkpoint || undefined, epochs: numberOrUndefined(values.epochs), batch_size: numberOrUndefined(values.batch_size) };
+        const common = {
+          snapshot_path: values.snapshot_path,
+          training_source: values.training_source || "general-pretrained",
+          hosted_model_id: values.training_source === "amphilens-pretrained" ? values.hosted_model_id || undefined : undefined,
+          checkpoint: values.training_source === "project-checkpoint" ? values.checkpoint || undefined : undefined,
+          epochs: numberOrUndefined(values.epochs),
+          batch_size: numberOrUndefined(values.batch_size),
+        };
         if (values.execution === "cloud") {
           if (!app.cloudEstimate || app.cloudEstimateSignature !== cloudEstimateSignature(form)) throw new Error("Request a fresh estimate for these training settings before submitting.");
           if (!form.elements.uploads_dataset.checked || !form.elements.acknowledged.checked) throw new Error("Approve the dataset upload and cost estimate to submit cloud training.");
           const estimatedUsd = app.cloudEstimate.high_usd;
           if (estimatedUsd === undefined || estimatedUsd === null) throw new Error("The returned estimate has no numeric estimated_usd value for the training request.");
           endpoint = "/api/cloud/training";
-          payload = { ...common, gpu: values.gpu, max_cost_usd: numberOrUndefined(values.max_cost_usd), estimated_usd: Number(estimatedUsd), acknowledged: true, uploads_dataset: true };
+          payload = { ...common, image_size: trainingImageSize(form), gpu: values.gpu, max_cost_usd: numberOrUndefined(values.max_cost_usd), estimated_usd: Number(estimatedUsd), acknowledged: true, uploads_dataset: true };
         } else {
           endpoint = "/api/training";
           payload = { ...common, output_dir: values.output_dir || undefined, device: values.device || undefined };
@@ -847,6 +943,19 @@
       document.querySelector("[data-cloud-settings]")?.classList.toggle("hidden", event.target.value !== "cloud");
       document.querySelector('[data-form="training"] .form-actions button[type="submit"]')?.replaceChildren(document.createTextNode(event.target.value === "cloud" ? "Submit cloud training" : "Train model"));
     }
+    if (event.target.id === "prediction-model") renderPredictionModelSelection();
+    if (event.target.id === "training-source" || event.target.id === "training-hosted-model") {
+      const form = event.target.closest('form[data-form="training"]');
+      syncTrainingSourceControls(form);
+      if (form) {
+        form.elements.uploads_dataset.checked = false;
+        form.elements.acknowledged.checked = false;
+        app.cloudEstimate = null;
+        app.cloudEstimateSignature = null;
+        const slot = document.getElementById("cloud-estimate-slot");
+        if (slot) slot.innerHTML = renderCloudEstimate();
+      }
+    }
     if (event.target.id === "initial-cvat-project") {
       const selected = app.cvatProjects?.find((project) => String(project.project_id ?? project.id ?? project.pk) === event.target.value);
       const summary = document.getElementById("initial-cvat-summary");
@@ -855,10 +964,10 @@
       if (importButton) importButton.disabled = Boolean(cvatProjectIssue(selected));
     }
     const trainingForm = event.target.closest('form[data-form="training"]');
-    if (trainingForm && ["snapshot_path", "gpu", "epochs", "max_cost_usd", "checkpoint"].includes(event.target.name)) {
+    if (trainingForm && ["snapshot_path", "gpu", "epochs", "max_cost_usd", "checkpoint", "training_source", "hosted_model_id"].includes(event.target.name)) {
       trainingForm.elements.uploads_dataset.checked = false;
       trainingForm.elements.acknowledged.checked = false;
-      if (["snapshot_path", "gpu", "epochs", "max_cost_usd"].includes(event.target.name)) {
+      if (["snapshot_path", "gpu", "epochs", "max_cost_usd", "training_source", "hosted_model_id"].includes(event.target.name)) {
         app.cloudEstimate = null;
         app.cloudEstimateSignature = null;
         const slot = document.getElementById("cloud-estimate-slot");

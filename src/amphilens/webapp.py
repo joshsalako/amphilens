@@ -252,6 +252,7 @@ class _Job:
     created_at: float
     result: dict[str, Any] | None = None
     error: str | None = None
+    progress: dict[str, Any] | None = None
     downloads: dict[str, DownloadArtifact] = field(default_factory=dict)
     future: Future | None = None
 
@@ -269,7 +270,12 @@ class JobManager:
         self._lock = threading.RLock()
         self._closed = False
 
-    def submit(self, operation: Callable[[], JobOutput | dict[str, Any]]) -> str:
+    def submit(
+        self,
+        operation: Callable[..., JobOutput | dict[str, Any]],
+        *,
+        with_progress: bool = False,
+    ) -> str:
         if not self._capacity.acquire(blocking=False):
             raise RuntimeError(
                 "Too many workflows are already queued. Try again when one finishes."
@@ -285,14 +291,23 @@ class JobManager:
             job_id = uuid.uuid4().hex
             job = _Job(job_id, "queued", time.time())
             self._jobs[job_id] = job
-            job.future = self._executor.submit(self._run, job_id, operation)
+            job.future = self._executor.submit(self._run, job_id, operation, with_progress)
         return job_id
 
-    def _run(self, job_id: str, operation: Callable[[], JobOutput | dict[str, Any]]) -> None:
+    def _run(
+        self,
+        job_id: str,
+        operation: Callable[..., JobOutput | dict[str, Any]],
+        with_progress: bool,
+    ) -> None:
         with self._lock:
             self._jobs[job_id].state = "running"
         try:
-            output = operation()
+
+            def report_progress(value: dict[str, Any]) -> None:
+                self.update_progress(job_id, value)
+
+            output = operation(report_progress) if with_progress else operation()
             if isinstance(output, JobOutput):
                 result = dict(output.result)
                 download_specs = list(output.downloads)
@@ -342,7 +357,15 @@ class JobManager:
                 payload["result"] = dict(job.result)
             if job.error is not None:
                 payload["error"] = job.error
+            if job.progress is not None:
+                payload["progress"] = dict(job.progress)
             return payload
+
+    def update_progress(self, job_id: str, progress: dict[str, Any]) -> None:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is not None:
+                job.progress = dict(progress)
 
     def register_result(self, output: JobOutput) -> dict[str, Any]:
         """Expose a completed synchronous action using the same safe download contract."""
@@ -420,6 +443,8 @@ class PredictionsRequest:
     confidence: float | None = None
     device: Literal["auto", "cpu", "cuda"] | None = None
     model_preset: str | None = None
+    hosted_model_id: str | None = None
+    class_mapping: dict[str, str | None] | None = None
 
 
 @dataclass(slots=True)
@@ -448,6 +473,8 @@ class TrainingRequest:
     epochs: int | None = None
     batch_size: int | None = None
     device: Literal["auto", "cpu", "cuda"] | None = None
+    training_source: str | None = None
+    hosted_model_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -482,6 +509,8 @@ class CloudEstimateRequest:
     epochs: int | None = None
     max_cost_usd: float = 5.0
     image_size: int = 640
+    training_source: str | None = None
+    hosted_model_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -569,15 +598,15 @@ def _boolean(data: dict[str, Any], key: str, default: bool = False) -> bool:
     return value
 
 
-def _mapping(data: dict[str, Any], key: str) -> dict[str, str] | None:
+def _mapping(data: dict[str, Any], key: str) -> dict[str, str | None] | None:
     value = data.get(key)
     if value is None:
         return None
     if not isinstance(value, dict) or any(
-        not isinstance(source, str) or not isinstance(target, str)
+        not isinstance(source, str) or (target is not None and not isinstance(target, str))
         for source, target in value.items()
     ):
-        raise ValueError(f"{key} must be an object of text mappings")
+        raise ValueError(f"{key} must map source labels to project labels or null for Ignore")
     return value
 
 
@@ -614,6 +643,8 @@ def _request(cls, payload: dict[str, Any]):
             confidence=confidence,
             device=device,
             model_preset=_optional_string(payload, "model_preset"),
+            hosted_model_id=_optional_string(payload, "hosted_model_id"),
+            class_mapping=_mapping(payload, "class_mapping"),
         )
     if cls is DatasetImportRequest:
         return cls(
@@ -640,6 +671,8 @@ def _request(cls, payload: dict[str, Any]):
             epochs=epochs,
             batch_size=batch_size,
             device=device,
+            training_source=_optional_string(payload, "training_source"),
+            hosted_model_id=_optional_string(payload, "hosted_model_id"),
         )
     if cls is ActiveLearningRequest:
         return cls(
@@ -675,6 +708,8 @@ def _request(cls, payload: dict[str, Any]):
             epochs=_integer(payload, "epochs", minimum=1),
             max_cost_usd=_number(payload, "max_cost_usd", 5.0, minimum=0.001),
             image_size=_integer(payload, "image_size", 640, minimum=1),
+            training_source=_optional_string(payload, "training_source"),
+            hosted_model_id=_optional_string(payload, "hosted_model_id"),
         )
     if cls is CloudTrainingRequest:
         base = _request(CloudEstimateRequest, payload)
@@ -691,6 +726,8 @@ def _request(cls, payload: dict[str, Any]):
             epochs=base.epochs,
             max_cost_usd=base.max_cost_usd,
             image_size=base.image_size,
+            training_source=base.training_source,
+            hosted_model_id=base.hosted_model_id,
             checkpoint=_optional_string(payload, "checkpoint"),
             batch_size=batch_size,
             device=device,
@@ -710,6 +747,59 @@ def _model_summaries() -> list[dict[str, str]]:
         }
         for item in ModelCatalog().list()
     ]
+
+
+def _hosted_model_summaries() -> list[dict[str, Any]]:
+    from .models.hosted_models import list_hosted_models
+
+    return [model.to_summary() for model in list_hosted_models()]
+
+
+def select_training_source(
+    training_source: str | None,
+    checkpoint: str | None,
+    hosted_model_id: str | None,
+) -> str:
+    """Resolve the training initializer while preserving old checkpoint requests."""
+    selected = training_source or ("project-checkpoint" if checkpoint else "general-pretrained")
+    if selected not in {"general-pretrained", "amphilens-pretrained", "project-checkpoint"}:
+        raise ValueError(
+            "Choose General pretrained weights, an AmphiLens model, or a project checkpoint"
+        )
+    if selected == "general-pretrained":
+        if checkpoint or hosted_model_id:
+            raise ValueError(
+                "General pretrained weights cannot be combined with another checkpoint"
+            )
+    elif selected == "amphilens-pretrained":
+        if checkpoint:
+            raise ValueError("Choose either an AmphiLens model or a project checkpoint")
+        if not hosted_model_id:
+            raise ValueError("Choose an AmphiLens pretrained model")
+    else:
+        if not checkpoint:
+            raise ValueError("Choose an existing project checkpoint")
+        if hosted_model_id:
+            raise ValueError("Choose either a project checkpoint or an AmphiLens model")
+    return selected
+
+
+def _cloud_estimate_image_size(request: CloudEstimateRequest) -> int:
+    """Use the catalog's inference size for hosted models, never a UI-supplied guess."""
+    source = request.training_source or (
+        "amphilens-pretrained" if request.hosted_model_id else "general-pretrained"
+    )
+    if source not in {"general-pretrained", "amphilens-pretrained", "project-checkpoint"}:
+        raise ValueError("Choose a supported training source before requesting an estimate")
+    if source == "amphilens-pretrained":
+        if not request.hosted_model_id:
+            raise ValueError("Choose an AmphiLens pretrained model before requesting an estimate")
+        from .models.hosted_models import get_hosted_model
+
+        return get_hosted_model(request.hosted_model_id).inference_image_size
+    if request.hosted_model_id:
+        raise ValueError("Choose either General pretrained weights or an AmphiLens model")
+    return request.image_size
 
 
 def _project_summary(store: ProjectStore) -> dict[str, Any]:
@@ -754,6 +844,7 @@ def _project_summary(store: ProjectStore) -> dict[str, Any]:
         "datasets": datasets,
         "checkpoints": checkpoints,
         "models": models,
+        "hosted_models": _hosted_model_summaries(),
     }
 
 
@@ -792,10 +883,21 @@ def _project_snapshot(store: ProjectStore, snapshot_path: str | Path):
     return snapshot
 
 
-def run_prediction_job(store: ProjectStore, request: PredictionsRequest) -> JobOutput:
+def run_prediction_job(
+    store: ProjectStore,
+    request: PredictionsRequest,
+    *,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> JobOutput:
     from .configuration import discover_checkpoint_manifest, resolve_effective_configuration
     from .core import InferenceConfig, iter_images
     from .models import load_detector, load_preset_detector
+    from .models.hosted_models import (
+        HostedClassMappedDetector,
+        download_hosted_checkpoint,
+        get_hosted_model,
+        resolve_class_mapping,
+    )
     from .reporting import write_report
     from .runs import run_resumable_inference
 
@@ -808,6 +910,11 @@ def run_prediction_job(store: ProjectStore, request: PredictionsRequest) -> JobO
     if not image_paths:
         raise ValueError(f"No supported images were found in: {image_root_path}")
     checkpoint = request.checkpoint.strip() if request.checkpoint else ""
+    if request.hosted_model_id and (checkpoint or request.model_preset):
+        raise ValueError("Choose either an AmphiLens pretrained model or another model")
+    if request.class_mapping is not None and not request.hosted_model_id:
+        raise ValueError("Class mappings are only used with an AmphiLens pretrained model")
+    hosted_model = get_hosted_model(request.hosted_model_id) if request.hosted_model_id else None
     checkpoint_manifest = discover_checkpoint_manifest(checkpoint) if checkpoint else None
     overrides: dict[str, Any] = {}
     if request.confidence is not None:
@@ -816,27 +923,66 @@ def run_prediction_job(store: ProjectStore, request: PredictionsRequest) -> JobO
         overrides["device"] = request.device
     if request.model_preset is not None:
         overrides["model_preset"] = request.model_preset
-    effective = resolve_effective_configuration(
-        project,
-        checkpoint_manifest=checkpoint_manifest,
-        checkpoint_path=checkpoint or None,
-        overrides=overrides,
-    )
-    detector = (
-        load_detector(
+    class_mapping = None
+    if hosted_model is not None:
+        class_mapping = resolve_class_mapping(
+            hosted_model.source_classes,
+            project.classes,
+            request.class_mapping,
+        )
+        effective = resolve_effective_configuration(
+            project,
+            hosted_model=hosted_model,
+            use_source_classes=True,
+            overrides=overrides,
+        )
+        checkpoint = str(
+            download_hosted_checkpoint(
+                hosted_model.model_id,
+                progress_callback=progress_callback,
+            )
+        )
+        detector = load_detector(
             checkpoint,
             architecture=effective.architecture,
             classes=list(effective.classes),
             model_id=effective.model_id,
-            checkpoint_manifest=checkpoint_manifest,
             preprocessing=effective.preprocessing.to_dict(),
         )
-        if checkpoint
-        else load_preset_detector(
-            ModelCatalog().get(effective.model_preset), classes=list(effective.classes)
+        detector = HostedClassMappedDetector(detector, class_mapping, project.classes)
+    else:
+        effective = resolve_effective_configuration(
+            project,
+            checkpoint_manifest=checkpoint_manifest,
+            checkpoint_path=checkpoint or None,
+            overrides=overrides,
         )
-    )
-    output_dir = request.output_dir or str(store.root / "artifacts" / "prediction")
+        detector = (
+            load_detector(
+                checkpoint,
+                architecture=effective.architecture,
+                classes=list(effective.classes),
+                model_id=effective.model_id,
+                checkpoint_manifest=checkpoint_manifest,
+                preprocessing=effective.preprocessing.to_dict(),
+            )
+            if checkpoint
+            else load_preset_detector(
+                ModelCatalog().get(effective.model_preset), classes=list(effective.classes)
+            )
+        )
+    run_metadata = {
+        "effective_configuration": effective.to_dict(),
+        "class_mapping": class_mapping,
+    }
+    import hashlib
+    import json
+
+    run_signature = hashlib.sha256(
+        json.dumps(run_metadata, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:12]
+    run_id = f"predict-{effective.model_id}-{run_signature}"
+    output_dir = request.output_dir or str(store.root / "runs" / run_id)
     summary = run_resumable_inference(
         detector,
         image_paths,
@@ -846,8 +992,8 @@ def run_prediction_job(store: ProjectStore, request: PredictionsRequest) -> JobO
             confidence=effective.confidence,
             device=effective.device,
             preprocessing=effective.preprocessing,
-            run_id=f"predict-{effective.model_id}",
-            metadata={"effective_configuration": effective.to_dict()},
+            run_id=run_id,
+            metadata=run_metadata,
         ),
         output_dir,
     )
@@ -900,14 +1046,47 @@ def run_cvat_import_job(store: ProjectStore, request: CvatProjectImportRequest) 
     }
 
 
-def run_training_job(store: ProjectStore, request: TrainingRequest) -> JobOutput:
-    from .configuration import discover_checkpoint_manifest, resolve_effective_configuration
+def _training_checkpoint(
+    request: TrainingRequest | CloudTrainingRequest,
+    *,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+):
+    from .configuration import discover_checkpoint_manifest
+    from .models.hosted_models import download_hosted_checkpoint, get_hosted_model
+
+    checkpoint = request.checkpoint.strip() if request.checkpoint else ""
+    source = select_training_source(
+        request.training_source,
+        checkpoint or None,
+        request.hosted_model_id,
+    )
+    if source == "amphilens-pretrained":
+        hosted_model = get_hosted_model(request.hosted_model_id or "")
+        checkpoint_path = download_hosted_checkpoint(
+            hosted_model.model_id,
+            progress_callback=progress_callback,
+        )
+        return source, hosted_model, str(checkpoint_path), None
+    if source == "project-checkpoint":
+        return source, None, checkpoint, discover_checkpoint_manifest(checkpoint)
+    return source, None, "", None
+
+
+def run_training_job(
+    store: ProjectStore,
+    request: TrainingRequest,
+    *,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> JobOutput:
+    from .configuration import resolve_effective_configuration
     from .models import load_detector, load_preset_detector
     from .training import TrainingConfig, train_snapshot_and_register
 
     project = store.load_manifest()
-    checkpoint = request.checkpoint.strip() if request.checkpoint else ""
-    checkpoint_manifest = discover_checkpoint_manifest(checkpoint) if checkpoint else None
+    source, hosted_model, checkpoint, checkpoint_manifest = _training_checkpoint(
+        request,
+        progress_callback=progress_callback,
+    )
     overrides: dict[str, Any] = {}
     if request.epochs is not None:
         overrides["epochs"] = request.epochs
@@ -919,6 +1098,7 @@ def run_training_job(store: ProjectStore, request: TrainingRequest) -> JobOutput
         project,
         checkpoint_manifest=checkpoint_manifest,
         checkpoint_path=checkpoint or None,
+        hosted_model=hosted_model,
         overrides=overrides,
     )
     detector = (
@@ -960,7 +1140,7 @@ def run_training_job(store: ProjectStore, request: TrainingRequest) -> JobOutput
     )
     return JobOutput(
         result={
-            "message": f"Training finished: {result.checkpoint}",
+            "message": f"Training finished from {source}: {result.checkpoint}",
             "paths": {
                 "checkpoint": str(result.checkpoint),
                 "manifest": str(output_dir / "checkpoint.json"),
@@ -1064,10 +1244,14 @@ def _cloud_service(store: ProjectStore, credentials_store):
 
 
 def run_cloud_training_job(
-    store: ProjectStore, request: CloudTrainingRequest, credentials_store
+    store: ProjectStore,
+    request: CloudTrainingRequest,
+    credentials_store,
+    *,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     from .cloud.models import CloudConsent
-    from .configuration import discover_checkpoint_manifest, resolve_effective_configuration
+    from .configuration import resolve_effective_configuration
 
     service, credentials = _cloud_service(store, credentials_store)
     if credentials is None:
@@ -1076,8 +1260,10 @@ def run_cloud_training_job(
             "Modal environment variables."
         )
     _project_snapshot(store, request.snapshot_path)
-    checkpoint = request.checkpoint.strip() if request.checkpoint else ""
-    checkpoint_manifest = discover_checkpoint_manifest(checkpoint) if checkpoint else None
+    source, hosted_model, checkpoint, checkpoint_manifest = _training_checkpoint(
+        request,
+        progress_callback=progress_callback,
+    )
     project = store.load_manifest()
     overrides: dict[str, Any] = {"device": "cuda"}
     if request.epochs is not None:
@@ -1088,11 +1274,20 @@ def run_cloud_training_job(
         project,
         checkpoint_manifest=checkpoint_manifest,
         checkpoint_path=checkpoint or None,
+        hosted_model=hosted_model,
         overrides=overrides,
     )
+    image_size = request.image_size
+    if hosted_model is not None:
+        if request.image_size != effective.image_size:
+            raise ValueError(
+                f"The selected AmphiLens model uses {effective.image_size}px input. "
+                "Request a fresh cloud estimate for that model before submitting."
+            )
+        image_size = effective.image_size
     training_config = {
         "epochs": effective.epochs,
-        "image_size": request.image_size,
+        "image_size": image_size,
         "batch_size": effective.batch_size,
         "patience": effective.patience,
         "seed": effective.seed,
@@ -1261,9 +1456,11 @@ def create_app(
         with app.state.project_lock:
             return _active_store(app.state.active_project_path)
 
-    def submit(operation: Callable[[], JobOutput | dict[str, Any]]) -> dict[str, str]:
+    def submit(
+        operation: Callable[..., JobOutput | dict[str, Any]], *, with_progress: bool = False
+    ) -> dict[str, str]:
         try:
-            job_id = app.state.jobs.submit(operation)
+            job_id = app.state.jobs.submit(operation, with_progress=with_progress)
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=safe_error(exc)) from exc
         return {"job_id": job_id, "state": "queued"}
@@ -1309,6 +1506,7 @@ def create_app(
                 "doctor": report,
                 "default_project_root": str(default_projects_root()),
                 "models": _model_summaries(),
+                "hosted_models": _hosted_model_summaries(),
                 "default_model_id": ModelCatalog().default.model_id,
             }
             if app.state.restore_warning:
@@ -1383,7 +1581,16 @@ def create_app(
             body = _request(PredictionsRequest, await _read_body(request))
             store = active_store()
             # Snapshot availability is deliberately not checked: prediction-only works alone.
-            return _json(submit(lambda: run_prediction_job(store, body)))
+            return _json(
+                submit(
+                    lambda report: run_prediction_job(
+                        store,
+                        body,
+                        progress_callback=report,
+                    ),
+                    with_progress=True,
+                )
+            )
         except Exception as exc:
             return _failure(exc)
 
@@ -1420,7 +1627,16 @@ def create_app(
         try:
             body = _request(TrainingRequest, await _read_body(request))
             store = active_store()
-            return _json(submit(lambda: run_training_job(store, body)))
+            return _json(
+                submit(
+                    lambda report: run_training_job(
+                        store,
+                        body,
+                        progress_callback=report,
+                    ),
+                    with_progress=True,
+                )
+            )
         except Exception as exc:
             return _failure(exc)
 
@@ -1495,7 +1711,7 @@ def create_app(
                 gpu=body.gpu,
                 epochs=body.epochs,
                 max_cost_usd=body.max_cost_usd,
-                image_size=body.image_size,
+                image_size=_cloud_estimate_image_size(body),
             )
             return _json({"estimate": estimate.to_dict()})
         except Exception as exc:
@@ -1511,7 +1727,13 @@ def create_app(
             store = active_store()
             return _json(
                 submit(
-                    lambda: run_cloud_training_job(store, body, app.state.cloud_credentials_store)
+                    lambda report: run_cloud_training_job(
+                        store,
+                        body,
+                        app.state.cloud_credentials_store,
+                        progress_callback=report,
+                    ),
+                    with_progress=True,
                 )
             )
         except Exception as exc:

@@ -14,6 +14,36 @@ from ..core import ValidationError, atomic_write_json
 from .backends import OptionalDependencyError, _select_torch_device
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
+_CLASSIFIER_HEAD_PREFIXES = (
+    "roi_heads.box_predictor.cls_score.",
+    "roi_heads.box_predictor.bbox_pred.",
+)
+
+
+def adapt_faster_rcnn_state_dict(
+    source_state: dict[str, Any],
+    target_state: dict[str, Any],
+    *,
+    source_classes: list[str] | tuple[str, ...] | None,
+    target_classes: list[str] | tuple[str, ...],
+) -> dict[str, Any]:
+    """Keep compatible Faster R-CNN weights and leave an incompatible output head fresh."""
+    reset_head = source_classes is not None and list(source_classes) != list(target_classes)
+    compatible: dict[str, Any] = {}
+    for key, value in source_state.items():
+        if key not in target_state:
+            continue
+        is_head = key.startswith(_CLASSIFIER_HEAD_PREFIXES)
+        if is_head and reset_head:
+            continue
+        source_shape = getattr(value, "shape", None)
+        target_shape = getattr(target_state[key], "shape", None)
+        if source_shape != target_shape:
+            if is_head:
+                continue
+            raise ValueError(f"Faster R-CNN checkpoint shape differs for {key}")
+        compatible[key] = value
+    return compatible
 
 
 def _classes_from_names(value: Any) -> list[str]:
@@ -282,9 +312,33 @@ class FasterRCNNTrainer:
             initial_state = torch.load(
                 Path(initial_checkpoint), map_location="cpu", weights_only=False
             )
-            if isinstance(initial_state, dict) and "model_state_dict" in initial_state:
-                initial_state = initial_state["model_state_dict"]
-            model.load_state_dict(initial_state)
+            checkpoint_metadata = initial_state if isinstance(initial_state, dict) else {}
+            source_classes = checkpoint_metadata.get("classes")
+            effective = (
+                config.get("metadata", {}).get("effective_configuration", {})
+                if isinstance(config.get("metadata"), dict)
+                else {}
+            )
+            hosted_model = effective.get("hosted_model", {})
+            if source_classes is None and isinstance(hosted_model, dict):
+                source_classes = hosted_model.get("source_class_order")
+            source_state = checkpoint_metadata.get("model_state_dict", checkpoint_metadata)
+            compatible = adapt_faster_rcnn_state_dict(
+                source_state,
+                model.state_dict(),
+                source_classes=source_classes,
+                target_classes=self.classes,
+            )
+            result = model.load_state_dict(compatible, strict=False)
+            unexpected_missing = [
+                key for key in result.missing_keys if not key.startswith(_CLASSIFIER_HEAD_PREFIXES)
+            ]
+            if result.unexpected_keys or unexpected_missing:
+                incompatible = result.unexpected_keys + unexpected_missing
+                raise ValueError(
+                    "Faster R-CNN checkpoint is incompatible outside its output head: "
+                    + ", ".join(incompatible[:5])
+                )
         if resume_from:
             state = torch.load(Path(resume_from), map_location="cpu", weights_only=False)
             if isinstance(state, dict) and "model_state_dict" in state:

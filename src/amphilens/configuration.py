@@ -16,6 +16,7 @@ from .core import (
     read_json,
 )
 from .models import ModelCatalog
+from .models.hosted_models import HostedModel
 from .preprocessing import PreprocessingConfig
 
 
@@ -38,6 +39,7 @@ class EffectiveRunConfiguration:
     freeze_strategy: str
     source: str
     warnings: tuple[str, ...] = ()
+    hosted_model: dict[str, Any] | None = None
 
     @property
     def fingerprint(self) -> str:
@@ -61,6 +63,7 @@ class EffectiveRunConfiguration:
             "freeze_strategy": self.freeze_strategy,
             "source": self.source,
             "warnings": list(self.warnings),
+            "hosted_model": self.hosted_model,
         }
         if include_fingerprint:
             payload["fingerprint"] = self.fingerprint
@@ -89,13 +92,18 @@ def resolve_effective_configuration(
     *,
     checkpoint_manifest: CheckpointManifest | None = None,
     checkpoint_path: str | Path | None = None,
+    hosted_model: HostedModel | None = None,
+    use_source_classes: bool = False,
     overrides: dict[str, Any] | None = None,
 ) -> EffectiveRunConfiguration:
     """Resolve project defaults, checkpoint authority, and explicit run overrides."""
     project_config = project.project_config
     values = dict(overrides or {})
     warnings: list[str] = []
+    hosted_metadata = hosted_model.to_summary() if hosted_model else None
 
+    if checkpoint_manifest is not None and hosted_model is not None:
+        raise UnsupportedCheckpointError("Choose either a project checkpoint or an AmphiLens model")
     if checkpoint_manifest is not None:
         checkpoint_manifest.validate()
         if checkpoint_manifest.classes != project.classes:
@@ -103,6 +111,7 @@ def resolve_effective_configuration(
         model_id = checkpoint_manifest.model_id
         architecture = checkpoint_manifest.architecture
         model_preset = model_id
+        classes = tuple(project.classes)
         preprocessing = PreprocessingConfig.from_any(checkpoint_manifest.preprocessing)
         checkpoint_size = _checkpoint_input_size(checkpoint_manifest)
         image_size = checkpoint_size or project_config.image_size
@@ -132,11 +141,44 @@ def resolve_effective_configuration(
                 raise UnsupportedCheckpointError(
                     "Checkpoint image_size cannot be overridden for this run"
                 )
+    elif hosted_model is not None:
+        model_id = hosted_model.model_id
+        model_preset = hosted_model.model_id
+        architecture = hosted_model.architecture
+        classes = hosted_model.source_classes if use_source_classes else tuple(project.classes)
+        preprocessing = hosted_model.preprocessing
+        image_size = hosted_model.inference_image_size
+        source = "huggingface"
+        requested_model = values.pop("model_preset", None)
+        if requested_model is not None and requested_model != hosted_model.model_id:
+            raise UnsupportedCheckpointError(
+                "AmphiLens model architecture cannot be overridden for this run"
+            )
+        requested_architecture = values.pop("architecture", None)
+        if requested_architecture is not None and requested_architecture != architecture:
+            raise UnsupportedCheckpointError(
+                "AmphiLens model architecture cannot be overridden for this run"
+            )
+        requested_size = values.pop("image_size", None)
+        if requested_size is not None and int(requested_size) != image_size:
+            raise UnsupportedCheckpointError(
+                "AmphiLens model input size cannot be overridden for this run"
+            )
+        requested_preprocessing = values.pop("preprocessing", None)
+        if (
+            requested_preprocessing is not None
+            and PreprocessingConfig.from_any(requested_preprocessing).to_dict()
+            != preprocessing.to_dict()
+        ):
+            raise UnsupportedCheckpointError(
+                "AmphiLens model preprocessing cannot be overridden for this run"
+            )
     else:
         model_preset = str(values.pop("model_preset", project_config.model_preset))
         preset = ModelCatalog().get(model_preset)
         model_id = str(values.pop("model_id", preset.model_id))
         architecture = str(values.pop("architecture", preset.architecture))
+        classes = tuple(project.classes)
         if architecture not in {"yolo", "rtdetr", "faster_rcnn"}:
             raise ValidationError(f"Unsupported detector architecture: {architecture}")
         preprocessing = PreprocessingConfig.from_any(
@@ -167,7 +209,7 @@ def resolve_effective_configuration(
         model_preset=model_preset,
         model_id=model_id,
         architecture=architecture,
-        classes=tuple(project.classes),
+        classes=tuple(classes),
         preprocessing=preprocessing,
         image_size=image_size,
         confidence=confidence,
@@ -179,6 +221,7 @@ def resolve_effective_configuration(
         freeze_strategy=freeze_strategy,
         source=source,
         warnings=tuple(warnings),
+        hosted_model=hosted_metadata,
     )
 
 

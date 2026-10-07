@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "repo_id": "josh-salako/amphilens",
+  "research_reference": {
+    "repository": "wtl-detection",
+    "commit": "ebdbbb1bc95e43e4952895e5a3d6541fdaf1c7ae",
+    "phase": "Phase 2",
+    "source_classes": [
+      "Other_Amphibian",
+      "Small_Mammal",
+      "Western_Leopard_Toad"
+    ]
+  },
+  "models": [
+    {
+      "model_id": "amphilens-yolo26-m",
+      "name": "AmphiLens YOLO26-M",
+      "architecture": "yolo",
+      "size": "medium",
+      "artifact": "yolo_clahe.pt",
+      "sha256": "e4f8b3c4264b25482445506d0f495976f5af570ea50a4682a6d9ea247a8ea123",
+      "source_class_order": [
+        "Other_Amphibian",
+        "Small_Mammal",
+        "Western_Leopard_Toad"
+      ],
+      "training_provenance": {
+        "phase": "Phase 2",
+        "cycle": 4,
+        "training_pipeline": "detection/active_learning/pipelines/train_model.py",
+        "inference_pipeline": "detection/active_learning/pipelines/run_inference_pipeline.py"
+      },
+      "inference_image_size": 1152,
+      "preprocessing": {
+        "resize_enabled": true,
+        "max_dimension": 640,
+        "resize_interpolation": "opencv-linear",
+        "grayscale_enabled": true,
+        "clahe_enabled": true,
+        "clahe_clip_limit": 2.0,
+        "clahe_tile_grid_size": [8, 8],
+        "color_space": "rgb",
+        "compatibility_mode": "shortest-side",
+        "round_to_multiple": 32,
+        "allow_upscale": true
+      },
+      "license": "AGPL-3.0"
+    },
+    {
+      "model_id": "amphilens-rtdetr-l",
+      "name": "AmphiLens RT-DETR-L",
+      "architecture": "rtdetr",
+      "size": "large",
+      "artifact": "rtdetr_clahe.pt",
+      "sha256": "91be4021b5f65017a3499651d45123475c7a3bc5776a313ebae18011732f42a9",
+      "source_class_order": [
+        "Other_Amphibian",
+        "Small_Mammal",
+        "Western_Leopard_Toad"
+      ],
+      "training_provenance": {
+        "phase": "Phase 2",
+        "cycle": 3,
+        "training_pipeline": "detection/active_learning/pipelines/train_model.py",
+        "inference_pipeline": "detection/active_learning/pipelines/run_inference_pipeline.py"
+      },
+      "inference_image_size": 640,
+      "preprocessing": {
+        "resize_enabled": true,
+        "max_dimension": 640,
+        "resize_interpolation": "opencv-linear",
+        "grayscale_enabled": true,
+        "clahe_enabled": true,
+        "clahe_clip_limit": 2.0,
+        "clahe_tile_grid_size": [8, 8],
+        "color_space": "rgb",
+        "compatibility_mode": "max-dimension",
+        "round_to_multiple": 32,
+        "allow_upscale": true
+      },
+      "license": "AGPL-3.0"
+    },
+    {
+      "model_id": "amphilens-faster-rcnn-resnet50",
+      "name": "AmphiLens Faster R-CNN ResNet-50",
+      "architecture": "faster_rcnn",
+      "size": "resnet50",
+      "artifact": "faster_rcnn_clahe.pt",
+      "sha256": "ef69bc0691dcb765ad2af36d84ff3d536f4efe5e02c298b8c359b43d197c265e",
+      "source_class_order": [
+        "Other_Amphibian",
+        "Small_Mammal",
+        "Western_Leopard_Toad"
+      ],
+      "training_provenance": {
+        "phase": "Phase 2",
+        "cycle": 5,
+        "training_pipeline": "detection/active_learning/pipelines/faster_rcnn_utils.py",
+        "inference_pipeline": "detection/active_learning/pipelines/run_inference_pipeline.py"
+      },
+      "inference_image_size": 640,
+      "preprocessing": {
+        "resize_enabled": true,
+        "max_dimension": 640,
+        "resize_interpolation": "opencv-linear",
+        "grayscale_enabled": true,
+        "clahe_enabled": true,
+        "clahe_clip_limit": 2.0,
+        "clahe_tile_grid_size": [8, 8],
+        "color_space": "rgb",
+        "compatibility_mode": "shortest-side",
+        "round_to_multiple": 32,
+        "allow_upscale": true
+      },
+      "license": "unverified"
+    }
+  ]
+}

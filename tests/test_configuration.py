@@ -192,3 +192,33 @@ def test_unmanifested_checkpoint_is_explicitly_less_reproducible(tmp_path: Path)
 
     assert effective.source == "project"
     assert any("checkpoint metadata" in warning.lower() for warning in effective.warnings)
+
+
+def test_hosted_model_configuration_is_authoritative_for_inference_and_training(tmp_path: Path):
+    from amphilens.core import ProjectManifest
+    from amphilens.models.hosted_models import get_hosted_model
+
+    project = ProjectManifest.create(
+        "custom classes",
+        [tmp_path],
+        ["toad", "mammal"],
+    )
+    hosted = get_hosted_model("amphilens-rtdetr-l")
+
+    inference = resolve_effective_configuration(
+        project,
+        hosted_model=hosted,
+        use_source_classes=True,
+    )
+    training = resolve_effective_configuration(project, hosted_model=hosted)
+
+    assert inference.model_preset == "amphilens-rtdetr-l"
+    assert inference.architecture == "rtdetr"
+    assert inference.image_size == 640
+    assert inference.classes == hosted.source_classes
+    assert inference.preprocessing.to_dict() == hosted.preprocessing.to_dict()
+    assert inference.source == "huggingface"
+    assert inference.hosted_model["revision"]
+    assert training.architecture == "rtdetr"
+    assert training.classes == tuple(project.classes)
+    assert training.hosted_model["source_class_order"] == list(hosted.source_classes)

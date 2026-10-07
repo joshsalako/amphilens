@@ -173,6 +173,21 @@ The first supported model choices are:
 - **RT-DETR-L**; and
 - **Faster R-CNN with ResNet-50 FPN v2**.
 
+For training, **General pretrained weights** remains the default. You can also
+choose one of the three private AmphiLens fine-tuned models or a checkpoint
+already saved in the current project. Choosing an AmphiLens model fixes that
+run to its recorded architecture, size, preprocessing profile, and input size.
+
+The AmphiLens models are hosted in the private
+[`josh-salako/amphilens` Hugging Face repository](https://huggingface.co/josh-salako/amphilens).
+Each computer that uses them needs the inference dependencies, a Hugging Face
+CLI login (`hf auth login`), and read access to that repository. AmphiLens
+downloads a selected checkpoint on first use into the standard Hugging Face
+cache and reuses it later. The token remains in the user's local Hugging Face
+configuration; it is not included in model requests or cloud-training uploads.
+When using an AmphiLens model for prediction, map every source class to a project
+class or choose **Ignore**. Exact class-name matches are preselected.
+
 For each project, choose:
 
 - maximum image dimension, default `640`;
@@ -202,6 +217,12 @@ Use **Train a model** when you have imported labelled data. The initial imported
 images are all used for training. AmphiLens does not invent a validation split;
 until you provide a separate validation dataset, results say:
 `evaluation: not evaluated`.
+
+The training source starts as **General pretrained weights**. Select
+**AmphiLens pretrained model** to initialize from one of the hosted checkpoints;
+AmphiLens adapts the detector output head to the current project's target
+classes while keeping compatible learned weights. **Existing project
+checkpoint** continues from a checkpoint already registered in the project.
 
 Use **Find wildlife** to run a selected base model or trained checkpoint over
 an unlabeled image folder.
@@ -264,4 +285,7 @@ when first needed and are not included in the Python package.
 
 ## License
 
-AmphiLens is released under the [Apache License 2.0](LICENSE).
+AmphiLens application code is released under the
+[GNU Affero General Public License v3.0 only](LICENSE). Hosted model files have
+their own license status in the Hugging Face model card; Faster R-CNN's artifact
+license is not established by the available training records.

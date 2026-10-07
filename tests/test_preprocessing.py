@@ -60,3 +60,46 @@ def test_preprocessed_cache_uses_source_hash_and_config_fingerprint(tmp_path: Pa
     assert first == second
     assert first.is_file()
     assert source.read_bytes() != first.read_bytes()
+
+
+def test_research_short_side_profile_rounds_dimensions_and_maps_each_axis(tmp_path: Path):
+    import pytest
+
+    pytest.importorskip("cv2")
+    source = tmp_path / "wide.png"
+    Image.new("RGB", (1000, 501), color=(20, 30, 40)).save(source)
+    config = PreprocessingConfig(
+        max_dimension=640,
+        resize_interpolation="opencv-linear",
+        grayscale_enabled=True,
+        clahe_enabled=True,
+        compatibility_mode="shortest-side",
+        round_to_multiple=32,
+        allow_upscale=True,
+    )
+
+    result = PreprocessingService(config).transform(source)
+
+    assert result.image.size == (1280, 640)
+    assert result.map_box_to_original([0, 0, 1280, 640]) == [0, 0, 1000, 501]
+
+
+def test_research_max_dimension_profile_can_upscale_and_round_short_axis(tmp_path: Path):
+    import pytest
+
+    pytest.importorskip("cv2")
+    source = tmp_path / "portrait.png"
+    Image.new("RGB", (501, 1000), color=(20, 30, 40)).save(source)
+    config = PreprocessingConfig(
+        max_dimension=640,
+        resize_interpolation="opencv-linear",
+        grayscale_enabled=True,
+        clahe_enabled=True,
+        compatibility_mode="max-dimension",
+        round_to_multiple=32,
+        allow_upscale=True,
+    )
+
+    result = PreprocessingService(config).transform(source)
+
+    assert result.image.size == (352, 640)
