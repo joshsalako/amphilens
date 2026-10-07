@@ -63,3 +63,21 @@ test("model download events show download progress without treating bytes as ima
   assert.match(visibleUpdates, /60%/);
   assert.doesNotMatch(visibleUpdates, /600\/1000/);
 });
+
+test("run history and log output scroll to their newest content", () => {
+  const timeline = { scrollHeight: 840, scrollTop: 0, closest: () => ({ open: true }) };
+  const log = { scrollHeight: 420, scrollTop: 0, closest: () => ({ open: true }) };
+  const closedTimeline = { scrollHeight: 600, scrollTop: 0, closest: () => ({ open: false }) };
+  const container = {
+    querySelectorAll(selector) {
+      assert.equal(selector, ".activity-timeline, .activity-log");
+      return [timeline, log, closedTimeline];
+    },
+  };
+
+  activityView.scrollOutputToBottom(container);
+
+  assert.equal(timeline.scrollTop, 840);
+  assert.equal(log.scrollTop, 420);
+  assert.equal(closedTimeline.scrollTop, 0);
+});

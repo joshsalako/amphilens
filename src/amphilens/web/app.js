@@ -182,6 +182,7 @@
     }
     const list = panel.querySelector(".activity-list");
     if (list) list.scrollTop = scrollTop;
+    window.AmphiLensActivityView?.scrollOutputToBottom(panel);
   }
 
   async function refreshBootstrap() {
@@ -359,7 +360,7 @@
             <div class="field"><label for="prediction-batch-size">Batch size</label><select id="prediction-batch-size" name="batch_size"><option value="auto" selected>Auto</option>${Array.from({ length: 32 }, (_, index) => `<option value="${index + 1}">${index + 1}</option>`).join("")}</select><span class="field-help">Auto starts at up to 8 images on GPU and reduces the batch if memory is low. CPU always processes one image at a time.</span></div>
             <div class="modal-prediction-settings" data-modal-prediction-settings hidden><div class="field"><label for="prediction-gpu">Modal GPU</label><select id="prediction-gpu" name="gpu">${app.modalGpus.map((gpu) => `<option value="${escapeHtml(gpu.name)}"${gpu.name === "L4" ? " selected" : ""}>${escapeHtml(gpu.name)} · $${Number(gpu.usd_per_hour).toFixed(3)}/GPU hour</option>`).join("")}</select><span class="field-help">One remote GPU worker processes one image batch at a time.</span></div><div class="field"><label for="prediction-max-cost">Spending limit (USD)</label><input id="prediction-max-cost" name="max_cost_usd" type="number" min="0.01" step="0.01" value="5.00" required><span class="field-help">The worker stops scheduling batches when its runtime-based estimate reaches this amount.</span></div></div>
           </div></details>
-          <div class="form-actions"><button class="button primary" type="submit">Run detection</button><span class="muted" style="font-size:12px">You can leave this page while it runs.</span></div>
+          <div class="form-actions"><button class="button primary" type="submit">Run detection</button><span class="muted" style="font-size:.75rem">You can leave this page while it runs.</span></div>
         </form><div id="job-slot" aria-live="polite"></div>
       </section><aside class="surface side-note"><h3>What you will get</h3><p>Predictions include image names, detected classes, confidence scores and bounding boxes. AmphiLens can also save a run summary and visual evidence when available.</p><div class="note-rule"></div><h3>Choosing a model</h3><p>Use general pretrained weights to begin, an AmphiLens fine-tuned model for its trained classes, or a project checkpoint you have already trained.</p></aside></div>`;
     const form = root.querySelector('form[data-form="predict"]');
@@ -1026,6 +1027,7 @@
     if (historyWasOpen) {
       const history = slot.querySelector(".activity-details");
       if (history) history.open = true;
+      window.AmphiLensActivityView?.scrollOutputToBottom(slot);
     }
   }
 
@@ -1101,6 +1103,13 @@
       activityPanel.hidden = true;
       document.querySelector("[data-activity-toggle]")?.setAttribute("aria-expanded", "false");
       return;
+    }
+    const historySummary = event.target.closest(".activity-details > summary");
+    if (historySummary) {
+      const history = historySummary.closest(".activity-details");
+      window.requestAnimationFrame(() => {
+        window.AmphiLensActivityView?.scrollOutputToBottom(history);
+      });
     }
     if (!event.target.closest(".activity-wrap") && activityPanel && !activityPanel.hidden) {
       activityPanel.hidden = true;

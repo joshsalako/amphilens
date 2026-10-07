@@ -59,5 +59,13 @@
     return `${recent ? `<section class="activity-live" aria-label="Latest updates" aria-live="polite"><p class="activity-live-label">Latest updates</p><ol class="activity-timeline">${recent}</ol></section>` : ""}<details class="activity-details"><summary>${summary}</summary>${history}${output}</details>`;
   }
 
-  window.AmphiLensActivityView = { renderTimeline };
+  function scrollOutputToBottom(container) {
+    if (!container?.querySelectorAll) return;
+    for (const output of container.querySelectorAll(".activity-timeline, .activity-log")) {
+      const details = output.closest?.("details");
+      if (!details || details.open) output.scrollTop = output.scrollHeight;
+    }
+  }
+
+  window.AmphiLensActivityView = { renderTimeline, scrollOutputToBottom };
 })();
