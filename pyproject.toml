@@ -65,6 +65,9 @@ amphilens = "amphilens.cli:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/amphilens"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"src/amphilens/models/amphilens-models.json" = "amphilens/models/amphilens-models.json"
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
