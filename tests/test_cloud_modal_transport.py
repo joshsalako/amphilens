@@ -215,26 +215,33 @@ def test_prediction_call_uses_selected_gpu_model_spec_and_one_container(monkeypa
         pass
 
     class FakeEngine:
-        def __init__(self, model_spec_json):
+        def __init__(self, model_spec_json, *, job_key, gpu_type):
             self.model_spec_json = model_spec_json
+            self.job_key = job_key
+            self.gpu_type = gpu_type
             self.predict_batch = FakePredictionMethod(call)
 
     class FakeEngineClass:
         options = None
         model_spec_json = None
+        job_key = None
+        gpu_type = None
 
         def with_options(self, **kwargs):
             self.options = kwargs
             return self
 
-        def __call__(self, *, model_spec_json):
+        def __call__(self, *, model_spec_json, job_key, gpu_type):
             self.model_spec_json = model_spec_json
-            return FakeEngine(model_spec_json)
+            self.job_key = job_key
+            self.gpu_type = gpu_type
+            return FakeEngine(model_spec_json, job_key=job_key, gpu_type=gpu_type)
 
     engine_class = FakeEngineClass()
     module = SimpleNamespace(app=app, PredictionEngine=engine_class)
     monkeypatch.setattr(transport, "_load_app_module", lambda: module)
     payload = {
+        "job_key": "prediction-job-123",
         "gpu": "A10",
         "timeout_seconds": 120,
         "model_spec": {"source": "hosted", "model_id": "public-model"},
@@ -247,6 +254,8 @@ def test_prediction_call_uses_selected_gpu_model_spec_and_one_container(monkeypa
     assert engine_class.options["gpu"] == "A10"
     assert engine_class.options["max_containers"] == 1
     assert json.loads(engine_class.model_spec_json) == payload["model_spec"]
+    assert engine_class.job_key == payload["job_key"]
+    assert engine_class.gpu_type == payload["gpu"]
 
 
 def test_modal_download_streams_volume_chunks_to_disk(tmp_path, monkeypatch):
