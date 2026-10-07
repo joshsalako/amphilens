@@ -93,6 +93,8 @@ def test_class_mapping_can_ignore_detections_and_reindexes_project_classes():
 def test_download_uses_private_repo_login_pinned_revision_cache_and_sha256(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
+    import builtins
+
     import amphilens.models.hosted_models as hosted
 
     artifact = tmp_path / "weights.pt"
@@ -109,6 +111,14 @@ def test_download_uses_private_repo_login_pinned_revision_cache_and_sha256(
     model = get_hosted_model("amphilens-yolo26-m")
     digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
     monkeypatch.setattr(hosted, "get_hosted_model", lambda _: replace(model, sha256=digest))
+    real_import = builtins.__import__
+
+    def import_without_tqdm(name, *args, **kwargs):
+        if name.split(".", 1)[0] == "tqdm":
+            raise ModuleNotFoundError("No module named 'tqdm'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", import_without_tqdm)
 
     result = download_hosted_checkpoint(model.model_id)
 
@@ -117,6 +127,7 @@ def test_download_uses_private_repo_login_pinned_revision_cache_and_sha256(
     assert captured["filename"] == "yolo_clahe.pt"
     assert captured["revision"] == hosted.HF_MODEL_REVISION
     assert captured["token"] is True
+    assert captured["tqdm_class"] is None
     assert "cache_dir" not in captured
 
 

@@ -173,21 +173,23 @@ def _hub_runtime():
 
 
 def _progress_tqdm_class(callback: Callable[[dict[str, Any]], None] | None, model_name: str):
+    if callback is None:
+        return None
+
     from tqdm.auto import tqdm
 
     class ReportingTqdm(tqdm):
         def update(self, n: int = 1):
             result = super().update(n)
-            if callback is not None:
-                total = self.total
-                callback(
-                    {
-                        "message": f"Downloading {model_name}",
-                        "completed": self.n,
-                        "total": total,
-                        "progress": self.n / total if total else None,
-                    }
-                )
+            total = self.total
+            callback(
+                {
+                    "message": f"Downloading {model_name}",
+                    "completed": self.n,
+                    "total": total,
+                    "progress": self.n / total if total else None,
+                }
+            )
             return result
 
     return ReportingTqdm
