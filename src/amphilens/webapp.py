@@ -30,6 +30,7 @@ from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.staticfiles import StaticFiles
 
 from .core import AmphiLensError, ProjectConfig, ProjectManifest, ProjectStore
+from .cvat_config import configured_cvat_server_url
 from .doctor import run_doctor
 from .locations import (
     ProjectLocationError,
@@ -560,7 +561,7 @@ class TrainingRequest:
     output_dir: str | None = None
     epochs: int | None = None
     batch_size: int | None = None
-    device: Literal["auto", "cpu", "cuda"] | None = None
+    device: Literal["auto", "cpu", "cuda", "mps"] | None = None
     training_source: str | None = None
     hosted_model_id: str | None = None
 
@@ -780,8 +781,8 @@ def _request(cls, payload: dict[str, Any]):
         epochs = _integer(payload, "epochs", minimum=1)
         batch_size = _integer(payload, "batch_size", minimum=1)
         device = _optional_string(payload, "device")
-        if device is not None and device not in {"auto", "cpu", "cuda"}:
-            raise ValueError("device must be auto, cpu, or cuda")
+        if device is not None and device not in {"auto", "cpu", "cuda", "mps"}:
+            raise ValueError("device must be auto, cpu, cuda, or mps")
         return cls(
             snapshot_path=_string(payload, "snapshot_path"),
             checkpoint=_optional_string(payload, "checkpoint"),
@@ -2019,6 +2020,7 @@ def create_app(
                 "models": _model_summaries(),
                 "hosted_models": _hosted_model_summaries(),
                 "default_model_id": ModelCatalog().default.model_id,
+                "cvat_server_url": configured_cvat_server_url(),
                 "modal_gpus": [
                     {"name": name, "usd_per_hour": round(rate * 3600, 3)}
                     for name, rate in GPU_RATES_PER_SECOND.items()

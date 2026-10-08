@@ -58,6 +58,7 @@ def test_static_frontend_and_assets_are_served(client):
     assert 'data-path-picker="directory" data-path-target="project-path-input"' in page.text
     assert 'src="/static/prediction_state.js"' in page.text
     assert 'src="/static/activity_view.js"' in page.text
+    assert '<span class="nav-label">Choose images to review</span>' in page.text
     assert client.get("/static/prediction_state.js").status_code == 200
     assert client.get("/static/activity_view.js").status_code == 200
     assert client.get("/static/app.js").status_code == 200
@@ -65,11 +66,38 @@ def test_static_frontend_and_assets_are_served(client):
     script = client.get("/static/app.js").text
     assert 'name="training_source"' in script
     assert 'name="hosted_model_id"' in script
+    assert 'app.cvatServerUrl = data.cvat_server_url || app.cvatServerUrl || "";' in script
+    assert 'value="${escapeHtml(app.cvatServerUrl)}"' in script
     assert "__ignore__" in script
-    assert "downloaded directly by Modal" in script
+    assert 'app.doctor?.mps_available ? `<option value="mps">Apple MPS GPU</option>` : ""' in script
+    assert "model card revision recorded by AmphiLens" not in script
+    assert "CVAT credentials are not stored in your project." not in script
+    assert "Credentials must be configured locally before connecting." not in script
+    assert "Credentials are sent only to the local AmphiLens service" not in script
     assert "private Hugging Face repository" not in script
-    assert client.get("/static/app.css").status_code == 200
+    stylesheet = client.get("/static/app.css")
+    assert stylesheet.status_code == 200
+    assert (
+        ".nav-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }"
+        in stylesheet.text
+    )
     assert client.get("/static/favicon.svg").status_code == 200
+
+
+def test_bootstrap_includes_cvat_url_from_dotenv_but_never_token(client, tmp_path, monkeypatch):
+    monkeypatch.delenv("CVAT_URL", raising=False)
+    monkeypatch.delenv("CVAT_TOKEN", raising=False)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text(
+        "CVAT_URL=https://cvat.example.org\nCVAT_TOKEN=fixture-token-must-not-leak\n",
+        encoding="utf-8",
+    )
+
+    response = client.get("/api/bootstrap")
+
+    assert response.status_code == 200
+    assert response.json()["cvat_server_url"] == "https://cvat.example.org"
+    assert "fixture-token-must-not-leak" not in response.text
 
 
 def test_local_path_picker_returns_the_selected_path(client, monkeypatch, tmp_path):
@@ -164,6 +192,7 @@ def test_api_parses_hosted_inference_and_training_source_fields():
         webapp.TrainingRequest,
         {
             "snapshot_path": "/project/dataset",
+            "device": "mps",
             "training_source": "amphilens-pretrained",
             "hosted_model_id": "amphilens-yolo26-m",
         },
@@ -173,6 +202,7 @@ def test_api_parses_hosted_inference_and_training_source_fields():
     assert prediction.class_mapping == {"Other_Amphibian": None}
     assert training.training_source == "amphilens-pretrained"
     assert training.hosted_model_id == "amphilens-yolo26-m"
+    assert training.device == "mps"
     assert webapp.select_training_source(None, None, None) == "general-pretrained"
 
 

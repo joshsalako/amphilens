@@ -63,6 +63,7 @@
   }
 
   function setPage(view) {
+    saveWorkflowViewState(app.view);
     app.view = view;
     document.querySelectorAll("[data-view]").forEach((button) => {
       const active = button.dataset.view === view;
@@ -198,6 +199,7 @@
       app.defaultModelId = data.default_model_id || "";
       app.models = app.project?.models || data.models || [];
       app.hostedModels = data.hosted_models || app.project?.hosted_models || [];
+      app.cvatServerUrl = data.cvat_server_url || app.cvatServerUrl || "";
       app.modalGpus = data.modal_gpus || [];
       app.bootstrapped = true;
       updateProjectHeader();
@@ -294,7 +296,7 @@
     const dimensions = model.preprocessing?.compatibility_mode === "shortest-side"
       ? "640 px short side, rounded up to a multiple of 32"
       : "640 px maximum side, rounded up to a multiple of 32";
-    return `<p class="hosted-model-facts"><strong>${escapeHtml(model.architecture)}</strong><span>${escapeHtml(model.size)}</span><span>Inference size ${formatNumber(model.inference_image_size)} px</span><span>${escapeHtml(dimensions)}</span></p><div class="notice hosted-access-note"><span class="notice-mark" aria-hidden="true">i</span><p>This public Hugging Face model can be downloaded directly by Modal for cloud prediction. Modal uses the model card revision recorded by AmphiLens and verifies the checkpoint SHA-256. Local prediction downloads it to this computer.</p></div>`;
+    return `<p class="hosted-model-facts"><strong>${escapeHtml(model.architecture)}</strong><span>${escapeHtml(model.size)}</span><span>Inference size ${formatNumber(model.inference_image_size)} px</span><span>${escapeHtml(dimensions)}</span></p>`;
   }
 
   function renderPredictionModelSelection() {
@@ -315,23 +317,25 @@
     const rows = (model.source_class_order || []).map((source, index) => {
       const exact = projectClasses.includes(source);
       const targetOptions = projectClasses.map((name) => `<option value="${escapeHtml(name)}"${name === source ? " selected" : ""}>${escapeHtml(name)}</option>`).join("");
-      return `<div class="cvat-label-row"><label for="hosted-class-map-${index}">${escapeHtml(source)}${exact ? `<span class="class-match">Exact match</span>` : ""}</label><select id="hosted-class-map-${index}" name="hosted_mapping_${index}" data-class-map-source="${escapeHtml(source)}" required><option value="">Choose a project class or Ignore</option>${targetOptions}<option value="__ignore__">Ignore detections</option></select></div>`;
+      return `<div class="cvat-label-row"><label for="hosted-class-map-${index}">${escapeHtml(source)}${exact ? `<span class="class-match">Exact match</span>` : ""}</label><select id="hosted-class-map-${index}" name="hosted_mapping_${index}" data-preference-key="hosted_mapping:${escapeHtml(source)}" data-class-map-source="${escapeHtml(source)}" required><option value="">Choose a project class or Ignore</option>${targetOptions}<option value="__ignore__">Ignore detections</option></select></div>`;
     }).join("");
     mapping.innerHTML = `<div><span class="field-title">Map model labels to project classes</span><p class="field-help">Exact label matches are preselected. Map every other label or choose Ignore.</p></div><div class="cvat-label-list">${rows}</div>`;
   }
 
-  function predictionPreferenceScope() {
+  function workflowPreferenceScope() {
     return app.project?.path || app.project?.name || "";
   }
 
-  function savePredictionPreferences(form) {
-    if (!form || !predictionPreferenceScope()) return;
-    window.AmphiLensPredictionPreferences?.save(predictionPreferenceScope(), form);
+  function saveWorkflowViewState(view = app.view) {
+    const scope = workflowPreferenceScope();
+    if (!scope || !view) return;
+    window.AmphiLensWorkflowState?.save(scope, view, root);
   }
 
-  function restorePredictionPreferences(form) {
-    if (!form || !predictionPreferenceScope()) return;
-    window.AmphiLensPredictionPreferences?.restore(predictionPreferenceScope(), form);
+  function restoreWorkflowViewState(view = app.view, keyPrefix = "") {
+    const scope = workflowPreferenceScope();
+    if (!scope || !view) return;
+    window.AmphiLensWorkflowState?.restore(scope, view, root, keyPrefix);
   }
 
   function syncPredictionExecutionControls(form) {
@@ -364,9 +368,9 @@
         </form><div id="job-slot" aria-live="polite"></div>
       </section><aside class="surface side-note"><h3>What you will get</h3><p>Predictions include image names, detected classes, confidence scores and bounding boxes. AmphiLens can also save a run summary and visual evidence when available.</p><div class="note-rule"></div><h3>Choosing a model</h3><p>Use general pretrained weights to begin, an AmphiLens fine-tuned model for its trained classes, or a project checkpoint you have already trained.</p></aside></div>`;
     const form = root.querySelector('form[data-form="predict"]');
-    restorePredictionPreferences(form);
+    restoreWorkflowViewState("predict");
     renderPredictionModelSelection();
-    restorePredictionPreferences(form);
+    restoreWorkflowViewState("predict");
     const confidenceOutput = form?.querySelector('output[for="confidence"]');
     if (confidenceOutput && form.elements.confidence) {
       confidenceOutput.value = Number(form.elements.confidence.value).toFixed(2);
@@ -386,8 +390,15 @@
             <div class="form-actions"><button class="button primary" type="submit">Import archive</button></div>
           </form><div id="job-slot" aria-live="polite"></div>
         </section>
-        <aside class="surface panel"><div class="panel-heading"><div><h2>Already using CVAT?</h2><p>Import a complete project, including its tasks and images.</p></div></div><p class="empty-inline">Connect to your CVAT server to select the initial annotated project and review its labels before importing.</p><div class="field" style="margin-top:13px"><label for="initial-cvat-server">Server URL <span class="optional">optional</span></label><input id="initial-cvat-server" name="server_url" inputmode="url" value="${escapeHtml(app.cvatServerUrl)}" placeholder="https://cvat.example.org"></div><button class="button panel-action" type="button" data-connect-cvat>Connect to CVAT</button><div id="cvat-projects-slot" aria-live="polite">${renderCvatProjects()}</div><div class="note-rule"></div><p class="field-help">CVAT credentials are not stored in your project.</p></aside>
+        <aside class="surface panel"><div class="panel-heading"><div><h2>Already using CVAT?</h2><p>Import a complete project, including its tasks and images.</p></div></div><p class="empty-inline">Connect to your CVAT server to select the initial annotated project and review its labels before importing.</p><div class="field" style="margin-top:13px"><label for="initial-cvat-server">Server URL <span class="optional">optional</span></label><input id="initial-cvat-server" name="server_url" inputmode="url" value="${escapeHtml(app.cvatServerUrl)}" placeholder="https://cvat.example.org"></div><button class="button panel-action" type="button" data-connect-cvat>Connect to CVAT</button><div id="cvat-projects-slot" aria-live="polite">${renderCvatProjects()}</div></aside>
       </div>`;
+    restoreWorkflowViewState("import");
+    app.cvatServerUrl = root.querySelector("#initial-cvat-server")?.value || "";
+    const initialCvatForm = root.querySelector("#initial-cvat-form");
+    if (initialCvatForm) {
+      syncInitialCvatProject(initialCvatForm);
+      restoreWorkflowViewState("import");
+    }
   }
 
   function renderCvatProjects() {
@@ -409,7 +420,7 @@
     const taskCount = Number(project.task_count ?? tasks.length);
     const labelMap = labels.map((label, index) => {
       if (classes.includes(label)) return `<div class="cvat-label-row"><span>${escapeHtml(label)}</span><span class="class-match">Matches project class</span></div>`;
-      return `<div class="cvat-label-row"><label for="initial-cvat-map-${index}">${escapeHtml(label)}</label><select id="initial-cvat-map-${index}" name="mapping_${index}" data-cvat-map-source="${escapeHtml(label)}" required><option value="">Choose matching project class</option>${classes.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("")}</select></div>`;
+      return `<div class="cvat-label-row"><label for="initial-cvat-map-${index}">${escapeHtml(label)}</label><select id="initial-cvat-map-${index}" name="mapping_${index}" data-preference-key="cvat_mapping:${escapeHtml(label)}" data-cvat-map-source="${escapeHtml(label)}" required><option value="">Choose matching project class</option>${classes.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("")}</select></div>`;
     }).join("");
     const issue = cvatProjectIssue(project);
     return `<div class="cvat-project-summary"><div class="small-stat"><span>CVAT tasks</span><strong>${formatNumber(taskCount)}</strong></div><div class="field"><span class="field-title">Project labels</span>${labels.length ? `<div class="cvat-label-list">${labelMap}</div>` : `<div class="notice warning"><span class="notice-mark" aria-hidden="true">!</span><p>No labels were returned for this CVAT project.</p></div>`}</div>${issue ? `<div class="notice error"><span class="notice-mark" aria-hidden="true">!</span><p>${escapeHtml(issue)} Select a different project or review its contents in CVAT.</p></div>` : ""}${tasks.length ? `<details class="advanced-settings"><summary>Review task list (${tasks.length})</summary><ul class="task-list">${tasks.map((task) => `<li><span>${escapeHtml(task.name || `Task ${task.task_id ?? ""}`)}</span><span>${formatNumber(task.size)} images · ${escapeHtml(task.status || "")}</span></li>`).join("")}</ul></details>` : ""}</div>`;
@@ -423,6 +434,16 @@
     if (!labels.length) return "This project has no labels to map to your project classes.";
     if (tasks.length && tasks.every((task) => Number(task.size) === 0)) return "These tasks do not contain image files.";
     return "";
+  }
+
+  function syncInitialCvatProject(form) {
+    const selectedId = form?.elements.project_id?.value;
+    const selected = app.cvatProjects?.find((project) => String(project.project_id ?? project.id ?? project.pk) === String(selectedId));
+    const project = selected || app.cvatProjects?.[0];
+    const summary = form?.querySelector("#initial-cvat-summary");
+    if (summary) summary.innerHTML = renderCvatProjectSummary(project);
+    const submit = form?.querySelector('button[type="submit"]');
+    if (submit) submit.disabled = Boolean(cvatProjectIssue(project));
   }
 
   function trainingImageSize(form) {
@@ -461,7 +482,7 @@
         <div class="hosted-model-panel" data-training-hosted-details hidden></div>
         <div class="field" data-training-checkpoint hidden><label for="training-checkpoint">Project checkpoint</label><select id="training-checkpoint" name="checkpoint"><option value="">Choose a saved checkpoint</option>${checkpoints.map((item) => `<option value="${escapeHtml(item.path)}">${escapeHtml(item.name || item.model_id || basename(item.path))}</option>`).join("")}</select></div>
         <div class="field"><label for="training-execution">Where should it run?</label><select id="training-execution" name="execution"><option value="local">On this computer</option><option value="cloud">Modal cloud GPU</option></select></div>
-        <details class="advanced-settings"><summary>Training settings</summary><div class="advanced-body"><div class="field-row"><div class="field"><label for="training-epochs">Epochs</label><input id="training-epochs" name="epochs" type="number" min="1" max="1000" value="50"></div><div class="field"><label for="training-batch">Batch size</label><input id="training-batch" name="batch_size" type="number" min="1" max="256" value="8"></div></div><div class="field"><label for="training-output">Save run in <span class="optional">optional</span></label>${pathPickerControl("training-output", "output_dir", "directory", "Use the project runs folder", { label: "a run folder" })}</div><div class="field"><label for="training-device">Local device</label><select id="training-device" name="device"><option value="auto">Choose automatically</option><option value="cpu">CPU</option><option value="cuda">CUDA GPU</option></select></div></div></details>
+        <details class="advanced-settings"><summary>Training settings</summary><div class="advanced-body"><div class="field-row"><div class="field"><label for="training-epochs">Epochs</label><input id="training-epochs" name="epochs" type="number" min="1" max="1000" value="50"></div><div class="field"><label for="training-batch">Batch size</label><input id="training-batch" name="batch_size" type="number" min="1" max="256" value="8"></div></div><div class="field"><label for="training-output">Save run in <span class="optional">optional</span></label>${pathPickerControl("training-output", "output_dir", "directory", "Use the project runs folder", { label: "a run folder" })}</div><div class="field"><label for="training-device">Local device</label><select id="training-device" name="device"><option value="auto">Choose automatically</option><option value="cpu">CPU</option><option value="cuda">CUDA GPU</option>${app.doctor?.mps_available ? `<option value="mps">Apple MPS GPU</option>` : ""}</select></div></div></details>
         <div class="cloud-settings hidden" data-cloud-settings>
           <div class="notice warning"><span class="notice-mark" aria-hidden="true">!</span><p>Cloud training uploads a prepared copy of the selected dataset and checkpoint. Review the estimate and approve both the upload and cost before submitting.</p></div>
           <div class="field-row" style="margin-top:15px"><div class="field"><label for="training-gpu">GPU</label><select id="training-gpu" name="gpu"><option value="T4">T4</option><option value="A10G">A10G</option><option value="A100">A100</option></select></div><div class="field"><label for="training-max-cost">Maximum budget · USD</label><input id="training-max-cost" name="max_cost_usd" type="number" min="0.01" step="0.01" placeholder="Enter your limit"></div></div>
@@ -474,8 +495,20 @@
     </section><aside class="surface side-note"><h3>Before you start</h3><p>Training is available only from a validated labeled snapshot. Empty annotations can be valid for reviewed images with no target wildlife.</p><div class="note-rule"></div><p>Evaluation is reported as not evaluated when no holdout dataset is supplied.</p></aside></div>
       <section class="surface panel cloud-jobs-panel"><div class="panel-heading"><div><h2>Cloud jobs</h2><p>Active Modal training progress refreshes automatically while AmphiLens is open.</p></div><button class="button small" type="button" data-refresh-cloud-jobs>Refresh jobs</button></div><div id="cloud-jobs-slot" aria-live="polite"><p class="empty-inline">Loading saved cloud jobs…</p></div></section>` : `<section class="surface empty-state" style="margin-top:0"><div class="empty-illustration" aria-hidden="true">↗</div><h2>No labeled dataset yet</h2><p>Import a reviewed archive or CVAT project first. You can still use Find wildlife with a pretrained model while you gather annotations.</p><div class="project-actions"><button class="button primary" type="button" data-view="import">Import labeled images</button><button class="button" type="button" data-view="predict">Find wildlife</button></div></section>`;
     root.innerHTML = `${pageHead("Label & improve", "Train a model", "Fine-tune a model using a validated labeled dataset snapshot. Prediction-only projects do not need to train.")}${workflow}`;
-    syncTrainingSourceControls(root.querySelector('form[data-form="training"]'));
+    const form = root.querySelector('form[data-form="training"]');
+    restoreWorkflowViewState("training");
+    syncTrainingSourceControls(form);
+    syncTrainingExecutionControls(form);
     if (datasets.length) loadCloudJobs();
+  }
+
+  function syncTrainingExecutionControls(form) {
+    if (!form) return;
+    const cloud = form.elements.execution?.value === "cloud";
+    form.querySelector("[data-cloud-settings]")?.classList.toggle("hidden", !cloud);
+    form.querySelector('.form-actions button[type="submit"]')?.replaceChildren(
+      document.createTextNode(cloud ? "Submit cloud training" : "Train model"),
+    );
   }
 
   function cloudEstimateSignature(form) {
@@ -663,6 +696,7 @@
           <div class="form-actions"><button class="button primary" type="submit">Select annotation queue</button></div>
         </form><div id="job-slot" aria-live="polite"></div>
       </section><aside class="surface side-note"><h3>What happens next</h3><p>Queue selection does not change your model. When the queue is ready, send it to a managed CVAT cycle, have every image reviewed, then continue the cycle to validate and merge the new snapshot.</p><a class="note-link" href="#cvat" data-view="cvat">Go to CVAT cycle</a></aside></div>`;
+    restoreWorkflowViewState("review");
   }
 
   function renderCvat() {
@@ -673,11 +707,29 @@
           <div class="field"><label for="cvat-action">What would you like to do?</label><select id="cvat-action" name="action"><option value="start">Send a queue to CVAT</option><option value="refresh">Refresh annotation status</option><option value="continue">Continue a completed cycle</option></select></div>
           <div class="field"><label for="cvat-cycle">Cycle name</label><input id="cvat-cycle" name="cycle" placeholder="cycle-01" required><span class="field-help">Use the same name to refresh status or continue this cycle.</span></div>
           <div class="field" data-cvat-queue><label for="cvat-queue">Selection queue CSV</label>${pathPickerControl("cvat-queue", "queue", "file", "/path/to/selection_queue.csv", { required: true, label: "a selection queue CSV" })}<span class="field-help">Required when sending a new queue.</span></div>
-          <details class="advanced-settings"><summary>CVAT server</summary><div class="advanced-body"><div class="field"><label for="cvat-server">Server URL <span class="optional">optional</span></label><input id="cvat-server" name="server_url" inputmode="url" placeholder="https://cvat.example.org"><span class="field-help">Credentials must be configured locally before connecting.</span></div></div></details>
+          <details class="advanced-settings"><summary>CVAT server</summary><div class="advanced-body"><div class="field"><label for="cvat-server">Server URL <span class="optional">optional</span></label><input id="cvat-server" name="server_url" inputmode="url" value="${escapeHtml(app.cvatServerUrl)}" placeholder="https://cvat.example.org"></div></div></details>
           <div class="notice"><span class="notice-mark" aria-hidden="true">i</span><p>Every image in a CVAT task must be reviewed before continuing. Empty annotations are valid for a reviewed image with no target wildlife.</p></div>
           <div class="form-actions"><button class="button primary" type="submit">Start cycle</button><a class="button" href="#review" data-view="review">Choose images first</a></div>
         </form><div id="job-slot" aria-live="polite"></div>
       </section><aside class="surface side-note"><h3>Cycle steps</h3><p>Send the queue, annotate and save every image in CVAT, refresh job status, then continue the cycle to validate the export and create a new immutable snapshot.</p><div class="note-rule"></div><p>A cycle cannot continue until all CVAT jobs are complete.</p></aside></div>`;
+    const form = root.querySelector('form[data-form="cvat"]');
+    restoreWorkflowViewState("cvat");
+    app.cvatServerUrl = form?.elements.server_url?.value || "";
+    syncCvatActionControls(form);
+  }
+
+  function syncCvatActionControls(form) {
+    if (!form) return;
+    const action = form.elements.action?.value || "start";
+    const queue = form.querySelector("[data-cvat-queue]");
+    const start = action === "start";
+    if (queue) {
+      queue.hidden = !start;
+      const input = queue.querySelector("input");
+      if (input) input.required = start;
+    }
+    const submit = form.querySelector('button[type="submit"]');
+    if (submit) submit.textContent = start ? "Start cycle" : action === "refresh" ? "Refresh status" : "Continue cycle";
   }
 
   function doctorChecks(doctor) {
@@ -723,7 +775,7 @@
     const checks = doctorChecks(app.doctor);
     root.innerHTML = `${pageHead("System health", "Check your setup", "Review local tools and optional services used by AmphiLens. Prediction-only work does not require CVAT or cloud credentials.", `<button class="button" type="button" data-health-refresh>Refresh check</button>`)}
       <div class="content-grid"><section class="surface panel"><div class="panel-heading"><div><h2>Local environment</h2><p>Tools AmphiLens can use on this computer.</p></div></div>${checks.length ? `<div class="health-list">${checks.map((check) => { const status = check.status || "info"; const name = check.name || "System check"; const message = check.message || ""; return `<div class="health-row"><span class="health-indicator ${statusTone(status)}" aria-hidden="true"></span><div class="health-copy"><strong>${escapeHtml(String(name).replace(/[_-]+/g, " "))}</strong><span>${escapeHtml(message)}</span></div><span class="health-status">${escapeHtml(status)}</span></div>`; }).join("")}</div>` : `<div class="notice warning"><span class="notice-mark" aria-hidden="true">!</span><p>Health details are not available yet. Refresh the check to ask the local service for the latest status.</p></div>`}</section>
-      <aside class="surface panel"><div class="panel-heading"><div><h2>Optional connections</h2><p>Only needed for the workflows you choose.</p></div></div><div class="health-list"><div class="health-row"><span class="health-indicator" aria-hidden="true"></span><div class="health-copy"><strong>CVAT</strong><span>Needed to send annotation queues or import a CVAT project. Local archive import remains available.</span></div><span class="health-status">Optional</span></div><div class="health-row"><span class="health-indicator" aria-hidden="true"></span><div class="health-copy"><strong>Cloud GPU</strong><span>Needed for Modal training or prediction. Each cloud prediction asks before transferring images and requires a spending limit.</span></div><span class="health-status">Optional</span></div></div><details class="advanced-settings credential-settings"><summary>Configure Modal credentials</summary><form class="form-stack" data-form="cloud-credentials" style="margin-top:13px"><div class="field"><label for="modal-token-id">Token ID</label><input id="modal-token-id" name="token_id" type="password" autocomplete="new-password" required></div><div class="field"><label for="modal-token-secret">Token secret</label><input id="modal-token-secret" name="token_secret" type="password" autocomplete="new-password" required></div><span class="field-help">Credentials are sent only to the local AmphiLens service and are never shown back here.</span><button class="button" type="submit">Save credentials</button></form></details><button class="button panel-action" type="button" data-check-cloud>Check cloud connection</button><div id="cloud-status" aria-live="polite"></div></aside></div>`;
+      <aside class="surface panel"><div class="panel-heading"><div><h2>Optional connections</h2><p>Only needed for the workflows you choose.</p></div></div><div class="health-list"><div class="health-row"><span class="health-indicator" aria-hidden="true"></span><div class="health-copy"><strong>CVAT</strong><span>Needed to send annotation queues or import a CVAT project. Local archive import remains available.</span></div><span class="health-status">Optional</span></div><div class="health-row"><span class="health-indicator" aria-hidden="true"></span><div class="health-copy"><strong>Cloud GPU</strong><span>Needed for Modal training or prediction. Each cloud prediction asks before transferring images and requires a spending limit.</span></div><span class="health-status">Optional</span></div></div><details class="advanced-settings credential-settings"><summary>Configure Modal credentials</summary><form class="form-stack" data-form="cloud-credentials" style="margin-top:13px"><div class="field"><label for="modal-token-id">Token ID</label><input id="modal-token-id" name="token_id" type="password" autocomplete="new-password" required></div><div class="field"><label for="modal-token-secret">Token secret</label><input id="modal-token-secret" name="token_secret" type="password" autocomplete="new-password" required></div><button class="button" type="submit">Save credentials</button></form></details><button class="button panel-action" type="button" data-check-cloud>Check cloud connection</button><div id="cloud-status" aria-live="polite"></div></aside></div>`;
   }
 
   function render() {
@@ -1160,6 +1212,12 @@
         const result = await api("/api/cvat/projects", { method: "POST", body: JSON.stringify(app.cvatServerUrl ? { server_url: app.cvatServerUrl } : {}) });
         app.cvatProjects = Array.isArray(result.projects) ? result.projects : [];
         if (slot) slot.innerHTML = renderCvatProjects();
+        const initialForm = root.querySelector("#initial-cvat-form");
+        if (initialForm) {
+          restoreWorkflowViewState("import");
+          syncInitialCvatProject(initialForm);
+          restoreWorkflowViewState("import");
+        }
         if (!app.cvatProjects.length) toast("No CVAT projects were found.");
       } catch (error) {
         app.cvatProjects = null;
@@ -1204,29 +1262,29 @@
   });
 
   document.addEventListener("input", (event) => {
+    if (event.target.id === "initial-cvat-server" || event.target.id === "cvat-server") {
+      app.cvatServerUrl = event.target.value.trim();
+    }
     if (event.target.id === "confidence") {
       const output = document.querySelector('output[for="confidence"]');
       if (output) output.value = Number(event.target.value).toFixed(2);
     }
-    savePredictionPreferences(event.target.closest('form[data-form="predict"]'));
+    saveWorkflowViewState(app.view);
   });
+  document.addEventListener("toggle", (event) => {
+    if (event.target.matches?.("details")) saveWorkflowViewState(app.view);
+  }, true);
   document.addEventListener("change", (event) => {
     if (event.target.id === "cvat-action") {
-      const queue = document.querySelector("[data-cvat-queue]");
-      const start = event.target.value === "start";
-      if (queue) {
-        queue.hidden = !start;
-        const input = queue.querySelector("input");
-        if (input) input.required = start;
-      }
-      const submit = event.target.form?.querySelector('button[type="submit"]');
-      if (submit) submit.textContent = start ? "Start cycle" : event.target.value === "refresh" ? "Refresh status" : "Continue cycle";
+      syncCvatActionControls(event.target.form);
     }
     if (event.target.id === "training-execution") {
-      document.querySelector("[data-cloud-settings]")?.classList.toggle("hidden", event.target.value !== "cloud");
-      document.querySelector('[data-form="training"] .form-actions button[type="submit"]')?.replaceChildren(document.createTextNode(event.target.value === "cloud" ? "Submit cloud training" : "Train model"));
+      syncTrainingExecutionControls(event.target.form);
     }
-    if (event.target.id === "prediction-model") renderPredictionModelSelection();
+    if (event.target.id === "prediction-model") {
+      renderPredictionModelSelection();
+      restoreWorkflowViewState("predict", "hosted_mapping:");
+    }
     if (event.target.id === "prediction-execution") {
       syncPredictionExecutionControls(event.target.form);
     }
@@ -1243,11 +1301,8 @@
       }
     }
     if (event.target.id === "initial-cvat-project") {
-      const selected = app.cvatProjects?.find((project) => String(project.project_id ?? project.id ?? project.pk) === event.target.value);
-      const summary = document.getElementById("initial-cvat-summary");
-      if (summary) summary.innerHTML = renderCvatProjectSummary(selected);
-      const importButton = document.querySelector("#initial-cvat-form button[type=submit]");
-      if (importButton) importButton.disabled = Boolean(cvatProjectIssue(selected));
+      syncInitialCvatProject(event.target.form);
+      restoreWorkflowViewState("import", "cvat_mapping:");
     }
     const trainingForm = event.target.closest('form[data-form="training"]');
     if (trainingForm && ["snapshot_path", "gpu", "epochs", "max_cost_usd", "checkpoint", "training_source", "hosted_model_id"].includes(event.target.name)) {
@@ -1260,7 +1315,7 @@
         if (slot) slot.innerHTML = renderCloudEstimate();
       }
     }
-    savePredictionPreferences(event.target.closest('form[data-form="predict"]'));
+    saveWorkflowViewState(app.view);
   });
 
   document.addEventListener("keydown", (event) => {

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import importlib.metadata
-import os
 import shutil
 import tempfile
 from dataclasses import asdict, dataclass, field
@@ -13,6 +12,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from ..core import ProjectStore, ValidationError, atomic_write_json, read_json
+from ..cvat_config import _configured_cvat_settings
 from ..dataset import DatasetImporter, DatasetMerger, DatasetSnapshot
 
 
@@ -93,8 +93,9 @@ class CVATSdkTransport:
         *,
         export_format: str = "CVAT for images 1.1",
     ):
-        self.server_url = (server_url or os.environ.get("CVAT_URL", "")).rstrip("/")
-        self.token = token or os.environ.get("CVAT_TOKEN")
+        configured_server_url, configured_token = _configured_cvat_settings()
+        self.server_url = (server_url or "").strip().rstrip("/") or configured_server_url
+        self.token = (token or "").strip() or configured_token or None
         self.export_format = export_format
         self.client_version = self._version()
         if not self.server_url:

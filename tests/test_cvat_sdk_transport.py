@@ -129,3 +129,33 @@ def test_sdk_transport_rejects_project_label_drift(tmp_path: Path):
 
     with pytest.raises(ValidationError, match="label schema"):
         transport.ensure_project("study", ["toad", "frog"])
+
+
+def test_sdk_transport_loads_credentials_from_dotenv(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("CVAT_URL", raising=False)
+    monkeypatch.delenv("CVAT_TOKEN", raising=False)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text(
+        "CVAT_URL=https://dotenv-cvat.example.org/\nCVAT_TOKEN=dotenv-fixture-token\n",
+        encoding="utf-8",
+    )
+
+    transport = CVATSdkTransport()
+
+    assert transport.server_url == "https://dotenv-cvat.example.org"
+    assert transport.token == "dotenv-fixture-token"
+
+
+def test_sdk_transport_environment_overrides_dotenv(tmp_path: Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text(
+        "CVAT_URL=https://dotenv-cvat.example.org\nCVAT_TOKEN=dotenv-fixture-token\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CVAT_URL", "https://process-cvat.example.org/")
+    monkeypatch.setenv("CVAT_TOKEN", "process-fixture-token")
+
+    transport = CVATSdkTransport()
+
+    assert transport.server_url == "https://process-cvat.example.org"
+    assert transport.token == "process-fixture-token"

@@ -216,6 +216,7 @@ cloud = [
 cvat = [
     { name = "cvat-cli" },
     { name = "cvat-sdk" },
+    { name = "python-dotenv" },
 ]
 dev = [
     { name = "httpx2" },
@@ -268,6 +269,7 @@ training = [
     { name = "ultralytics", version = "8.4.163", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or sys_platform != 'darwin'" },
 ]
 web = [
+    { name = "python-dotenv" },
     { name = "starlette" },
     { name = "uvicorn" },
 ]
@@ -290,7 +292,9 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
     { name = "python-dotenv", marker = "extra == 'cloud'", specifier = ">=1.0" },
+    { name = "python-dotenv", marker = "extra == 'cvat'", specifier = ">=1.0" },
     { name = "python-dotenv", marker = "extra == 'dev'", specifier = ">=1.0" },
+    { name = "python-dotenv", marker = "extra == 'web'", specifier = ">=1.0" },
     { name = "pyyaml", marker = "extra == 'training'", specifier = ">=6.0" },
     { name = "rich", marker = "extra == 'cli'", specifier = ">=13.7" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
