@@ -169,7 +169,7 @@ class PredictionEngine:
                 architecture=hosted.architecture,
                 classes=list(hosted.source_classes),
                 model_id=hosted.model_id,
-                preprocessing=hosted.preprocessing.to_dict(),
+                preprocessing=spec.get("preprocessing", hosted.preprocessing.to_dict()),
             )
             mapping = resolve_class_mapping(
                 hosted.source_classes,

@@ -425,20 +425,14 @@ class JobManager:
                 if isinstance(metrics, dict):
                     safe_progress["metrics"] = {
                         str(key)[:80]: (
-                            redact_sensitive_text(value)[:240]
-                            if isinstance(value, str)
-                            else value
+                            redact_sensitive_text(value)[:240] if isinstance(value, str) else value
                         )
                         for key, value in list(metrics.items())[:24]
                         if isinstance(value, (str, int, bool))
                         or (isinstance(value, float) and math.isfinite(value))
                     }
                 job.progress = safe_progress
-                event = {
-                    key: value
-                    for key, value in safe_progress.items()
-                    if key != "log_tail"
-                }
+                event = {key: value for key, value in safe_progress.items() if key != "log_tail"}
                 event["updated_at"] = time.time()
                 job.progress_events.append(event)
                 del job.progress_events[: -self.MAX_PROGRESS_EVENTS]
@@ -511,7 +505,6 @@ class ProjectCreateRequest:
     classes: list[str]
     model_preset: str = "yolo26-l"
     image_dimension: int = 640
-    compatibility_mode: Literal["max-dimension", "shortest-side"] = "max-dimension"
     grayscale: bool = True
     clahe: bool = False
 
@@ -707,8 +700,9 @@ def _request(cls, payload: dict[str, Any]):
         classes = payload.get("classes")
         if not isinstance(classes, list) or any(not isinstance(value, str) for value in classes):
             raise ValueError("classes must be a list of names")
-        uses_short_side = "short_side_dimension" in payload
-        dimension_key = "short_side_dimension" if uses_short_side else "max_dimension"
+        dimension_key = (
+            "short_side_dimension" if "short_side_dimension" in payload else "max_dimension"
+        )
         request = cls(
             name=_string(payload, "name"),
             path=_string(payload, "path"),
@@ -716,7 +710,6 @@ def _request(cls, payload: dict[str, Any]):
             classes=classes,
             model_preset=_string(payload, "model_preset", required=False, default="yolo26-l"),
             image_dimension=_integer(payload, dimension_key, 640, minimum=32),
-            compatibility_mode="shortest-side" if uses_short_side else "max-dimension",
             grayscale=_boolean(payload, "grayscale", True),
             clahe=_boolean(payload, "clahe", False),
         )
@@ -904,7 +897,7 @@ def select_training_source(
 
 
 def _cloud_estimate_image_size(request: CloudEstimateRequest) -> int:
-    """Use the catalog's inference size for hosted models, never a UI-supplied guess."""
+    """Use the requested project short-side dimension for every model source."""
     source = request.training_source or (
         "amphilens-pretrained" if request.hosted_model_id else "general-pretrained"
     )
@@ -915,7 +908,8 @@ def _cloud_estimate_image_size(request: CloudEstimateRequest) -> int:
             raise ValueError("Choose an AmphiLens pretrained model before requesting an estimate")
         from .models.hosted_models import get_hosted_model
 
-        return get_hosted_model(request.hosted_model_id).inference_image_size
+        get_hosted_model(request.hosted_model_id)
+        return request.image_size
     if request.hosted_model_id:
         raise ValueError("Choose either General pretrained weights or an AmphiLens model")
     return request.image_size
@@ -958,6 +952,7 @@ def _project_summary(store: ProjectStore) -> dict[str, Any]:
         "name": manifest.name,
         "classes": list(manifest.classes),
         "model_preset": manifest.project_config.model_preset,
+        "preprocessing": manifest.project_config.preprocessing.to_dict(),
         "image_roots": list(manifest.image_roots),
         "counts": {"images": image_count, "datasets": len(datasets), "runs": run_count},
         "datasets": datasets,
@@ -1087,9 +1082,7 @@ def prediction_preflight(
     }
 
 
-def _modal_prediction_timing_samples(
-    store: ProjectStore, model_id: str, gpu: str
-) -> list[float]:
+def _modal_prediction_timing_samples(store: ProjectStore, model_id: str, gpu: str) -> list[float]:
     """Return per-image Modal runtimes for the same model and GPU only."""
     timing_samples = []
     for path in (store.root / "runs").glob("*/cloud-cost.json"):
@@ -1275,6 +1268,7 @@ def run_prediction_job(
                 "hosted_model_id": hosted_model.model_id,
                 "classes": list(project.classes),
                 "class_mapping": class_mapping,
+                "preprocessing": effective.preprocessing.to_dict(),
             }
         elif checkpoint:
             import hashlib
@@ -1302,6 +1296,7 @@ def run_prediction_job(
                 "source": "preset",
                 "model_id": effective.model_preset,
                 "classes": list(effective.classes),
+                "preprocessing": effective.preprocessing.to_dict(),
             }
         timing_samples = _modal_prediction_timing_samples(
             store, str(model_spec["model_id"]), request.gpu
@@ -2052,10 +2047,9 @@ def create_app(
             catalog = ModelCatalog()
             catalog.get(body.model_preset)
             preprocessing = PreprocessingConfig(
-                max_dimension=body.image_dimension,
+                short_side_dimension=body.image_dimension,
                 grayscale_enabled=body.grayscale,
                 clahe_enabled=body.clahe,
-                compatibility_mode=body.compatibility_mode,
             )
             config = ProjectConfig(
                 classes=classes,

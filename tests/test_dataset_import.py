@@ -207,13 +207,19 @@ def test_snapshot_prepares_yolo_training_data_with_shared_preprocessing(tmp_path
 
     dataset_yaml = snapshot.to_yolo_dataset(
         tmp_path / "prepared",
-        preprocessing=PreprocessingConfig(max_dimension=40),
+        preprocessing=PreprocessingConfig(short_side_dimension=20),
     )
 
     assert dataset_yaml.is_file()
     with Image.open(dataset_yaml.parent / "images" / "a.png") as image:
-        assert image.size == (40, 20)
+        assert image.size == (64, 64)
         assert image.getpixel((0, 0))[0] == image.getpixel((0, 0))[1]
     values = (dataset_yaml.parent / "labels" / "a.txt").read_text().split()
     assert values[0] == "0"
-    assert [float(value) for value in values[1:]] == pytest.approx([0.5, 0.5, 0.5, 0.5])
+    assert [float(value) for value in values[1:]] == pytest.approx([0.5, 0.5, 0.3125, 0.15625])
+    prepared = json.loads(dataset_yaml.read_text())
+    assert prepared["val"] == "images"
+    assert prepared["validation_strategy"] == "training-set-monitor"
+    assert prepared["training_image_size"] == 64
+    assert prepared["short_side_dimension"] == 20
+    assert snapshot.training_canvas_size(PreprocessingConfig(short_side_dimension=20)) == 64

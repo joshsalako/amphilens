@@ -11,13 +11,96 @@ from pathlib import Path
 from typing import Any
 
 from ..core import ValidationError, atomic_write_json
-from .backends import OptionalDependencyError, _select_torch_device
+from .backends import (
+    OptionalDependencyError,
+    _configure_faster_rcnn_transform,
+    _select_torch_device,
+)
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
 _CLASSIFIER_HEAD_PREFIXES = (
     "roi_heads.box_predictor.cls_score.",
     "roi_heads.box_predictor.bbox_pred.",
 )
+_FASTER_RCNN_AUGMENTATION = {
+    "horizontal_flip_probability": 0.5,
+    "vertical_flip_probability": 0.5,
+    "color_jitter_probability": 0.8,
+    "brightness": 0.4,
+    "contrast": 0.4,
+    "saturation": 0.4,
+    "affine_probability": 0.5,
+    "affine_scale": [0.5, 1.5],
+    "affine_translation_fraction": 0.1,
+    "affine_rotation_degrees": 10.0,
+    "minimum_box_visibility": 0.2,
+    "fill": 114,
+}
+
+
+def _build_faster_rcnn_augmentation():
+    from torchvision.transforms import v2
+
+    color_jitter = v2.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.0)
+    affine = v2.RandomAffine(
+        degrees=10,
+        translate=(0.1, 0.1),
+        scale=(0.5, 1.5),
+        fill=(114, 114, 114),
+    )
+    return v2.Compose(
+        [
+            v2.RandomHorizontalFlip(p=0.5),
+            v2.RandomVerticalFlip(p=0.5),
+            v2.RandomApply([color_jitter], p=0.8),
+            v2.RandomApply([affine], p=0.5),
+        ]
+    )
+
+
+def _apply_faster_rcnn_augmentation(image, target, *, transform=None):
+    """Apply WTL-style joint image and box augmentation to a training sample."""
+    import torch
+    from torchvision import tv_tensors
+
+    height, width = image.shape[-2:]
+    selected_transform = transform or _build_faster_rcnn_augmentation()
+    boxes = tv_tensors.BoundingBoxes(target["boxes"], format="XYXY", canvas_size=(height, width))
+    image, transformed = selected_transform(
+        tv_tensors.Image(image), {"boxes": boxes, "labels": target["labels"]}
+    )
+    raw_boxes = transformed["boxes"].as_subclass(torch.Tensor).to(dtype=torch.float32)
+    if raw_boxes.numel():
+        clipped = raw_boxes.clone()
+        clipped[:, 0::2].clamp_(0, width)
+        clipped[:, 1::2].clamp_(0, height)
+        raw_area = (raw_boxes[:, 2] - raw_boxes[:, 0]).clamp(min=0) * (
+            raw_boxes[:, 3] - raw_boxes[:, 1]
+        ).clamp(min=0)
+        visible_area = (clipped[:, 2] - clipped[:, 0]).clamp(min=0) * (
+            clipped[:, 3] - clipped[:, 1]
+        ).clamp(min=0)
+        keep = (
+            (clipped[:, 2] > clipped[:, 0])
+            & (clipped[:, 3] > clipped[:, 1])
+            & (visible_area >= raw_area * _FASTER_RCNN_AUGMENTATION["minimum_box_visibility"])
+        )
+        clipped = clipped[keep]
+        labels = transformed["labels"][keep]
+    else:
+        clipped = raw_boxes.reshape((0, 4))
+        labels = transformed["labels"]
+
+    output_target = dict(target)
+    output_target["boxes"] = clipped
+    output_target["labels"] = labels
+    output_target["area"] = (clipped[:, 2] - clipped[:, 0]) * (clipped[:, 3] - clipped[:, 1])
+    output_target["iscrowd"] = (
+        target.get("iscrowd", torch.zeros(len(target["labels"]), dtype=torch.int64))[keep]
+        if raw_boxes.numel()
+        else target.get("iscrowd", torch.zeros(0, dtype=torch.int64))
+    )
+    return image.as_subclass(torch.Tensor), output_target
 
 
 def adapt_faster_rcnn_state_dict(
@@ -114,6 +197,8 @@ class FasterRCNNDatasetSpec:
     image_dir: Path
     label_dir: Path
     classes: tuple[str, ...]
+    short_side_dimension: int = 640
+    training_image_size: int | None = None
 
     @classmethod
     def from_mapping(
@@ -140,13 +225,31 @@ class FasterRCNNDatasetSpec:
             raise ValidationError("Dataset labels must be one directory")
         label_dir = (root / label_value).resolve()
         classes = _classes_from_names(mapping.get("names"))
+        short_side_dimension = mapping.get("short_side_dimension", 640)
+        training_image_size = mapping.get("training_image_size")
+        for name, value in (
+            ("short_side_dimension", short_side_dimension),
+            ("training_image_size", training_image_size),
+        ):
+            if value is None and name == "training_image_size":
+                continue
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValidationError(f"Dataset {name} must be a positive integer")
         if expected_classes is not None and classes != list(expected_classes):
             raise ValidationError("Dataset classes do not match the detector classes")
         if not image_dir.is_dir():
             raise ValidationError(f"Dataset image directory does not exist: {image_dir}")
         if not label_dir.is_dir():
             raise ValidationError(f"Dataset label directory does not exist: {label_dir}")
-        return cls(yaml_path, root, image_dir, label_dir, tuple(classes))
+        return cls(
+            yaml_path,
+            root,
+            image_dir,
+            label_dir,
+            tuple(classes),
+            short_side_dimension,
+            training_image_size,
+        )
 
     @classmethod
     def from_yaml(
@@ -183,7 +286,7 @@ class FasterRCNNDatasetSpec:
 class FasterRCNNDataset:
     """Torchvision dataset that consumes :class:`FasterRCNNDatasetSpec`."""
 
-    def __init__(self, spec: FasterRCNNDatasetSpec):
+    def __init__(self, spec: FasterRCNNDatasetSpec, *, augment: bool = False, transform=None):
         try:
             import numpy as np
             import torch
@@ -197,6 +300,8 @@ class FasterRCNNDataset:
         self._image = Image
         self.spec = spec
         self.paths = spec.image_paths()
+        self.augment = augment
+        self.transform = transform or (_build_faster_rcnn_augmentation() if augment else None)
 
     def __len__(self) -> int:
         return len(self.paths)
@@ -210,7 +315,7 @@ class FasterRCNNDataset:
             array = self._np.array(rgb, copy=True)
         except OSError as exc:
             raise ValidationError(f"Dataset image cannot be read: {path}") from exc
-        tensor = self._torch.from_numpy(array).permute(2, 0, 1).float().div(255)
+        tensor = self._torch.from_numpy(array).permute(2, 0, 1)
         label_path = self.spec.label_dir / f"{path.stem}.txt"
         lines = label_path.read_text(encoding="utf-8").splitlines() if label_path.is_file() else []
         try:
@@ -231,6 +336,11 @@ class FasterRCNNDataset:
             "area": area,
             "iscrowd": self._torch.zeros((len(parsed),), dtype=self._torch.int64),
         }
+        if self.augment:
+            tensor, target = _apply_faster_rcnn_augmentation(
+                tensor, target, transform=self.transform
+            )
+        tensor = tensor.float().div(255)
         return tensor, target
 
 
@@ -285,7 +395,14 @@ class FasterRCNNTrainer:
                 "Faster R-CNN training requires the 'training' extra"
             ) from exc
         spec = FasterRCNNDatasetSpec.from_yaml(dataset_yaml, expected_classes=self.classes)
-        dataset = FasterRCNNDataset(spec)
+        config["training_image_size"] = spec.training_image_size or spec.short_side_dimension
+        augment = bool(config.get("augment", True))
+        dataset = FasterRCNNDataset(spec, augment=augment)
+        config["augmentation"] = {
+            "backend": "torchvision-v2",
+            "enabled": augment,
+            "parameters": dict(_FASTER_RCNN_AUGMENTATION) if augment else {},
+        }
         if not len(dataset):
             raise ValidationError("Faster R-CNN training dataset contains no images")
         output = Path(output_dir).expanduser().resolve()
@@ -298,6 +415,10 @@ class FasterRCNNTrainer:
 
             weights = FasterRCNN_ResNet50_FPN_V2_Weights.DEFAULT
         model = fasterrcnn_resnet50_fpn_v2(weights=weights, weights_backbone=None)
+        _configure_faster_rcnn_transform(
+            model,
+            spec.training_image_size or spec.short_side_dimension,
+        )
         in_features = model.roi_heads.box_predictor.cls_score.in_features
         model.roi_heads.box_predictor = FastRCNNPredictor(in_features, len(self.classes) + 1)
         model.to(device)
@@ -403,6 +524,11 @@ class FasterRCNNTrainer:
                 )
         atomic_write_json(
             output / "metrics.json",
-            {"evaluation": "not evaluated", "epochs": metrics, "classes": self.classes},
+            {
+                "evaluation": "not evaluated",
+                "epochs": metrics,
+                "classes": self.classes,
+                "augmentation": config["augmentation"],
+            },
         )
         return output / _selected_checkpoint_name(config)

@@ -135,6 +135,27 @@ def test_cloud_estimate_rejects_zero_epochs_instead_of_using_project_default(tmp
         service.estimate(snapshot, epochs=0)
 
 
+def test_cloud_estimate_uses_padded_training_canvas_size(tmp_path: Path):
+    from amphilens.cloud.estimate import estimate_training_cost
+
+    store, snapshot_path = make_project(tmp_path)
+    service = CloudTrainingService(store, FakeCloudTransport())
+    snapshot = service.estimate(snapshot_path, epochs=2000, image_size=640)
+    image_bytes = sum(
+        path.stat().st_size for path in (snapshot_path / "images").iterdir() if path.is_file()
+    )
+    expected = estimate_training_cost(
+        image_count=1,
+        dataset_bytes=image_bytes,
+        epochs=2000,
+        gpu="L4",
+        max_cost_usd=5,
+        image_size=864,
+    )
+
+    assert snapshot == expected
+
+
 def test_cloud_submit_rejects_stale_consent_estimate_before_upload(tmp_path: Path):
     store, snapshot = make_project(tmp_path)
     transport = FakeCloudTransport()

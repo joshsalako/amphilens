@@ -17,6 +17,19 @@ from ..core import (
 from ..preprocessing import PreprocessingService
 from .catalog import ModelPreset
 
+_ULTRALYTICS_AUGMENTATION = {
+    "degrees": 15.0,
+    "translate": 0.1,
+    "scale": 0.5,
+    "shear": 2.0,
+    "perspective": 0.0001,
+    "flipud": 0.5,
+    "fliplr": 0.5,
+    "mosaic": 1.0,
+    "mixup": 0.15,
+    "copy_paste": 0.2,
+}
+
 
 class OptionalDependencyError(RuntimeError):
     """Raised when a selected backend's optional ML dependency is absent."""
@@ -138,6 +151,12 @@ def _image_size(path: Path) -> tuple[int, int]:
         return image.width, image.height
 
 
+def _configure_faster_rcnn_transform(model, short_side_dimension: int) -> None:
+    """Keep torchvision from rescaling images already prepared to the chosen short side."""
+    model.transform.min_size = (short_side_dimension,)
+    model.transform.max_size = 2**31 - 1
+
+
 def reset_ultralytics_classification_head(
     detector_model,
     *,
@@ -231,6 +250,12 @@ class UltralyticsDetector:
         model = self._load()
         paths = list(image_paths)
         batch_size = max(1, config.batch_size)
+        stride = 32
+        try:
+            model_stride = getattr(model.model, "stride", stride)
+            stride = max(stride, int(model_stride.max().item()))
+        except (AttributeError, TypeError, ValueError):
+            pass
         for offset in range(0, len(paths), batch_size):
             batch_paths = paths[offset : offset + batch_size]
             dimensions = [_image_size(path) for path in batch_paths]
@@ -238,12 +263,24 @@ class UltralyticsDetector:
                 PreprocessingService(config.preprocessing_config).transform(path)
                 for path in batch_paths
             ]
+            target_width = (
+                math.ceil(max(item.processed_size[0] for item in transformed_images) / stride)
+                * stride
+            )
+            target_height = (
+                math.ceil(max(item.processed_size[1] for item in transformed_images) / stride)
+                * stride
+            )
+            transformed_images = [
+                item.pad_to(target_width, target_height) for item in transformed_images
+            ]
             results = model.predict(
                 source=[item.image for item in transformed_images],
-                imgsz=config.image_size,
+                imgsz=(target_height, target_width),
                 conf=config.confidence,
                 device=None if config.device == "auto" else config.device,
                 batch=len(batch_paths),
+                rect=False,
                 verbose=False,
             )
             if len(results) != len(batch_paths):
@@ -260,6 +297,9 @@ class UltralyticsDetector:
                     boxes.conf.cpu().tolist(),
                     boxes.cls.cpu().tolist(),
                 ):
+                    box = transformed.clip_box_to_content(box)
+                    if box is None:
+                        continue
                     class_index = int(class_id)
                     class_name = (
                         names[class_index]
@@ -316,6 +356,17 @@ class UltralyticsDetector:
         )
         output = Path(output_dir).expanduser().resolve()
         output.mkdir(parents=True, exist_ok=True)
+        prepared_image_size = int(config.get("image_size", 640))
+        try:
+            import json
+
+            dataset_metadata = json.loads(Path(dataset_yaml).read_text(encoding="utf-8"))
+            prepared_image_size = int(
+                dataset_metadata.get("training_image_size", prepared_image_size)
+            )
+        except (OSError, ValueError, TypeError):
+            pass
+        config["training_image_size"] = prepared_image_size
         if resume_from:
             resume_from.validate_compatibility(
                 architecture=self.architecture,
@@ -329,13 +380,24 @@ class UltralyticsDetector:
             "project": str(output),
             "name": str(config.get("run_name", "train")),
             "epochs": int(config.get("epochs", 100)),
-            "imgsz": int(config.get("image_size", 640)),
+            "imgsz": prepared_image_size,
             "batch": int(config.get("batch_size", 16)),
             "device": config.get("device", "auto"),
             "val": bool(config.get("val", not is_cloud_training)),
             "patience": int(config.get("patience", 25)),
             "seed": int(config.get("seed", 42)),
             "exist_ok": True,
+            "rect": False,
+        }
+        # Ultralytics disables mosaic for the last close_mosaic epochs. Keep
+        # this active for short smoke/fine-tuning runs (including 1 epoch),
+        # where the default of 10 would turn it off for the entire run.
+        if train_config["epochs"] <= 10:
+            train_config["close_mosaic"] = 0
+        train_config.update(_ULTRALYTICS_AUGMENTATION)
+        config["augmentation"] = {
+            "backend": "ultralytics",
+            "parameters": dict(_ULTRALYTICS_AUGMENTATION),
         }
         if is_cloud_training:
             train_config["trainer"] = _training_only_trainer(model._smart_load("trainer"))
@@ -430,6 +492,7 @@ class FasterRCNNDetector:
             ) from exc
         model = self._load()
         device = _select_torch_device(torch, config.device)
+        _configure_faster_rcnn_transform(model, config.preprocessing_config.short_side_dimension)
         model.to(device)
         paths = list(image_paths)
         batch_size = 1 if str(device) == "cpu" else max(1, config.batch_size)

@@ -66,9 +66,11 @@ must include image files. AmphiLens validates dimensions, boxes, classes,
 duplicate image content, corrupt files, and archive paths, then stores an
 immutable snapshot with the original archive hash and reviewed negative images.
 
-The shared preprocessing order is maximum-dimension resize, optional grayscale,
-and optional CLAHE, followed by three-channel model input. Resizing preserves
-aspect ratio and never enlarges images. Grayscale defaults on; CLAHE defaults
+The shared preprocessing order resizes every image so its shorter side matches
+the configured dimension, then pads to model-compatible batch shapes without
+stretching the image content, before optional grayscale and CLAHE and
+three-channel model input. Resizing preserves aspect ratio and enlarges smaller
+images when needed. Grayscale defaults on; CLAHE defaults
 off for generic projects and uses the paper-aligned `2.0`/`(8, 8)` settings
 when enabled. The same structured configuration and fingerprint are used by
 snapshot preparation and detector inference, and prediction boxes are mapped

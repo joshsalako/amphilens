@@ -195,11 +195,10 @@ For projects created in the browser app, choose:
 - confidence threshold; and
 - CPU or CUDA device.
 
-For larger images, the shorter side is resized to the selected dimension;
-smaller images are not enlarged and aspect ratio is preserved. Grayscale images
-are replicated into three channels. If CLAHE is enabled, resizing happens first
-to reduce processing time. These choices are saved in
-the project and run metadata.
+Every image is resized so its shorter side matches the selected dimension,
+including upscaling smaller images. The longer side follows the original aspect
+ratio, then batches are padded without stretching the image content. Grayscale images are replicated into three channels. If CLAHE is enabled,
+resizing happens first. These choices are saved in the project and run metadata.
 
 When you train or find wildlife, AmphiLens loads these saved choices
 automatically. Open **Advanced run overrides** only when you intentionally want

@@ -33,16 +33,13 @@
       "inference_image_size": 1152,
       "preprocessing": {
         "resize_enabled": true,
-        "max_dimension": 640,
+        "short_side_dimension": 640,
         "resize_interpolation": "opencv-linear",
         "grayscale_enabled": true,
         "clahe_enabled": true,
         "clahe_clip_limit": 2.0,
         "clahe_tile_grid_size": [8, 8],
-        "color_space": "rgb",
-        "compatibility_mode": "shortest-side",
-        "round_to_multiple": 32,
-        "allow_upscale": true
+        "color_space": "rgb"
       },
       "license": "AGPL-3.0"
     },
@@ -67,16 +64,13 @@
       "inference_image_size": 640,
       "preprocessing": {
         "resize_enabled": true,
-        "max_dimension": 640,
+        "short_side_dimension": 640,
         "resize_interpolation": "opencv-linear",
         "grayscale_enabled": true,
         "clahe_enabled": true,
         "clahe_clip_limit": 2.0,
         "clahe_tile_grid_size": [8, 8],
-        "color_space": "rgb",
-        "compatibility_mode": "max-dimension",
-        "round_to_multiple": 32,
-        "allow_upscale": true
+        "color_space": "rgb"
       },
       "license": "AGPL-3.0"
     },
@@ -101,16 +95,13 @@
       "inference_image_size": 640,
       "preprocessing": {
         "resize_enabled": true,
-        "max_dimension": 640,
+        "short_side_dimension": 640,
         "resize_interpolation": "opencv-linear",
         "grayscale_enabled": true,
         "clahe_enabled": true,
         "clahe_clip_limit": 2.0,
         "clahe_tile_grid_size": [8, 8],
-        "color_space": "rgb",
-        "compatibility_mode": "shortest-side",
-        "round_to_multiple": 32,
-        "allow_upscale": true
+        "color_space": "rgb"
       },
       "license": "unverified"
     }

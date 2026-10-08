@@ -34,9 +34,7 @@ class FakeTransport:
             for index, path in enumerate(sources)
         ]
 
-    def predict_batch(
-        self, payload, *, cancellation_requested=None, progress_callback=None
-    ):
+    def predict_batch(self, payload, *, cancellation_requested=None, progress_callback=None):
         del cancellation_requested, progress_callback
         self.payload = payload
         return self.result
@@ -121,7 +119,11 @@ def test_remote_prediction_verifies_hash_maps_ids_and_removes_batch(tmp_path):
             "batch_size": 1,
             "device": "cuda",
             "run_id": "run1",
-            "preprocessing": {},
+            "preprocessing": {
+                "short_side_dimension": 512,
+                "grayscale_enabled": True,
+                "clahe_enabled": True,
+            },
         },
     }
 
@@ -130,6 +132,8 @@ def test_remote_prediction_verifies_hash_maps_ids_and_removes_batch(tmp_path):
 
         def predict(self, paths, config):
             assert config.device == "cuda"
+            assert config.preprocessing_config.short_side_dimension == 512
+            assert config.preprocessing_config.clahe_enabled is True
             return [
                 DetectionRecord(
                     str(paths[0]),

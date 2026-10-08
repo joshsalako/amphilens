@@ -110,11 +110,18 @@ class CloudTrainingService:
         epochs: int | None = None,
         max_cost_usd: float = 5.0,
         image_size: int = 640,
+        preprocessing: dict[str, Any] | None = None,
     ) -> CostEstimate:
         snapshot = DatasetSnapshot.load(snapshot_path)
         project = self.store.load_manifest()
         if not snapshot.manifest.images:
             raise ValidationError("Cloud training requires a non-empty labelled dataset snapshot")
+        if preprocessing is None:
+            selected_preprocessing = project.project_config.preprocessing.to_dict()
+            selected_preprocessing["short_side_dimension"] = image_size
+        else:
+            selected_preprocessing = preprocessing
+        training_canvas_size = snapshot.training_canvas_size(selected_preprocessing)
         byte_count = sum(
             (snapshot.root / image.relative_path).stat().st_size
             for image in snapshot.manifest.images
@@ -125,7 +132,7 @@ class CloudTrainingService:
             epochs=project.project_config.epochs if epochs is None else epochs,
             gpu=gpu,
             max_cost_usd=max_cost_usd,
-            image_size=image_size,
+            image_size=training_canvas_size,
         )
 
     def submit(
@@ -191,6 +198,7 @@ class CloudTrainingService:
             epochs=epochs,
             max_cost_usd=consent.max_cost_usd,
             image_size=image_size,
+            preprocessing=effective.get("preprocessing"),
         )
         if abs(consent.estimated_usd - estimate.high_usd) > 0.02:
             raise ValidationError("Cloud consent estimate is stale; review the current estimate")
@@ -408,7 +416,8 @@ class CloudTrainingService:
         event = {
             key: value
             for key, value in record.progress_details.items()
-            if key in {
+            if key
+            in {
                 "phase",
                 "message",
                 "error",

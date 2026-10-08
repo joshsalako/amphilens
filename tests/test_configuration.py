@@ -194,7 +194,7 @@ def test_unmanifested_checkpoint_is_explicitly_less_reproducible(tmp_path: Path)
     assert any("checkpoint metadata" in warning.lower() for warning in effective.warnings)
 
 
-def test_hosted_model_configuration_is_authoritative_for_inference_and_training(tmp_path: Path):
+def test_hosted_model_uses_project_preprocessing_for_inference_and_training(tmp_path: Path):
     from amphilens.core import ProjectManifest
     from amphilens.models.hosted_models import get_hosted_model
 
@@ -202,6 +202,10 @@ def test_hosted_model_configuration_is_authoritative_for_inference_and_training(
         "custom classes",
         [tmp_path],
         ["toad", "mammal"],
+        project_config=ProjectConfig(
+            classes=["toad", "mammal"],
+            preprocessing=PreprocessingConfig(short_side_dimension=512, clahe_enabled=True),
+        ),
     )
     hosted = get_hosted_model("amphilens-rtdetr-l")
 
@@ -214,11 +218,13 @@ def test_hosted_model_configuration_is_authoritative_for_inference_and_training(
 
     assert inference.model_preset == "amphilens-rtdetr-l"
     assert inference.architecture == "rtdetr"
-    assert inference.image_size == 640
+    assert inference.image_size == 512
     assert inference.classes == hosted.source_classes
-    assert inference.preprocessing.to_dict() == hosted.preprocessing.to_dict()
+    assert inference.preprocessing.short_side_dimension == 512
+    assert inference.preprocessing.clahe_enabled is True
     assert inference.source == "huggingface"
     assert inference.hosted_model["revision"]
     assert training.architecture == "rtdetr"
     assert training.classes == tuple(project.classes)
+    assert training.preprocessing.to_dict() == inference.preprocessing.to_dict()
     assert training.hosted_model["source_class_order"] == list(hosted.source_classes)

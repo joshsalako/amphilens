@@ -301,7 +301,7 @@ def test_modal_prediction_api_requires_preflight_consent_before_job_submission(c
     assert "consent" in response.json()["detail"].lower()
 
 
-def test_cloud_estimate_uses_catalog_input_size_for_hosted_model():
+def test_cloud_estimate_uses_project_input_size_for_hosted_model():
     estimate = webapp._request(
         webapp.CloudEstimateRequest,
         {
@@ -312,7 +312,7 @@ def test_cloud_estimate_uses_catalog_input_size_for_hosted_model():
         },
     )
     assert estimate.hosted_model_id == "amphilens-yolo26-m"
-    assert webapp._cloud_estimate_image_size(estimate) == 1152
+    assert webapp._cloud_estimate_image_size(estimate) == 640
 
     estimate.hosted_model_id = "amphilens-rtdetr-l"
     assert webapp._cloud_estimate_image_size(estimate) == 640
@@ -612,7 +612,7 @@ def test_hosted_prediction_maps_labels_and_records_revision(client, tmp_path, mo
 
     run_manifest = json.loads((tmp_path / "output" / "run.json").read_text())
     predictions = (tmp_path / "output" / "predictions.csv").read_text()
-    assert observed["image_size"] == 1152
+    assert observed["image_size"] == 640
     assert ",toad," in predictions
     assert run_manifest["config"]["metadata"]["class_mapping"]["Other_Amphibian"] is None
     assert run_manifest["config"]["metadata"]["effective_configuration"]["hosted_model"]["revision"]
@@ -690,9 +690,72 @@ def test_hosted_training_uses_selected_architecture_checkpoint_and_target_classe
     assert observed["architecture"] == "yolo"
     assert observed["classes"] == ["toad", "mammal"]
     assert observed["model_id"] == "amphilens-yolo26-m"
-    assert observed["effective"]["image_size"] == 1152
+    assert observed["effective"]["image_size"] == 640
     assert observed["effective"]["hosted_model"]["revision"]
     assert output.result["message"].startswith("Training finished from amphilens-pretrained:")
+
+
+def test_hosted_modal_prediction_sends_project_preprocessing(tmp_path, monkeypatch):
+    from PIL import Image
+
+    from amphilens.core import ProjectConfig, ProjectManifest, ProjectStore
+    from amphilens.models.hosted_models import get_hosted_model
+    from amphilens.preprocessing import PreprocessingConfig
+    from amphilens.webapp import PredictionsRequest, run_prediction_job
+
+    image_root = tmp_path / "images"
+    image_root.mkdir()
+    image_path = image_root / "sample.jpg"
+    Image.new("RGB", (80, 40), color="gray").save(image_path)
+    hosted = get_hosted_model("amphilens-yolo26-m")
+    project = ProjectStore(tmp_path / "project")
+    project.create(
+        ProjectManifest.create(
+            "study",
+            [image_root],
+            list(hosted.source_classes),
+            project_config=ProjectConfig(
+                classes=list(hosted.source_classes),
+                preprocessing=PreprocessingConfig(short_side_dimension=512, clahe_enabled=True),
+            ),
+        )
+    )
+    observed = {}
+
+    class FakeModalDetector:
+        device_name = "Modal GPU"
+        estimated_cost_usd = 0.0
+
+        def __init__(self, _transport, *, model_spec, **_kwargs):
+            observed["model_spec"] = model_spec
+
+        def predict(self, _paths, _config):
+            return iter(())
+
+        def cleanup_progress(self):
+            pass
+
+    import amphilens.cloud.prediction as cloud_prediction
+
+    monkeypatch.setattr(cloud_prediction, "ModalPredictionDetector", FakeModalDetector)
+    run_prediction_job(
+        project,
+        PredictionsRequest(
+            image_root=str(image_root),
+            output_dir=str(tmp_path / "output"),
+            execution="modal",
+            hosted_model_id=hosted.model_id,
+            max_cost_usd=1.0,
+            acknowledged=True,
+            uploads_dataset=True,
+            expected_image_count=1,
+            expected_total_bytes=image_path.stat().st_size,
+        ),
+        cloud_transport=object(),
+    )
+
+    assert observed["model_spec"]["preprocessing"]["short_side_dimension"] == 512
+    assert observed["model_spec"]["preprocessing"]["clahe_enabled"] is True
 
 
 def test_job_errors_are_actionable_and_redact_credentials(client, jobs):

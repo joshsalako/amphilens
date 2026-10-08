@@ -118,14 +118,14 @@ def test_training_from_snapshot_prepares_labels_with_the_same_preprocessing(tmp_
         snapshot=snapshot,
         output_dir=tmp_path / "cycle-0",
         config=TrainingConfig(epochs=1, image_size=640, batch_size=1),
-        preprocessing=PreprocessingConfig(max_dimension=40),
+        preprocessing=PreprocessingConfig(short_side_dimension=20),
     )
 
     assert result.checkpoint.is_file()
     assert trainer.dataset_yaml.is_file()
     assert trainer.dataset_yaml.parent.name == "prepared-dataset"
     saved = json.loads((tmp_path / "cycle-0" / "checkpoint.json").read_text())
-    assert saved["training_config"]["preprocessing"]["max_dimension"] == 40
+    assert saved["training_config"]["preprocessing"]["short_side_dimension"] == 20
 
 
 def test_training_passes_parent_checkpoint_for_resume_lineage(tmp_path: Path):

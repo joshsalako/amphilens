@@ -87,11 +87,14 @@ load image -> configured-side resize -> optional grayscale -> optional CLAHE
 New browser-created projects use these defaults:
 
 1. short-side dimension: `640` pixels;
-2. no upscaling of smaller images;
+2. resize all images, including smaller ones, to the configured short side;
 3. grayscale: enabled and replicated to three channels; and
 4. CLAHE: disabled for generic projects.
 
-Existing projects retain their saved resize mode and dimensions.
+Training images are padded to a shared stride-aligned canvas after resizing;
+the image content is not stretched to fit that canvas. Smaller source images are
+upscaled to the configured short side. Existing project
+dimensions are normalized to the short-side rule when loaded.
 
 When CLAHE is enabled, the paper-aligned settings are `clip_limit=2.0` and an
 `(8, 8)` tile grid. Resizing happens before CLAHE to reduce processing time. A

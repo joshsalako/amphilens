@@ -390,7 +390,9 @@ if typer is not None:
         checkpoint: Path | None = typer.Option(None, "--checkpoint"),
         epochs: int | None = typer.Option(None, "--epochs"),
         batch_size: int | None = typer.Option(None, "--batch-size"),
-        max_dimension: int | None = typer.Option(None, "--max-dimension"),
+        short_side_dimension: int | None = typer.Option(
+            None, "--short-side-dimension", "--max-dimension"
+        ),
         grayscale: bool | None = typer.Option(None, "--grayscale/--no-grayscale"),
         clahe: bool | None = typer.Option(None, "--clahe/--no-clahe"),
         device: str | None = typer.Option(None, "--device"),
@@ -418,13 +420,13 @@ if typer is not None:
             overrides["batch_size"] = batch_size
         if device is not None:
             overrides["device"] = device
-        if max_dimension is not None or grayscale is not None or clahe is not None:
+        if short_side_dimension is not None or grayscale is not None or clahe is not None:
             project_preprocessing = project.project_config.preprocessing
             overrides["preprocessing"] = PreprocessingConfig(
-                max_dimension=(
-                    max_dimension
-                    if max_dimension is not None
-                    else project_preprocessing.max_dimension
+                short_side_dimension=(
+                    short_side_dimension
+                    if short_side_dimension is not None
+                    else project_preprocessing.short_side_dimension
                 ),
                 resize_enabled=project_preprocessing.resize_enabled,
                 resize_interpolation=project_preprocessing.resize_interpolation,
@@ -435,7 +437,6 @@ if typer is not None:
                 clahe_clip_limit=project_preprocessing.clahe_clip_limit,
                 clahe_tile_grid_size=project_preprocessing.clahe_tile_grid_size,
                 color_space=project_preprocessing.color_space,
-                compatibility_mode=project_preprocessing.compatibility_mode,
             )
         effective = resolve_effective_configuration(
             project,
@@ -592,7 +593,9 @@ if typer is not None:
         run_id: str | None = typer.Option(None, "--run-id"),
         registry_dir: Path | None = typer.Option(None, "--registry-dir"),
         preprocessing: str | None = typer.Option(None, "--preprocessing"),
-        max_dimension: int | None = typer.Option(None, "--max-dimension"),
+        short_side_dimension: int | None = typer.Option(
+            None, "--short-side-dimension", "--max-dimension"
+        ),
         grayscale: bool | None = typer.Option(None, "--grayscale/--no-grayscale"),
         clahe: bool | None = typer.Option(None, "--clahe/--no-clahe"),
     ):
@@ -618,13 +621,13 @@ if typer is not None:
             overrides["device"] = device
         if preprocessing_override is not None:
             overrides["preprocessing"] = preprocessing_override
-        elif max_dimension is not None or grayscale is not None or clahe is not None:
+        elif short_side_dimension is not None or grayscale is not None or clahe is not None:
             project_preprocessing = manifest.project_config.preprocessing
             overrides["preprocessing"] = PreprocessingConfig(
-                max_dimension=(
-                    max_dimension
-                    if max_dimension is not None
-                    else project_preprocessing.max_dimension
+                short_side_dimension=(
+                    short_side_dimension
+                    if short_side_dimension is not None
+                    else project_preprocessing.short_side_dimension
                 ),
                 resize_enabled=project_preprocessing.resize_enabled,
                 resize_interpolation=project_preprocessing.resize_interpolation,
@@ -635,7 +638,6 @@ if typer is not None:
                 clahe_clip_limit=project_preprocessing.clahe_clip_limit,
                 clahe_tile_grid_size=project_preprocessing.clahe_tile_grid_size,
                 color_space=project_preprocessing.color_space,
-                compatibility_mode=project_preprocessing.compatibility_mode,
             )
         checkpoint_manifest = discover_checkpoint_manifest(checkpoint)
         effective = resolve_effective_configuration(

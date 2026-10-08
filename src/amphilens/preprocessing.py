@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -13,25 +12,54 @@ class PreprocessingDependencyError(RuntimeError):
     """Raised when an enabled preprocessing operation needs an unavailable library."""
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class PreprocessingConfig:
     """Versioned preprocessing choices shared by every model backend."""
 
     resize_enabled: bool = True
-    max_dimension: int = 640
+    short_side_dimension: int = 640
     resize_interpolation: str = "lanczos"
     grayscale_enabled: bool = True
     clahe_enabled: bool = False
     clahe_clip_limit: float = 2.0
     clahe_tile_grid_size: tuple[int, int] = (8, 8)
     color_space: str = "rgb"
-    compatibility_mode: str = "max-dimension"
-    round_to_multiple: int | None = None
-    allow_upscale: bool = False
+
+    def __init__(
+        self,
+        short_side_dimension: int = 640,
+        resize_enabled: bool = True,
+        resize_interpolation: str = "lanczos",
+        grayscale_enabled: bool = True,
+        clahe_enabled: bool = False,
+        clahe_clip_limit: float = 2.0,
+        clahe_tile_grid_size: tuple[int, int] = (8, 8),
+        color_space: str = "rgb",
+        *,
+        max_dimension: int | None = None,
+        compatibility_mode: str | None = None,
+        round_to_multiple: int | None = None,
+        allow_upscale: bool | None = None,
+    ) -> None:
+        """Build the canonical short-side config, accepting legacy keyword aliases."""
+        del resize_enabled, compatibility_mode, round_to_multiple, allow_upscale
+        if max_dimension is not None:
+            if short_side_dimension != 640 and short_side_dimension != max_dimension:
+                raise ValueError("Specify only one short-side dimension")
+            short_side_dimension = max_dimension
+        object.__setattr__(self, "resize_enabled", True)
+        object.__setattr__(self, "short_side_dimension", short_side_dimension)
+        object.__setattr__(self, "resize_interpolation", resize_interpolation)
+        object.__setattr__(self, "grayscale_enabled", grayscale_enabled)
+        object.__setattr__(self, "clahe_enabled", clahe_enabled)
+        object.__setattr__(self, "clahe_clip_limit", clahe_clip_limit)
+        object.__setattr__(self, "clahe_tile_grid_size", tuple(clahe_tile_grid_size))
+        object.__setattr__(self, "color_space", color_space)
+        self.__post_init__()
 
     def __post_init__(self) -> None:
-        if self.max_dimension <= 0:
-            raise ValueError("max_dimension must be positive")
+        if self.short_side_dimension <= 0:
+            raise ValueError("short_side_dimension must be positive")
         if self.resize_interpolation not in {
             "nearest",
             "bilinear",
@@ -50,10 +78,23 @@ class PreprocessingConfig:
             raise ValueError("clahe_tile_grid_size must contain two positive integers")
         if self.color_space not in {"rgb", "lab"}:
             raise ValueError("color_space must be rgb or lab")
-        if self.compatibility_mode not in {"max-dimension", "shortest-side"}:
-            raise ValueError("unsupported preprocessing compatibility mode")
-        if self.round_to_multiple is not None and self.round_to_multiple <= 0:
-            raise ValueError("round_to_multiple must be positive when provided")
+
+    @property
+    def max_dimension(self) -> int:
+        """Deprecated compatibility alias for the target short side."""
+        return self.short_side_dimension
+
+    @property
+    def compatibility_mode(self) -> str:
+        return "shortest-side"
+
+    @property
+    def round_to_multiple(self) -> None:
+        return None
+
+    @property
+    def allow_upscale(self) -> bool:
+        return True
 
     @property
     def fingerprint(self) -> str:
@@ -65,16 +106,13 @@ class PreprocessingConfig:
     def to_dict(self, *, include_fingerprint: bool = True) -> dict:
         data = {
             "resize_enabled": self.resize_enabled,
-            "max_dimension": self.max_dimension,
+            "short_side_dimension": self.short_side_dimension,
             "resize_interpolation": self.resize_interpolation,
             "grayscale_enabled": self.grayscale_enabled,
             "clahe_enabled": self.clahe_enabled,
             "clahe_clip_limit": self.clahe_clip_limit,
             "clahe_tile_grid_size": list(self.clahe_tile_grid_size),
             "color_space": self.color_space,
-            "compatibility_mode": self.compatibility_mode,
-            "round_to_multiple": self.round_to_multiple,
-            "allow_upscale": self.allow_upscale,
         }
         if include_fingerprint:
             data["fingerprint"] = self.fingerprint
@@ -86,6 +124,13 @@ class PreprocessingConfig:
             return cls()
         values = dict(data)
         values.pop("fingerprint", None)
+        if "short_side_dimension" not in values and "max_dimension" in values:
+            values["short_side_dimension"] = values.pop("max_dimension")
+        else:
+            values.pop("max_dimension", None)
+        values.pop("compatibility_mode", None)
+        values.pop("round_to_multiple", None)
+        values.pop("allow_upscale", None)
         # The previous app stored a label. Preserve the useful named behavior.
         if set(values) == {"name"}:
             return cls(clahe_enabled=values["name"].strip().lower() == "clahe")
@@ -109,23 +154,41 @@ class PreprocessedImage:
     scale: float
     scale_x: float | None = None
     scale_y: float | None = None
+    padding: tuple[int, int, int, int] = (0, 0, 0, 0)
 
     @property
     def processed_size(self) -> tuple[int, int]:
         return tuple(self.image.size)
+
+    def clip_box_to_content(self, box_xyxy: list[float] | tuple[float, ...]) -> list[float] | None:
+        """Clip model boxes to resized image content, excluding any padding bars."""
+        if len(box_xyxy) != 4:
+            raise ValueError("box_xyxy must contain four coordinates")
+        width, height = self.processed_size
+        left, top, right, bottom = self.padding
+        clipped = [
+            max(float(box_xyxy[0]), left),
+            max(float(box_xyxy[1]), top),
+            min(float(box_xyxy[2]), width - right),
+            min(float(box_xyxy[3]), height - bottom),
+        ]
+        if clipped[2] <= clipped[0] or clipped[3] <= clipped[1]:
+            return None
+        return clipped
 
     def map_box_to_original(self, box_xyxy: list[float] | tuple[float, ...]) -> list[float]:
         if len(box_xyxy) != 4:
             raise ValueError("box_xyxy must contain four coordinates")
         scale_x = self.scale if self.scale_x is None else self.scale_x
         scale_y = self.scale if self.scale_y is None else self.scale_y
-        if scale_x == 1 and scale_y == 1:
+        left, top, _, _ = self.padding
+        if scale_x == 1 and scale_y == 1 and left == 0 and top == 0:
             return [float(value) for value in box_xyxy]
         return [
-            round(float(box_xyxy[0]) / scale_x, 6),
-            round(float(box_xyxy[1]) / scale_y, 6),
-            round(float(box_xyxy[2]) / scale_x, 6),
-            round(float(box_xyxy[3]) / scale_y, 6),
+            round((float(box_xyxy[0]) - left) / scale_x, 6),
+            round((float(box_xyxy[1]) - top) / scale_y, 6),
+            round((float(box_xyxy[2]) - left) / scale_x, 6),
+            round((float(box_xyxy[3]) - top) / scale_y, 6),
         ]
 
     def map_box_to_processed(self, box_xyxy: list[float] | tuple[float, ...]) -> list[float]:
@@ -133,12 +196,42 @@ class PreprocessedImage:
             raise ValueError("box_xyxy must contain four coordinates")
         scale_x = self.scale if self.scale_x is None else self.scale_x
         scale_y = self.scale if self.scale_y is None else self.scale_y
+        left, top, _, _ = self.padding
         return [
-            round(float(box_xyxy[0]) * scale_x, 6),
-            round(float(box_xyxy[1]) * scale_y, 6),
-            round(float(box_xyxy[2]) * scale_x, 6),
-            round(float(box_xyxy[3]) * scale_y, 6),
+            round(float(box_xyxy[0]) * scale_x + left, 6),
+            round(float(box_xyxy[1]) * scale_y + top, 6),
+            round(float(box_xyxy[2]) * scale_x + left, 6),
+            round(float(box_xyxy[3]) * scale_y + top, 6),
         ]
+
+    def pad_to(
+        self,
+        width: int,
+        height: int,
+        *,
+        fill: tuple[int, int, int] = (114, 114, 114),
+        centered: bool = True,
+    ) -> PreprocessedImage:
+        """Pad without scaling and retain offsets for mapping model predictions."""
+        current_width, current_height = self.processed_size
+        if width < current_width or height < current_height:
+            raise ValueError("Padding size cannot be smaller than the processed image")
+        left = (width - current_width) // 2 if centered else 0
+        top = (height - current_height) // 2 if centered else 0
+        right = width - current_width - left
+        bottom = height - current_height - top
+        from PIL import Image
+
+        canvas = Image.new("RGB", (width, height), fill)
+        canvas.paste(self.image, (left, top))
+        return PreprocessedImage(
+            image=canvas,
+            original_size=self.original_size,
+            scale=self.scale,
+            scale_x=self.scale_x,
+            scale_y=self.scale_y,
+            padding=(left, top, right, bottom),
+        )
 
 
 class PreprocessingService:
@@ -198,30 +291,15 @@ class PreprocessingService:
         if not self.config.resize_enabled:
             return 1.0
         width, height = size
-        if self.config.compatibility_mode == "shortest-side":
-            scale = self.config.max_dimension / min(width, height)
-        else:
-            scale = self.config.max_dimension / max(width, height)
-        return scale if self.config.allow_upscale else min(1.0, scale)
+        return self.config.short_side_dimension / min(width, height)
 
     def _target_size(self, size: tuple[int, int], scale: float) -> tuple[int, int]:
-        width, height = size
-        multiple = self.config.round_to_multiple
-        if multiple is None:
-            return max(1, round(width * scale)), max(1, round(height * scale))
-        if scale == 1 and not self.config.allow_upscale:
+        if not self.config.resize_enabled:
             return size
-        if self.config.compatibility_mode == "shortest-side":
-            if width <= height:
-                return self.config.max_dimension, self._ceil_multiple(height * scale, multiple)
-            return self._ceil_multiple(width * scale, multiple), self.config.max_dimension
-        if width >= height:
-            return self.config.max_dimension, self._ceil_multiple(height * scale, multiple)
-        return self._ceil_multiple(width * scale, multiple), self.config.max_dimension
-
-    @staticmethod
-    def _ceil_multiple(value: float, multiple: int) -> int:
-        return max(multiple, math.ceil(value / multiple) * multiple)
+        width, height = size
+        if width <= height:
+            return self.config.short_side_dimension, max(1, round(height * scale))
+        return max(1, round(width * scale)), self.config.short_side_dimension
 
     def _resize(self, image, target_size: tuple[int, int]):
         if self.config.resize_interpolation == "opencv-linear":

@@ -196,6 +196,21 @@ class DatasetSnapshot:
     root: Path
     manifest: DatasetManifest
 
+    def training_canvas_size(self, preprocessing=None, *, stride: int = 32) -> int:
+        """Return the square stride-aligned model canvas after short-side resizing."""
+        from .preprocessing import PreprocessingConfig, PreprocessingService
+
+        if stride <= 0:
+            raise ValueError("stride must be positive")
+        service = PreprocessingService(PreprocessingConfig.from_any(preprocessing))
+        largest_processed_side = 0
+        for item in self.manifest.images:
+            target_size = service._target_size(
+                (item.width, item.height), service._resize_scale((item.width, item.height))
+            )
+            largest_processed_side = max(largest_processed_side, *target_size)
+        return max(stride, math.ceil(largest_processed_side / stride) * stride)
+
     @classmethod
     def load(cls, root: str | Path) -> DatasetSnapshot:
         path = Path(root).expanduser().resolve()
@@ -219,9 +234,15 @@ class DatasetSnapshot:
         image_dir.mkdir(parents=True)
         label_dir.mkdir()
         service = PreprocessingService(PreprocessingConfig.from_any(preprocessing))
+        training_image_size = self.training_canvas_size(service.config)
         for item in self.manifest.images:
             source = self.root / item.relative_path
             transformed = service.transform(source)
+            if transformed.original_size != (item.width, item.height):
+                raise ValidationError(
+                    f"Dataset image dimensions changed after import: {item.relative_path}"
+                )
+            transformed = transformed.pad_to(training_image_size, training_image_size)
             filename = Path(item.relative_path).name
             transformed.image.save(image_dir / filename)
             width, height = transformed.processed_size
@@ -245,10 +266,16 @@ class DatasetSnapshot:
                 {
                     "path": str(target),
                     "train": "images",
+                    "val": "images",
                     "labels": "labels",
                     "names": {index: name for index, name in enumerate(self.manifest.classes)},
-                    "evaluation": "not evaluated",
+                    "evaluation": (
+                        "training set used as validation monitor; no independent test set"
+                    ),
+                    "validation_strategy": "training-set-monitor",
                     "preprocessing": service.config.to_dict(),
+                    "short_side_dimension": service.config.short_side_dimension,
+                    "training_image_size": training_image_size,
                 },
                 indent=2,
             )

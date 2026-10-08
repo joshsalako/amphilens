@@ -6,12 +6,18 @@ from PIL import Image
 
 from amphilens.core import CheckpointManifest, InferenceConfig, UnsupportedCheckpointError
 from amphilens.models import FasterRCNNDetector, UltralyticsDetector, load_detector
-from amphilens.models.backends import OptionalDependencyError, _select_torch_device
+from amphilens.models.backends import (
+    OptionalDependencyError,
+    _configure_faster_rcnn_transform,
+    _select_torch_device,
+)
 from amphilens.models.faster_rcnn_training import (
     FasterRCNNDatasetSpec,
+    _apply_faster_rcnn_augmentation,
     _selected_checkpoint_name,
     parse_yolo_label_lines,
 )
+from amphilens.preprocessing import PreprocessingConfig
 
 
 class FakeArray:
@@ -112,7 +118,7 @@ def test_ultralytics_adapter_preprocesses_before_prediction_and_maps_boxes(tmp_p
     image = tmp_path / "wide.jpg"
     Image.new("RGB", (80, 40), color=(200, 10, 10)).save(image)
     detector = UltralyticsDetector(tmp_path / "best.pt", "yolo", ["toad"])
-    fake_model = FakeUltralyticsModel(FakeBoxes([[0, 0, 20, 20]], [0.9], [0]))
+    fake_model = FakeUltralyticsModel(FakeBoxes([[12, 6, 52, 26]], [0.9], [0]))
     detector._model = fake_model
 
     records = list(
@@ -120,20 +126,87 @@ def test_ultralytics_adapter_preprocesses_before_prediction_and_maps_boxes(tmp_p
             [image],
             InferenceConfig(
                 model_id="fixture",
-                preprocessing={"max_dimension": 40},
+                preprocessing={"short_side_dimension": 20},
                 run_id="run-1",
             ),
         )
     )
 
-    assert fake_model.calls[0]["source"][0].size == (40, 20)
-    assert records[0].bbox_xyxy == [0.0, 0.0, 40.0, 40.0]
+    assert fake_model.calls[0]["source"][0].size == (64, 32)
+    assert fake_model.calls[0]["imgsz"] == (32, 64)
+    assert records[0].bbox_xyxy == [0.0, 0.0, 80.0, 40.0]
     assert (
         records[0].preprocessing
         == InferenceConfig(
-            model_id="fixture", preprocessing={"max_dimension": 40}
+            model_id="fixture", preprocessing={"short_side_dimension": 20}
         ).preprocessing_fingerprint
     )
+
+
+def test_ultralytics_prediction_clips_boxes_to_content_and_drops_padding_only_boxes(
+    tmp_path: Path,
+):
+    image = tmp_path / "wide.jpg"
+    Image.new("RGB", (60, 30), color="white").save(image)
+    detector = UltralyticsDetector(tmp_path / "best.pt", "yolo", ["toad"])
+    detector._model = FakeUltralyticsModel(
+        FakeBoxes(
+            [[8, 10, 20, 20], [0, 8, 10, 18], [20, 22, 60, 30]],
+            [0.9, 0.8, 0.7],
+            [0, 0, 0],
+        )
+    )
+
+    records = list(
+        detector.predict(
+            [image],
+            InferenceConfig(
+                model_id="fixture",
+                image_size=20,
+                confidence=0.1,
+                preprocessing=PreprocessingConfig(short_side_dimension=20),
+                device="cpu",
+            ),
+        )
+    )
+
+    assert [record.bbox_xyxy for record in records] == [
+        [0.0, 6.0, 12.0, 21.0],
+        [12.0, 24.0, 60.0, 30.0],
+    ]
+
+
+@pytest.mark.parametrize("architecture", ["yolo", "rtdetr"])
+def test_ultralytics_adapter_pads_mixed_aspect_batches_without_resizing_content(
+    tmp_path: Path, architecture: str
+):
+    landscape = tmp_path / "landscape.png"
+    portrait = tmp_path / "portrait.png"
+    Image.new("RGB", (1200, 600), color=(40, 50, 60)).save(landscape)
+    Image.new("RGB", (600, 1200), color=(70, 80, 90)).save(portrait)
+    detector = UltralyticsDetector(tmp_path / "best.pt", architecture, ["toad"])
+    fake_model = FakeUltralyticsModel(None)
+    detector._model = fake_model
+
+    list(
+        detector.predict(
+            [landscape, portrait],
+            InferenceConfig(
+                model_id="fixture",
+                batch_size=2,
+                device="cpu",
+                preprocessing={"grayscale_enabled": False},
+            ),
+        )
+    )
+
+    call = fake_model.calls[0]
+    assert call["imgsz"] == (1280, 1280)
+    assert [image.size for image in call["source"]] == [(1280, 1280), (1280, 1280)]
+    assert call["source"][0].getpixel((640, 319)) == (114, 114, 114)
+    assert call["source"][0].getpixel((640, 320)) == (40, 50, 60)
+    assert call["source"][1].getpixel((319, 640)) == (114, 114, 114)
+    assert call["source"][1].getpixel((320, 640)) == (70, 80, 90)
 
 
 def test_ultralytics_adapter_runs_a_batch_and_maps_each_result(tmp_path: Path):
@@ -157,6 +230,99 @@ def test_ultralytics_adapter_runs_a_batch_and_maps_each_result(tmp_path: Path):
     assert detector._model.calls[0]["batch"] == 2
     assert detector._model.calls[0]["device"] == "cuda"
     assert [record.image_id for record in records] == ["first.jpg", "second.jpg"]
+
+
+def test_ultralytics_training_uses_prepared_dataset_canvas_without_resizing(tmp_path: Path):
+    dataset_yaml = tmp_path / "dataset.yaml"
+    dataset_yaml.write_text('{"training_image_size": 1280}\n', encoding="utf-8")
+    detector = UltralyticsDetector(tmp_path / "base.pt", "yolo", ["toad"])
+    model = FakeUltralyticsModel(None)
+    detector._model = model
+
+    config = {"image_size": 640, "epochs": 1}
+    detector.train(dataset_yaml, tmp_path / "output", config)
+
+    assert model.train_calls["imgsz"] == 1280
+    assert model.train_calls["close_mosaic"] == 0
+    assert config["training_image_size"] == 1280
+    assert model.train_calls["degrees"] == 15.0
+    assert model.train_calls["translate"] == 0.1
+    assert model.train_calls["scale"] == 0.5
+    assert model.train_calls["shear"] == 2.0
+    assert model.train_calls["perspective"] == 0.0001
+    assert model.train_calls["flipud"] == 0.5
+    assert model.train_calls["fliplr"] == 0.5
+    assert model.train_calls["mosaic"] == 1.0
+    assert model.train_calls["mixup"] == 0.15
+    assert model.train_calls["copy_paste"] == 0.2
+
+
+def test_faster_rcnn_augmentation_keeps_boxes_aligned_after_horizontal_flip():
+    torch = pytest.importorskip("torch")
+    from torchvision.transforms import v2
+
+    image = torch.zeros((3, 20, 30), dtype=torch.uint8)
+    target = {
+        "boxes": torch.tensor([[2.0, 4.0, 10.0, 12.0]]),
+        "labels": torch.tensor([1]),
+    }
+
+    augmented_image, augmented_target = _apply_faster_rcnn_augmentation(
+        image, target, transform=v2.RandomHorizontalFlip(p=1.0)
+    )
+
+    assert augmented_image.shape == image.shape
+    assert augmented_target["boxes"].tolist() == [[20.0, 4.0, 28.0, 12.0]]
+
+
+@pytest.mark.parametrize(
+    ("source_size", "processed_size"),
+    [((1200, 600), (1280, 640)), ((600, 1200), (640, 1280)), ((800, 800), (640, 640))],
+)
+def test_faster_rcnn_prediction_keeps_the_preprocessed_short_side(
+    tmp_path: Path, source_size: tuple[int, int], processed_size: tuple[int, int]
+):
+    torch = pytest.importorskip("torch")
+
+    class FakeFasterRCNN:
+        def __init__(self):
+            self.transform = SimpleNamespace(min_size=(800,), max_size=1333)
+            self.batch_shapes = None
+
+        def to(self, device):
+            return self
+
+        def __call__(self, images):
+            self.batch_shapes = [tuple(image.shape[-2:]) for image in images]
+            empty = torch.empty((0, 4))
+            return [
+                {
+                    "boxes": empty,
+                    "scores": torch.empty(0),
+                    "labels": torch.empty(0, dtype=torch.int64),
+                }
+                for _ in images
+            ]
+
+    image = tmp_path / "landscape.png"
+    Image.new("RGB", source_size, color=(10, 20, 30)).save(image)
+    detector = FasterRCNNDetector(tmp_path / "best.pt", ["toad"])
+    model = FakeFasterRCNN()
+    detector._model = model
+
+    assert (
+        list(
+            detector.predict(
+                [image],
+                InferenceConfig(model_id="fixture", device="cpu"),
+            )
+        )
+        == []
+    )
+
+    assert model.transform.min_size == (640,)
+    assert model.transform.max_size > 1280
+    assert model.batch_shapes == [(processed_size[1], processed_size[0])]
 
 
 def test_ultralytics_adapter_passes_resume_checkpoint_to_training(tmp_path: Path):
@@ -288,11 +454,29 @@ def test_faster_rcnn_dataset_spec_is_stable_for_yolo_layout(tmp_path: Path):
     label_dir.mkdir()
     spec = FasterRCNNDatasetSpec.from_mapping(
         tmp_path / "dataset.yaml",
-        {"path": str(tmp_path), "train": "images", "labels": "labels", "names": ["toad"]},
+        {
+            "path": str(tmp_path),
+            "train": "images",
+            "labels": "labels",
+            "names": ["toad"],
+            "short_side_dimension": 640,
+            "training_image_size": 672,
+        },
         expected_classes=["toad"],
     )
     assert spec.image_dir == image_dir.resolve()
     assert spec.label_dir == label_dir.resolve()
+    assert spec.short_side_dimension == 640
+    assert spec.training_image_size == 672
+
+
+def test_faster_rcnn_transform_preserves_preprocessed_training_canvas():
+    model = SimpleNamespace(transform=SimpleNamespace(min_size=(800,), max_size=1333))
+
+    _configure_faster_rcnn_transform(model, 672)
+
+    assert model.transform.min_size == (672,)
+    assert model.transform.max_size > 672
 
 
 def test_faster_rcnn_label_parser_rejects_unknown_classes_and_bad_boxes(tmp_path: Path):

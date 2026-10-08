@@ -146,8 +146,8 @@ def resolve_effective_configuration(
         model_preset = hosted_model.model_id
         architecture = hosted_model.architecture
         classes = hosted_model.source_classes if use_source_classes else tuple(project.classes)
-        preprocessing = hosted_model.preprocessing
-        image_size = hosted_model.inference_image_size
+        preprocessing = project_config.preprocessing
+        image_size = preprocessing.short_side_dimension
         source = "huggingface"
         requested_model = values.pop("model_preset", None)
         if requested_model is not None and requested_model != hosted_model.model_id:

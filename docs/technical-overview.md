@@ -167,7 +167,7 @@ export CVAT_TOKEN='read-from-your-secret-store'
 amphilens cvat projects
 amphilens dataset import-cvat ./my-project --project-id 17
 amphilens train ./my-project --output-dir ./my-project/checkpoints/cycle-0 \
-  --model-preset yolo26-l --max-dimension 640
+  --model-preset yolo26-l --short-side-dimension 640
 ```
 
 The local archive fallback remains available:

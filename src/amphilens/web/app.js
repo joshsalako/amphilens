@@ -293,10 +293,8 @@
 
   function hostedModelDetails(model) {
     if (!model) return "";
-    const dimensions = model.preprocessing?.compatibility_mode === "shortest-side"
-      ? "640 px short side, rounded up to a multiple of 32"
-      : "640 px maximum side, rounded up to a multiple of 32";
-    return `<p class="hosted-model-facts"><strong>${escapeHtml(model.architecture)}</strong><span>${escapeHtml(model.size)}</span><span>Inference size ${formatNumber(model.inference_image_size)} px</span><span>${escapeHtml(dimensions)}</span></p>`;
+    const shortSide = Number(app.project?.preprocessing?.short_side_dimension || 640);
+    return `<p class="hosted-model-facts"><strong>${escapeHtml(model.architecture)}</strong><span>${escapeHtml(model.size)}</span><span>${formatNumber(shortSide)} px short side</span></p>`;
   }
 
   function renderPredictionModelSelection() {
@@ -447,8 +445,7 @@
   }
 
   function trainingImageSize(form) {
-    if (form.elements.training_source?.value !== "amphilens-pretrained") return 640;
-    return hostedModelById(form.elements.hosted_model_id?.value)?.inference_image_size || 640;
+    return Number(app.project?.preprocessing?.short_side_dimension || 640);
   }
 
   function syncTrainingSourceControls(form) {

@@ -29,8 +29,8 @@ considered verified merely because the package builds.
   images, provenance recording, and duplicate-safe initial import.
 - [ ] Exercise CVAT XML, COCO, and YOLO initial-dataset import, including a
   reviewed negative image and an immutable merge.
-- [ ] Exercise the preprocessing fixture: grayscale, aspect-ratio-preserving
-  max-dimension resizing, no upscaling, resize-before-CLAHE, and box remapping.
+- [ ] Exercise the preprocessing fixture: grayscale, short-side resizing with
+  aspect ratio preserved, stride padding, resize-before-CLAHE, and box remapping.
 - [ ] If detector extras changed, run backend contract tests with each
   available runtime and record the exact versions and device.
 - [ ] If training changed, run a short CPU smoke test and a representative GPU
