@@ -76,7 +76,15 @@ def _native_path_picker(kind: str) -> str | None:
                 'default name "selection_queue.csv")'
             ),
         }
-        command = ["osascript", "-e", scripts[kind]]
+        # The local server is often started from Terminal. Activate Finder first
+        # so the native chooser is not left behind the terminal window.
+        command = [
+            "osascript",
+            "-e",
+            'do shell script "/usr/bin/open -a Finder >/dev/null 2>&1 || true"',
+            "-e",
+            scripts[kind],
+        ]
     elif sys.platform == "win32":
         powershell = (
             shutil.which("powershell.exe") or shutil.which("powershell") or shutil.which("pwsh.exe")
