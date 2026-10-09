@@ -350,6 +350,7 @@
     root.innerHTML = `${pageHead("Find wildlife", "Run detection", "Scan an image folder and create a predictions file with reports. This workflow works without annotations or CVAT.")}
       <div class="form-layout"><section class="surface form-panel"><div class="panel-heading"><div><h2>Choose images and model</h2><p>Original image files are never changed.</p></div></div>
         <form class="form-stack" data-form="predict">
+          <div class="field"><label for="prediction-run-name">Prediction run name</label><input id="prediction-run-name" name="run_name" type="text" maxlength="120" placeholder="e.g. Spring survey" required><span class="field-help">This name is saved with the results. The exact model ID is recorded separately.</span></div>
           <div class="field"><label for="prediction-root">Image folder</label>${pathPickerControl("prediction-root", "image_root", "directory", "/path/to/camera-trap-images", { value: currentRoot, required: true, label: "an image folder" })}<span class="field-help">Choose a folder visible to the computer running AmphiLens.</span></div>
           <div class="field"><label for="prediction-model">Model</label><select id="prediction-model" name="model_choice">${modelOptions()}</select></div>
           <div id="prediction-hosted-details" class="hosted-model-panel" hidden></div>
@@ -978,6 +979,7 @@
           });
         }
         payload = {
+          run_name: values.run_name,
           image_root: values.image_root || undefined,
           checkpoint: kind === "checkpoint" ? selection : undefined,
           model_preset: kind === "preset" ? selection : undefined,
@@ -1103,10 +1105,14 @@
     const details = activity.details;
     const downloads = Array.isArray(result.downloads) ? result.downloads : [];
     const paths = result.paths && typeof result.paths === "object" ? Object.entries(result.paths) : [];
+    const prediction = result.prediction && typeof result.prediction === "object" ? result.prediction : null;
+    const collection = result.image_collection && typeof result.image_collection === "object" ? result.image_collection : null;
+    const detectionCount = Number(prediction?.detection_count || 0);
     const progressText = typeof job.progress === "object" ? job.progress.message || job.progress.label || "" : "";
     const progressContext = [activity.device, humanize(details.phase), activity.phasePercent != null ? `Step ${Math.round(activity.phasePercent)}%` : "", activity.epochText, activity.counts, activity.metrics, activity.eta ? `About ${activity.eta} left` : ""].filter(Boolean).join(" · ");
     return `<section class="job-card" aria-label="Job status"><div class="job-head"><div class="job-title"><span class="status-dot" aria-hidden="true"></span>${failed ? "This run needs attention" : canceled ? "Prediction canceled" : completed ? "Run complete" : "Working on your request"}</div><span class="job-state ${completed ? "is-completed" : failed ? "is-failed" : ""}"><span class="status-dot" aria-hidden="true"></span>${escapeHtml(state)}</span></div>
       ${result.message ? `<p class="job-description">${escapeHtml(result.message)}</p>` : progressText ? `<p class="job-description">${escapeHtml(progressText)}</p>` : `<p class="job-description">${failed ? "The job could not be completed." : completed ? "Your files are ready in the project." : "You can continue using AmphiLens while this runs."}</p>`}
+      ${prediction?.run_name ? `<p class="job-description">Prediction run: <strong>${escapeHtml(prediction.run_name)}</strong></p>` : ""}
       ${progressContext ? `<p class="job-description">${escapeHtml(progressContext)}</p>` : ""}
       ${!completed && !failed && !canceled ? `<div class="progress-track" role="progressbar" aria-label="Job progress" aria-valuemin="0" aria-valuemax="100"${hasProgress ? ` aria-valuenow="${Math.round(progress)}"` : ""}><div class="progress-fill${hasProgress ? "" : " indeterminate"}" ${hasProgress ? `style="width:${progress}%"` : ""}></div></div>` : ""}
       ${!completed && !failed && !canceled && app.activeJob?.kind === "predict" && app.jobMeta.get(app.activeJob.id)?.execution === "modal" ? `<button class="button small" type="button" data-cancel-job="${escapeHtml(job.job_id || "")}">Cancel after current batch</button>` : ""}
@@ -1114,6 +1120,7 @@
       ${activityTimeline(job)}
       ${paths.length ? `<ul class="path-list">${paths.map(([label, value]) => `<li><span>${escapeHtml(String(label).replace(/[_-]+/g, " "))}</span><span>${escapeHtml(value)}</span></li>`).join("")}</ul>` : ""}
       ${downloads.length ? `<div class="download-list">${downloads.map((item) => `<a class="download-link" href="${escapeHtml(safeHref(item.url))}" download="${escapeHtml(item.filename || "")}">${escapeHtml(item.label || item.filename || "Download file")}</a>`).join("")}</div>` : ""}
+      ${completed && app.activeJob?.kind === "predict" && prediction ? `<div class="collection-actions"><button class="button small" type="button" data-collect-images="${escapeHtml(job.job_id || "")}" ${detectionCount <= 0 ? "disabled" : ""}>Collect detected images</button>${detectionCount <= 0 ? `<p class="job-description">There are no detected images to collect.</p>` : ""}${collection ? `<p class="job-description">Copied ${formatNumber(collection.copied_count)} image${Number(collection.copied_count) === 1 ? "" : "s"} to <code>${escapeHtml(collection.folder || "")}</code>. ${formatNumber(collection.already_present_count)} already collected; ${formatNumber(collection.missing_count)} source image${Number(collection.missing_count) === 1 ? " was" : "s were"} missing.</p>` : ""}</div>` : ""}
       ${app.activeJob?.kind === "cvat" && (job.result?.task_url || job.result?.cvat_url || job.result?.server_url || app.managedCvatUrl) ? `<div class="download-list"><a class="download-link" href="${escapeHtml(safeHref(job.result?.task_url || job.result?.cvat_url || job.result?.server_url || app.managedCvatUrl))}" target="_blank" rel="noopener noreferrer">Open CVAT</a></div>` : ""}
       ${job.status_offline ? `<button class="button small" type="button" data-poll-job-id="${escapeHtml(job.job_id || "")}">Check status again</button>` : ""}
     </section>`;
@@ -1222,6 +1229,31 @@
     if (pathButton) {
       event.preventDefault();
       await chooseLocalPath(pathButton);
+      return;
+    }
+    const collectButton = event.target.closest("[data-collect-images]");
+    if (collectButton) {
+      event.preventDefault();
+      const jobId = collectButton.dataset.collectImages;
+      const currentJob = app.jobs.get(jobId);
+      collectButton.disabled = true;
+      collectButton.textContent = "Collecting images…";
+      try {
+        const result = await api(`/api/jobs/${encodeURIComponent(jobId)}/collect-images`, {
+          method: "POST",
+          body: JSON.stringify({}),
+        });
+        if (currentJob) {
+          currentJob.result = { ...(currentJob.result || {}), image_collection: result };
+          app.jobs.set(jobId, currentJob);
+        }
+        if (app.activeJob?.id === jobId) renderJobSlot(currentJob);
+        toast(`Copied ${formatNumber(result.copied_count)} detected image${Number(result.copied_count) === 1 ? "" : "s"}.`);
+      } catch (error) {
+        collectButton.disabled = false;
+        collectButton.textContent = "Collect detected images";
+        toast(error.message, true);
+      }
       return;
     }
     const viewButton = event.target.closest("[data-view]");

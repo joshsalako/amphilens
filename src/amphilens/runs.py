@@ -222,7 +222,10 @@ def run_resumable_inference(
         device=getattr(detector, "device_name", config.device),
         effective_batch_size=effective_batch_size or batch_size,
     )
-    predictions_csv = write_predictions_csv(records, artifact / "predictions.csv")
+    run_name = config.metadata.get("run_name") if isinstance(config.metadata, dict) else None
+    predictions_csv = write_predictions_csv(
+        records, artifact / "predictions.csv", run_name=run_name
+    )
     summary = {
         "run_id": config.run_id,
         "model_id": config.model_id,

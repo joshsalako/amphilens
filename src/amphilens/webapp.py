@@ -527,6 +527,7 @@ class PredictionsRequest:
     model_preset: str | None = None
     hosted_model_id: str | None = None
     class_mapping: dict[str, str | None] | None = None
+    run_name: str = ""
 
 
 @dataclass(slots=True)
@@ -668,6 +669,17 @@ def _optional_string(data: dict[str, Any], key: str) -> str | None:
     return _string(data, key)
 
 
+def _prediction_run_name(value: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError("run_name must be text")
+    name = value.strip()
+    if not name:
+        raise ValueError("run_name is required")
+    if len(name) > 120:
+        raise ValueError("run_name must be 120 characters or fewer")
+    return name
+
+
 def _integer(
     data: dict[str, Any], key: str, default: int | None = None, *, minimum: int | None = None
 ) -> int | None:
@@ -737,6 +749,7 @@ def _request(cls, payload: dict[str, Any]):
         )
         return request
     if cls is PredictionsRequest:
+        run_name = _prediction_run_name(_string(payload, "run_name"))
         confidence = _number(payload, "confidence")
         if confidence is not None and confidence > 1:
             raise ValueError("confidence must be between 0 and 1")
@@ -763,6 +776,7 @@ def _request(cls, payload: dict[str, Any]):
         if max_cost_usd is None or not math.isfinite(max_cost_usd):
             raise ValueError("max_cost_usd must be a positive finite number")
         return cls(
+            run_name=run_name,
             image_root=_optional_string(payload, "image_root"),
             checkpoint=_optional_string(payload, "checkpoint"),
             output_dir=_optional_string(payload, "output_dir"),
@@ -1239,6 +1253,7 @@ def run_prediction_job(
     from .reporting import write_report
     from .runs import run_resumable_inference
 
+    run_name = _prediction_run_name(request.run_name)
     project = store.load_manifest()
     image_root = request.image_root or project.image_roots[0]
     image_root_path = Path(image_root).expanduser().resolve()
@@ -1353,6 +1368,8 @@ def run_prediction_job(
                 )
             )
     run_metadata = {
+        "run_name": run_name,
+        "image_root": str(image_root_path),
         "effective_configuration": effective.to_dict(),
         "class_mapping": class_mapping,
         "execution": request.execution,
@@ -1521,6 +1538,14 @@ def run_prediction_job(
                 "csv": str(summary.predictions_csv),
                 "report_markdown": str(markdown),
                 "report_json": str(json_report),
+            },
+            "prediction": {
+                "run_id": summary.run_id,
+                "csv": str(summary.predictions_csv),
+                "image_root": str(image_root_path),
+                "project_root": str(store.root),
+                "detection_count": summary.detection_count,
+                "run_name": run_name,
             },
         },
         downloads=[
@@ -2430,6 +2455,55 @@ def create_app(
             return _json({"detail": "Workflow job is already finished"}, 409)
         return _json({"job_id": job_id, "cancel_requested": True})
 
+    async def job_collect_images(request: Request) -> Response:
+        try:
+            job = app.state.jobs.snapshot(request.path_params["job_id"])
+            if job is None:
+                return _json({"detail": "Workflow job was not found"}, 404)
+            if job["state"] != "completed":
+                return _json(
+                    {"detail": "Images can only be collected from a completed prediction"}, 409
+                )
+            result = job.get("result") or {}
+            prediction = result.get("prediction")
+            if not isinstance(prediction, dict):
+                raise ValueError("This job does not contain prediction results")
+            try:
+                detection_count = int(prediction.get("detection_count", 0))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Prediction detection count is invalid") from exc
+            if detection_count <= 0:
+                raise ValueError("There are no detected images to collect")
+
+            from .core import ProjectStore, _validate_run_id
+            from .inference import collect_prediction_images
+
+            project_root = prediction.get("project_root")
+            run_id = prediction.get("run_id")
+            if not isinstance(project_root, str) or not isinstance(run_id, str) or not run_id:
+                raise ValueError("Prediction project or run information is missing")
+            _validate_run_id(run_id)
+            store = ProjectStore(project_root)
+            store.load_manifest()
+            destination = store.root / "runs" / run_id / "images"
+            if not destination.is_relative_to(store.root):
+                raise ValueError("Prediction run folder is outside the project")
+            summary = collect_prediction_images(
+                prediction.get("csv", ""),
+                prediction.get("image_root", ""),
+                destination,
+            )
+            return _json(
+                {
+                    "folder": str(summary.destination),
+                    "copied_count": summary.copied_count,
+                    "already_present_count": summary.already_present_count,
+                    "missing_count": summary.missing_count,
+                }
+            )
+        except Exception as exc:
+            return _failure(exc)
+
     async def job_download(request: Request) -> Response:
         artifact = app.state.jobs.download(
             request.path_params["job_id"], request.path_params["download_id"]
@@ -2575,6 +2649,7 @@ def create_app(
     app.add_route("/api/cvat/cycle", cvat_cycle, methods=["POST"])
     app.add_route("/api/jobs/{job_id:str}", job_status, methods=["GET"])
     app.add_route("/api/jobs/{job_id:str}/cancel", job_cancel, methods=["POST"])
+    app.add_route("/api/jobs/{job_id:str}/collect-images", job_collect_images, methods=["POST"])
     app.add_route(
         "/api/jobs/{job_id:str}/downloads/{download_id:str}", job_download, methods=["GET"]
     )

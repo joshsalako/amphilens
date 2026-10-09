@@ -173,13 +173,21 @@ amphilens train /path/to/my-project \
 ## 7. Run inference
 
 1. Open **Find wildlife**.
-2. Select the image folder to scan.
-3. Select the model or trained checkpoint.
-4. Set confidence, image size, preprocessing, and device.
-5. Press **Run detection**.
+2. Enter a name for this prediction run.
+3. Select the image folder to scan.
+4. Select the model or trained checkpoint.
+5. Set confidence, image size, preprocessing, and device.
+6. Press **Run detection**.
 
-The output includes predictions CSV, reports, and optional visual evidence.
-Detection boxes are mapped back to the original image dimensions.
+The CSV and run metadata record the run name and the exact selected model ID.
+After the run completes, use **Collect detected images** to copy each unique
+image with a detection into `runs/<run-id>/images/` in the project. The images
+are copied without changing the source folder, and the collection preserves
+the source subfolder structure. Repeating the action skips images already
+collected and reports source images that can no longer be found.
+
+The output also includes reports and optional visual evidence. Detection boxes
+are mapped back to the original image dimensions.
 
 ## 8. Create an active-learning queue
 

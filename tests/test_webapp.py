@@ -64,6 +64,13 @@ def test_static_frontend_and_assets_are_served(client):
     assert client.get("/static/app.js").status_code == 200
     assert 'api("/api/path-picker"' in client.get("/static/app.js").text
     script = client.get("/static/app.js").text
+    assert 'name="run_name" type="text" maxlength="120"' in script
+    assert "run_name: values.run_name" in script
+    assert "Prediction run:" in script
+    assert "Collect detected images" in script
+    assert "/collect-images" in script
+    assert 'detectionCount <= 0 ? "disabled" : ""' in script
+    assert "There are no detected images to collect." in script
     assert 'name="training_source"' in script
     assert 'name="hosted_model_id"' in script
     assert 'app.cvatServerUrl = data.cvat_server_url || app.cvatServerUrl || "";' in script
@@ -184,6 +191,7 @@ def test_api_parses_hosted_inference_and_training_source_fields():
     prediction = webapp._request(
         webapp.PredictionsRequest,
         {
+            "run_name": "Hosted inference",
             "hosted_model_id": "amphilens-yolo26-m",
             "class_mapping": {"Other_Amphibian": None},
         },
@@ -209,11 +217,12 @@ def test_api_parses_hosted_inference_and_training_source_fields():
 def test_prediction_request_parses_local_gpu_batching_and_modal_execution():
     local = webapp._request(
         webapp.PredictionsRequest,
-        {"device": "mps", "batch_size": "auto"},
+        {"run_name": "Local inference", "device": "mps", "batch_size": "auto"},
     )
     cloud = webapp._request(
         webapp.PredictionsRequest,
         {
+            "run_name": "Cloud inference",
             "execution": "modal",
             "gpu": "L4",
             "batch_size": 6,
@@ -233,13 +242,108 @@ def test_prediction_request_parses_local_gpu_batching_and_modal_execution():
     assert cloud.uploads_dataset is True
 
 
+def test_prediction_request_requires_a_trimmed_run_name_of_at_most_120_characters():
+    with pytest.raises(ValueError, match="run_name is required"):
+        webapp._request(webapp.PredictionsRequest, {})
+    with pytest.raises(ValueError, match="run_name is required"):
+        webapp._request(webapp.PredictionsRequest, {"run_name": "   "})
+
+    request = webapp._request(webapp.PredictionsRequest, {"run_name": "  Spring survey  "})
+    assert request.run_name == "Spring survey"
+
+    with pytest.raises(ValueError, match="120 characters"):
+        webapp._request(webapp.PredictionsRequest, {"run_name": "x" * 121})
+
+
+def test_prediction_job_can_collect_unique_images_into_its_project_run_folder(
+    client, jobs, tmp_path
+):
+    import csv
+
+    image_root = tmp_path / "images"
+    image = image_root / "camera" / "frame.jpg"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b"source image")
+    project_root = tmp_path / "project"
+    created = client.post(
+        "/api/projects/create",
+        json={
+            "name": "Survey",
+            "path": str(project_root),
+            "image_root": str(image_root),
+            "classes": ["toad"],
+        },
+    )
+    assert created.status_code == 200, created.text
+
+    predictions_csv = tmp_path / "custom-results" / "predictions.csv"
+    predictions_csv.parent.mkdir()
+    with predictions_csv.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["image_path"])
+        writer.writeheader()
+        writer.writerows([{"image_path": str(image)}, {"image_path": str(image)}])
+
+    # Collection uses server-owned job data, not paths from the browser.
+    job_id = jobs.submit(
+        lambda: JobOutput(
+            result={
+                "prediction": {
+                    "run_id": "predict-yolo26-l-test123",
+                    "csv": str(predictions_csv),
+                    "image_root": str(image_root),
+                    "project_root": str(project_root),
+                    "detection_count": 2,
+                }
+            }
+        )
+    )
+    assert _wait_for_job(client, job_id)["state"] == "completed"
+
+    response = client.post(f"/api/jobs/{job_id}/collect-images")
+    assert response.status_code == 200, response.text
+    result = response.json()
+    destination = project_root / "runs" / "predict-yolo26-l-test123" / "images"
+    assert result["folder"] == str(destination)
+    assert result["copied_count"] == 1
+    assert result["already_present_count"] == 0
+    assert result["missing_count"] == 0
+    assert (destination / "camera" / "frame.jpg").read_bytes() == b"source image"
+    assert image.read_bytes() == b"source image"
+
+    repeated = client.post(f"/api/jobs/{job_id}/collect-images")
+    assert repeated.status_code == 200, repeated.text
+    assert repeated.json()["copied_count"] == 0
+    assert repeated.json()["already_present_count"] == 1
+
+    empty_job_id = jobs.submit(
+        lambda: JobOutput(
+            result={
+                "prediction": {
+                    "run_id": "predict-yolo26-l-empty123",
+                    "csv": str(predictions_csv),
+                    "image_root": str(image_root),
+                    "project_root": str(project_root),
+                    "detection_count": 0,
+                }
+            }
+        )
+    )
+    assert _wait_for_job(client, empty_job_id)["state"] == "completed"
+    no_detections = client.post(f"/api/jobs/{empty_job_id}/collect-images")
+    assert no_detections.status_code == 400
+    assert "no detected images" in no_detections.json()["detail"].lower()
+
+
 def test_prediction_request_rejects_unsupported_modal_gpu_and_batch_size():
     with pytest.raises(ValueError, match="Unsupported Modal GPU"):
-        webapp._request(webapp.PredictionsRequest, {"execution": "modal", "gpu": "invented"})
+        webapp._request(
+            webapp.PredictionsRequest,
+            {"run_name": "Test", "execution": "modal", "gpu": "invented"},
+        )
     with pytest.raises(ValueError, match="between 1 and 32"):
-        webapp._request(webapp.PredictionsRequest, {"batch_size": 33})
+        webapp._request(webapp.PredictionsRequest, {"run_name": "Test", "batch_size": 33})
     with pytest.raises(ValueError, match="spending limit"):
-        webapp._request(webapp.PredictionsRequest, {"execution": "modal"})
+        webapp._request(webapp.PredictionsRequest, {"run_name": "Test", "execution": "modal"})
 
 
 def test_prediction_preflight_reports_bytes_and_only_uses_matching_timing_history(tmp_path):
@@ -294,7 +398,7 @@ def test_modal_prediction_api_requires_preflight_consent_before_job_submission(c
 
     response = client.post(
         "/api/predictions",
-        json={"execution": "modal", "max_cost_usd": 1.0},
+        json={"run_name": "Consent test", "execution": "modal", "max_cost_usd": 1.0},
     )
 
     assert response.status_code == 400
@@ -533,7 +637,10 @@ def test_prediction_job_result_and_downloads_are_allowlisted(client, monkeypatch
             ],
         ),
     )
-    started = client.post("/api/predictions", json={"confidence": 0.4, "device": "cpu"})
+    started = client.post(
+        "/api/predictions",
+        json={"run_name": "Test prediction", "confidence": 0.4, "device": "cpu"},
+    )
     assert started.status_code == 200, started.text
     job = _wait_for_job(client, started.json()["job_id"])
     assert job["state"] == "completed"
@@ -602,6 +709,7 @@ def test_hosted_prediction_maps_labels_and_records_revision(client, tmp_path, mo
     output = run_prediction_job(
         store,
         PredictionsRequest(
+            run_name="Hosted model traceability",
             image_root=str(image_root),
             output_dir=str(tmp_path / "output"),
             hosted_model_id="amphilens-yolo26-m",
@@ -612,13 +720,40 @@ def test_hosted_prediction_maps_labels_and_records_revision(client, tmp_path, mo
             },
         ),
     )
+    other_image_root = tmp_path / "other-images"
+    other_image_root.mkdir()
+    Image.new("RGB", (100, 80), color="gray").save(other_image_root / "sample.jpg")
+    other_output = run_prediction_job(
+        store,
+        PredictionsRequest(
+            run_name="Hosted model traceability",
+            image_root=str(other_image_root),
+            output_dir=str(tmp_path / "other-output"),
+            hosted_model_id="amphilens-yolo26-m",
+            class_mapping={
+                "Other_Amphibian": None,
+                "Small_Mammal": "mammal",
+                "Western_Leopard_Toad": "toad",
+            },
+        ),
+    )
+    assert output.result["prediction"]["run_id"] != other_output.result["prediction"]["run_id"]
 
     run_manifest = json.loads((tmp_path / "output" / "run.json").read_text())
-    predictions = (tmp_path / "output" / "predictions.csv").read_text()
+    predictions_path = tmp_path / "output" / "predictions.csv"
+    predictions = predictions_path.read_text()
     assert observed["image_size"] == 640
     assert ",toad," in predictions
+    assert run_manifest["config"]["metadata"]["run_name"] == "Hosted model traceability"
     assert run_manifest["config"]["metadata"]["class_mapping"]["Other_Amphibian"] is None
     assert run_manifest["config"]["metadata"]["effective_configuration"]["hosted_model"]["revision"]
+    import csv
+
+    with predictions_path.open(newline="", encoding="utf-8") as handle:
+        prediction_row = next(csv.DictReader(handle))
+    assert prediction_row["run_name"] == "Hosted model traceability"
+    assert prediction_row["model_id"] == "amphilens-yolo26-m"
+    assert output.result["prediction"]["run_id"] == prediction_row["run_id"]
     assert output.result["message"].startswith("Processed 1 images")
 
 
@@ -840,6 +975,7 @@ def test_hosted_modal_prediction_sends_project_preprocessing(tmp_path, monkeypat
     run_prediction_job(
         project,
         PredictionsRequest(
+            run_name="Modal image prediction",
             image_root=str(image_root),
             output_dir=str(tmp_path / "output"),
             execution="modal",
