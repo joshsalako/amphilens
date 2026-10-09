@@ -240,7 +240,7 @@ def test_cloud_submit_requires_explicit_consent_before_upload(tmp_path: Path):
     assert transport.submissions == []
 
 
-def test_cloud_training_yaml_supplies_val_key_without_enabling_evaluation(tmp_path: Path):
+def test_cloud_training_yaml_uses_train_monitor_without_final_evaluation(tmp_path: Path):
     store, snapshot = make_project(tmp_path)
     transport = FakeCloudTransport()
     service = CloudTrainingService(store, transport)
@@ -248,9 +248,10 @@ def test_cloud_training_yaml_supplies_val_key_without_enabling_evaluation(tmp_pa
     record = service.submit(
         snapshot_path=snapshot,
         effective_configuration=config(),
-        training_config={"epochs": 1, "image_size": 64, "val": False},
+        training_config={"epochs": 1, "image_size": 64},
         consent=consent(),
         gpu="T4",
+        data_mode="training-monitor",
     )
 
     payload_bytes, _ = next(
@@ -259,8 +260,9 @@ def test_cloud_training_yaml_supplies_val_key_without_enabling_evaluation(tmp_pa
     with zipfile.ZipFile(io.BytesIO(payload_bytes)) as archive:
         dataset = json.loads(archive.read("dataset/dataset.yaml"))
 
-    assert dataset["val"] == dataset["train"] == "images"
-    assert record.training_config["val"] is False
+    assert dataset["train"] == "images/train"
+    assert dataset["val"] == "images/validation"
+    assert record.training_config["val"] is True
     assert record.training_config["evaluation"] == "not evaluated"
 
 
@@ -293,6 +295,57 @@ def test_cloud_run_can_resume_after_restart_and_register_only_local_verified_byt
     indexed = {item.relative_path for item in store.load_artifact_index()}
     assert f"runs/{record.run_id}/results/best.pt" in indexed
     assert f"checkpoints/{record.run_id}/best.pt" in indexed
+
+
+def test_cloud_collect_retries_a_transient_artifact_transfer_failure(tmp_path: Path):
+    store, snapshot = make_project(tmp_path)
+    transport = FakeCloudTransport()
+    service = CloudTrainingService(store, transport)
+    record = service.submit(
+        snapshot_path=snapshot,
+        effective_configuration=config(),
+        training_config={"epochs": 2, "evaluation": "test set"},
+        consent=consent(),
+    )
+    complete_remote_run(transport, transport.submissions[0])
+    original_download = transport.download
+    best_attempts = 0
+    fail_last_once = True
+    successful_best_downloads = 0
+
+    def transient_download_failure(remote_ref, destination):
+        nonlocal best_attempts, fail_last_once, successful_best_downloads
+        if remote_ref == "remote/best.pt" and best_attempts == 0:
+            best_attempts += 1
+            Path(destination).write_bytes(b"transiently corrupted transfer")
+            return
+        if remote_ref == "remote/best.pt":
+            successful_best_downloads += 1
+        if remote_ref == "remote/last.pt" and fail_last_once:
+            fail_last_once = False
+            Path(destination).write_bytes(b"partial transfer")
+            raise OSError("temporary storage DNS failure")
+        original_download(remote_ref, destination)
+
+    transport.download = transient_download_failure
+    service.refresh(record.run_id)
+
+    with pytest.raises(ValueError, match="hash mismatch"):
+        service.collect(record.run_id)
+    assert service.get_job(record.run_id).state == "incomplete"
+
+    with pytest.raises(OSError, match="DNS failure"):
+        service.collect(record.run_id)
+    assert service.get_job(record.run_id).state == "incomplete"
+    assert successful_best_downloads == 1
+
+    verified = service.collect(record.run_id)
+
+    assert verified.state == "verified"
+    assert successful_best_downloads == 1
+    assert not list((store.root / "runs" / record.run_id / "results").glob(".*.tmp"))
+    assert verified.training_config["cloud"]["evaluation"] == "test set"
+    assert verified.training_config["cloud"]["checkpoint_selection"] == "best-validation"
 
 
 def test_identical_cloud_submit_reuses_job_and_detects_record_key_conflicts(tmp_path: Path):

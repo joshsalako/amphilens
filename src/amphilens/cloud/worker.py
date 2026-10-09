@@ -22,7 +22,7 @@ from ..core import CheckpointManifest, ValidationError, atomic_write_json, read_
 from ..models import ModelCatalog, load_detector, load_preset_detector
 from ..preprocessing import PreprocessingConfig
 from ..training import TrainingConfig, train_and_register
-from .constants import VOLUME_MOUNT, VOLUME_NAME
+from .constants import MODEL_CACHE_MOUNT, VOLUME_MOUNT, VOLUME_NAME
 
 
 def _sha256_bytes(content: bytes) -> str:
@@ -181,11 +181,73 @@ def _remote_result(payload: dict[str, Any], state: str, **fields) -> dict[str, A
     }
 
 
+def _load_training_detector(
+    effective: dict[str, Any],
+    *,
+    model_cache_root: str | Path = MODEL_CACHE_MOUNT,
+    model_cache_commit: Callable[[], Any] = lambda: None,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+):
+    """Load the selected training weights, fetching public hosted weights remotely."""
+    hosted_metadata = effective.get("hosted_model")
+    if isinstance(hosted_metadata, dict):
+        from ..models.hosted_models import get_hosted_model
+        from .prediction import download_verified_hosted_checkpoint
+
+        hosted = get_hosted_model(str(effective.get("model_id", "")))
+        expected = hosted.to_summary()
+        for key in (
+            "model_id",
+            "repo_id",
+            "revision",
+            "artifact",
+            "sha256",
+            "architecture",
+            "source_class_order",
+        ):
+            if hosted_metadata.get(key) != expected.get(key):
+                raise ValidationError(
+                    f"Hosted training model metadata does not match the pinned manifest: {key}"
+                )
+        if effective.get("architecture") != hosted.architecture:
+            raise ValidationError("Hosted training architecture does not match the pinned model")
+        if list(effective.get("classes", [])) != list(hosted.source_classes):
+            raise ValidationError("Hosted training classes do not match the pinned model")
+
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "phase": "model_download",
+                    "message": f"Downloading {hosted.repo_id} on the Modal worker",
+                    "phase_progress": None,
+                }
+            )
+        checkpoint = download_verified_hosted_checkpoint(
+            hosted,
+            model_cache_root,
+            cache_commit=model_cache_commit,
+            progress_callback=progress_callback,
+        )
+        return load_detector(
+            checkpoint,
+            architecture=hosted.architecture,
+            classes=list(hosted.source_classes),
+            model_id=hosted.model_id,
+            preprocessing=dict(effective["preprocessing"]),
+        )
+    return load_preset_detector(
+        ModelCatalog().get(str(effective["model_preset"])),
+        classes=list(effective["classes"]),
+    )
+
+
 def run_remote_training(
     payload: dict[str, Any],
     *,
     volume_root: str | Path = VOLUME_MOUNT,
     volume_commit: Callable[[], Any] = lambda: None,
+    model_cache_root: str | Path = MODEL_CACHE_MOUNT,
+    model_cache_commit: Callable[[], Any] = lambda: None,
 ) -> dict[str, Any]:
     """Run one verified cloud training job and return volume-backed artifact references."""
     job_key = str(payload.get("job_key", ""))
@@ -266,6 +328,19 @@ def run_remote_training(
             remote_classes = []
         if remote_classes != classes:
             raise ValidationError("Remote training dataset classes do not match the submitted job")
+        dataset_metadata = {
+            key: dataset_config.get(key)
+            for key in (
+                "data_mode",
+                "validation_strategy",
+                "evaluation",
+                "role_counts",
+                "snapshot_ids",
+                "seed",
+                "short_side_dimension",
+                "preprocessing",
+            )
+        }
 
         base_path = root / "model" / "base.pt"
         base_manifest_path = root / "model" / "checkpoint.json"
@@ -304,9 +379,30 @@ def run_remote_training(
                 preprocessing=dict(effective["preprocessing"]),
             )
         else:
-            detector = load_preset_detector(
-                ModelCatalog().get(str(effective["model_preset"])),
-                classes=classes,
+            def report_model_progress(values: dict[str, Any]) -> None:
+                phase = str(values.get("phase", "model_download"))
+                progress = values.get("phase_progress")
+                _write_progress(
+                    root,
+                    volume_commit,
+                    state="running",
+                    phase=phase,
+                    message=str(values.get("message", "Preparing model weights"))[:500],
+                    progress=0.0,
+                    phase_progress=(
+                        float(progress)
+                        if isinstance(progress, (int, float))
+                        and 0.0 <= float(progress) <= 1.0
+                        else None
+                    ),
+                    gpu=str(payload.get("gpu", "")),
+                )
+
+            detector = _load_training_detector(
+                effective,
+                model_cache_root=model_cache_root,
+                model_cache_commit=model_cache_commit,
+                progress_callback=report_model_progress,
             )
         _write_progress(
             root,
@@ -330,14 +426,14 @@ def run_remote_training(
             run_name=str(payload.get("run_id", "cloud-train")),
             preprocessing=PreprocessingConfig.from_any(effective["preprocessing"]),
             freeze_strategy=str(effective.get("freeze_strategy", "none")),
-            evaluation="not evaluated",
-            metadata={"effective_configuration": effective},
+            evaluation=str(submitted_config.get("evaluation", "not evaluated")),
+            metadata={
+                "effective_configuration": effective,
+                "dataset": dataset_metadata,
+            },
         )
-        if (
-            submitted_config.get("evaluation", "not evaluated") != "not evaluated"
-            or submitted_config.get("val", False) is not False
-        ):
-            raise ValidationError("Cloud training does not evaluate or create validation splits")
+        if submitted_config.get("val", True) is not True:
+            raise ValidationError("Cloud training requires validation data for early stopping")
 
         environment = _environment()
         logs = _TailBuffer(8000)
@@ -367,8 +463,8 @@ def run_remote_training(
             "gpu": str(payload["gpu"]),
             "timeout_seconds": int(payload["timeout_seconds"]),
             "environment": environment,
-            "evaluation": "not evaluated",
-            "checkpoint_selection": "last-no-validation",
+            "evaluation": str(submitted_config.get("evaluation", "not evaluated")),
+            "checkpoint_selection": "best-validation",
         }
 
         def report_progress(values: dict[str, Any]) -> None:

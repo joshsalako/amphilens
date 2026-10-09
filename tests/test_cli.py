@@ -197,17 +197,26 @@ def test_cvat_projects_command_lists_project_metadata(monkeypatch):
 def test_cvat_project_import_command_uses_project_id_and_mapping(monkeypatch, tmp_path: Path):
     observed = {}
 
-    def fake_import(self, project_id, *, class_mapping=None, server_url=None):
+    def fake_import_tasks(
+        self, project_id, *, class_mapping=None, server_url=None, display_name=None
+    ):
         observed.update(
             project_id=project_id,
             class_mapping=class_mapping,
             server_url=server_url,
+            display_name=display_name,
         )
-        return SimpleNamespace(
-            manifest=SimpleNamespace(to_dict=lambda: {"snapshot_id": "snapshot-abc"})
-        )
+        return [
+            SimpleNamespace(
+                root=tmp_path / "snapshot",
+                manifest=SimpleNamespace(to_dict=lambda: {"snapshot_id": "snapshot-abc"}),
+            )
+        ]
 
-    monkeypatch.setattr(cli_module.ProjectStore, "import_cvat_project", fake_import)
+    monkeypatch.setattr(cli_module.ProjectStore, "import_cvat_project_tasks", fake_import_tasks)
+    monkeypatch.setattr(
+        cli_module.ProjectStore, "dataset_display_name", lambda *_args: "Imported task"
+    )
     result = CliRunner().invoke(
         app,
         [
@@ -220,14 +229,18 @@ def test_cvat_project_import_command_uses_project_id_and_mapping(monkeypatch, tm
             "https://cvat.example",
             "--class-mapping",
             '{"western leopard toad":"toad"}',
+            "--name",
+            "Imported task",
         ],
     )
 
     assert result.exit_code == 0, result.stdout
+    assert json.loads(result.stdout)[0]["name"] == "Imported task"
     assert observed == {
         "project_id": "17",
         "class_mapping": {"western leopard toad": "toad"},
         "server_url": "https://cvat.example",
+        "display_name": "Imported task",
     }
 
 

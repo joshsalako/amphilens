@@ -77,7 +77,7 @@ def download_verified_hosted_checkpoint(
         "cache_dir": str(root / "huggingface"),
     }
     if progress_callback is not None:
-        from ..models.hosted_models import _progress_tqdm_class
+        from ..models.hosted_models import _progress_tqdm_class, _supports_tqdm_class
 
         progress_callback(
             {
@@ -85,16 +85,17 @@ def download_verified_hosted_checkpoint(
                 "message": f"Downloading {model.repo_id} from Hugging Face",
             }
         )
-        download_options["tqdm_class"] = _progress_tqdm_class(
-            lambda values: progress_callback(
-                {
-                    "phase": "model_download",
-                    "message": values.get("message", f"Downloading {model.repo_id}"),
-                    "phase_progress": values.get("progress"),
-                }
-            ),
-            model.model_id,
-        )
+        if _supports_tqdm_class(hf_hub_download):
+            download_options["tqdm_class"] = _progress_tqdm_class(
+                lambda values: progress_callback(
+                    {
+                        "phase": "model_download",
+                        "message": values.get("message", f"Downloading {model.repo_id}"),
+                        "phase_progress": values.get("progress"),
+                    }
+                ),
+                model.model_id,
+            )
     downloaded = Path(hf_hub_download(**download_options))
     if not downloaded.is_file() or _sha256_file(downloaded) != model.sha256:
         raise RuntimeError(

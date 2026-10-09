@@ -11,6 +11,7 @@ import shutil
 import tempfile
 import xml.etree.ElementTree as ET
 import zipfile
+from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -285,6 +286,245 @@ class DatasetSnapshot:
         return yaml_path
 
 
+def split_snapshot_images(
+    snapshot: DatasetSnapshot,
+    *,
+    seed: int = 42,
+    allow_image_level_fallback: bool = False,
+) -> dict[str, list[DatasetImage]]:
+    """Create deterministic train/validation/test partitions without group leakage."""
+    images = list(snapshot.manifest.images)
+    if len(images) < 3:
+        raise ValidationError("Automatic 80/10/10 splitting requires at least three images")
+    groups: dict[str, list[DatasetImage]] = defaultdict(list)
+    for image in images:
+        key = Path(image.source_path).parent.as_posix()
+        if key in {"", "."}:
+            key = "__ungrouped__"
+        groups[key].append(image)
+
+    if len(groups) < 3:
+        if not allow_image_level_fallback:
+            raise ValidationError(
+                "This snapshot has fewer than three source groups. Enable image-level splitting "
+                "to continue with an 80/10/10 split."
+            )
+        ordered = sorted(
+            images,
+            key=lambda image: hashlib.sha256(
+                f"{seed}:{image.sha256}".encode()
+            ).hexdigest(),
+        )
+        validation_count = max(1, round(len(ordered) * 0.1))
+        test_count = max(1, round(len(ordered) * 0.1))
+        train_count = len(ordered) - validation_count - test_count
+        if train_count < 1:
+            raise ValidationError(
+                "Image-level 80/10/10 splitting needs enough images for all three partitions"
+            )
+        return {
+            "train": ordered[:train_count],
+            "validation": ordered[train_count : train_count + validation_count],
+            "test": ordered[train_count + validation_count :],
+        }
+
+    target_counts = {
+        "train": len(images) * 0.8,
+        "validation": len(images) * 0.1,
+        "test": len(images) * 0.1,
+    }
+    assigned: dict[str, list[DatasetImage]] = {key: [] for key in target_counts}
+    # Reserve the two smallest independent groups for validation and test so every
+    # role is populated without fragmenting a larger source group.
+    groups_by_size = sorted(
+        groups.items(),
+        key=lambda item: (
+            len(item[1]),
+            hashlib.sha256(f"{seed}:{item[0]}".encode()).hexdigest(),
+        ),
+    )
+    assigned["validation"].extend(groups_by_size[0][1])
+    assigned["test"].extend(groups_by_size[1][1])
+    for _, members in sorted(
+        groups_by_size[2:],
+        key=lambda item: (
+            -len(item[1]),
+            hashlib.sha256(f"{seed}:{item[0]}".encode()).hexdigest(),
+        ),
+    ):
+        candidates = ["train", "validation", "test"]
+        selected = max(
+            candidates,
+            key=lambda role: (target_counts[role] - len(assigned[role])) / target_counts[role],
+        )
+        assigned[selected].extend(members)
+    if any(not assigned[role] for role in assigned):
+        raise ValidationError("Source groups could not produce all three training partitions")
+    return assigned
+
+
+def prepare_yolo_training_dataset(
+    destination: str | Path,
+    *,
+    training_snapshot: DatasetSnapshot,
+    validation_snapshot: DatasetSnapshot | None = None,
+    test_snapshot: DatasetSnapshot | None = None,
+    data_mode: str = "separate-snapshots",
+    seed: int = 42,
+    allow_image_level_fallback: bool = False,
+    preprocessing=None,
+) -> Path:
+    """Materialize role-specific, aspect-preserving images and labels for training."""
+    from .preprocessing import PreprocessingConfig, PreprocessingService
+
+    if data_mode not in {"auto-split", "training-monitor", "separate-snapshots"}:
+        raise ValidationError(f"Unsupported training data mode: {data_mode}")
+    train_images = list(training_snapshot.manifest.images)
+    partitions: dict[str, tuple[DatasetSnapshot, list[DatasetImage]]] = {}
+    if data_mode == "auto-split":
+        split = split_snapshot_images(
+            training_snapshot,
+            seed=seed,
+            allow_image_level_fallback=allow_image_level_fallback,
+        )
+        partitions = {
+            role: (training_snapshot, split[role])
+            for role in ("train", "validation", "test")
+        }
+        validation_strategy = "grouped-80-10-10" if len(
+            {Path(image.source_path).parent.as_posix() for image in train_images}
+        ) >= 3 else "image-level-80-10-10"
+    else:
+        partitions["train"] = (training_snapshot, train_images)
+        if data_mode == "training-monitor":
+            partitions["validation"] = (training_snapshot, train_images)
+            validation_strategy = "training-set-monitor"
+            test_snapshot = None
+        else:
+            validation_strategy = (
+                "separate-snapshot" if validation_snapshot else "training-set-monitor"
+            )
+            if validation_snapshot is not None:
+                partitions["validation"] = (
+                    validation_snapshot,
+                    list(validation_snapshot.manifest.images),
+                )
+            else:
+                partitions["validation"] = (training_snapshot, train_images)
+            if test_snapshot is not None:
+                partitions["test"] = (test_snapshot, list(test_snapshot.manifest.images))
+
+    role_snapshots = {
+        snapshot.manifest.snapshot_id: snapshot
+        for snapshot, _ in partitions.values()
+    }
+    expected_classes = training_snapshot.manifest.classes
+    for role, (snapshot, role_images) in partitions.items():
+        if not role_images:
+            raise ValidationError(f"The {role} dataset contains no images")
+        if snapshot.manifest.classes != expected_classes:
+            raise ValidationError(f"The {role} dataset classes do not match the training snapshot")
+
+    same_snapshot_monitor = (
+        data_mode == "training-monitor"
+        or (data_mode == "separate-snapshots" and validation_snapshot is None)
+    )
+    hashes_by_role = {
+        role: {image.sha256 for image in role_images}
+        for role, (_, role_images) in partitions.items()
+    }
+    role_names = list(hashes_by_role)
+    for index, role in enumerate(role_names):
+        for other in role_names[index + 1 :]:
+            if same_snapshot_monitor and {role, other} == {"train", "validation"}:
+                continue
+            if hashes_by_role[role] & hashes_by_role[other]:
+                raise ValidationError(
+                    f"The {role} and {other} datasets contain duplicate images"
+                )
+
+    config = PreprocessingConfig.from_any(preprocessing)
+    service = PreprocessingService(config)
+    canvas_size = max(snapshot.training_canvas_size(config) for snapshot in role_snapshots.values())
+    target = Path(destination).expanduser().resolve()
+    if target.exists():
+        raise ValidationError(f"Prepared dataset destination already exists: {target}")
+    image_roots = {role: target / "images" / role for role in partitions}
+    label_roots = {role: target / "labels" / role for role in partitions}
+    for role in partitions:
+        image_roots[role].mkdir(parents=True)
+        label_roots[role].mkdir(parents=True)
+
+    role_counts: dict[str, int] = {}
+    for role, (snapshot, role_images) in partitions.items():
+        used_names: set[str] = set()
+        for item in role_images:
+            source = snapshot.root / item.relative_path
+            transformed = service.transform(source)
+            if transformed.original_size != (item.width, item.height):
+                raise ValidationError(
+                    f"Dataset image dimensions changed after import: {item.relative_path}"
+                )
+            transformed = transformed.pad_to(canvas_size, canvas_size)
+            filename = Path(item.relative_path).name
+            if filename in used_names:
+                filename = f"{Path(filename).stem}_{item.sha256[:10]}{Path(filename).suffix}"
+            used_names.add(filename)
+            transformed.image.save(image_roots[role] / filename)
+            width, height = transformed.processed_size
+            lines = []
+            for annotation in item.annotations:
+                x1, y1, x2, y2 = transformed.map_box_to_processed(annotation.bbox_xyxy)
+                box_width = x2 - x1
+                box_height = y2 - y1
+                lines.append(
+                    f"{annotation.class_id} {(x1 + box_width / 2) / width:.6f} "
+                    f"{(y1 + box_height / 2) / height:.6f} {box_width / width:.6f} "
+                    f"{box_height / height:.6f}"
+                )
+            (label_roots[role] / f"{Path(filename).stem}.txt").write_text(
+                "\n".join(lines) + ("\n" if lines else ""), encoding="utf-8"
+            )
+        role_counts[role] = len(role_images)
+
+    dataset_config: dict[str, Any] = {
+        "path": str(target),
+        "train": "images/train",
+        "val": "images/validation",
+        "labels": "labels",
+        "names": {index: name for index, name in enumerate(expected_classes)},
+        "validation_strategy": validation_strategy,
+        "evaluation": "test set available" if "test" in partitions else "not evaluated",
+        "preprocessing": config.to_dict(),
+        "short_side_dimension": config.short_side_dimension,
+        "training_image_size": canvas_size,
+        "role_counts": role_counts,
+        "snapshot_ids": {
+            role: snapshot.manifest.snapshot_id for role, (snapshot, _) in partitions.items()
+        },
+        "data_mode": data_mode,
+        "seed": seed,
+    }
+    if "test" in partitions:
+        dataset_config["test"] = "images/test"
+    target.mkdir(parents=True, exist_ok=True)
+    yaml_path = target / "dataset.yaml"
+    yaml_path.write_text(json.dumps(dataset_config, indent=2) + "\n", encoding="utf-8")
+    atomic_write_json(
+        target / "split.json",
+        {
+            "data_mode": data_mode,
+            "validation_strategy": validation_strategy,
+            "snapshot_ids": dataset_config["snapshot_ids"],
+            "role_counts": role_counts,
+            "seed": seed,
+            "preprocessing": config.to_dict(),
+            "short_side_dimension": config.short_side_dimension,
+        },
+    )
+    return yaml_path
+
+
 class DatasetImporter:
     """Import CVAT XML, COCO, or YOLO ZIP archives into immutable snapshots."""
 
@@ -296,6 +536,7 @@ class DatasetImporter:
         classes: Iterable[str],
         class_mapping: dict[str, str] | None = None,
         source_provenance: dict[str, Any] | None = None,
+        snapshot_id: str | None = None,
     ) -> DatasetSnapshot:
         archive = Path(archive_path).expanduser().resolve()
         if not archive.is_file() or archive.suffix.lower() != ".zip":
@@ -304,7 +545,13 @@ class DatasetImporter:
         if target.exists():
             raise ValidationError(f"Dataset snapshot destination already exists: {target}")
         target.parent.mkdir(parents=True, exist_ok=True)
-        target_id = f"snapshot-{_sha256(archive)[:12]}"
+        target_id = snapshot_id or f"snapshot-{_sha256(archive)[:12]}"
+        if (
+            Path(target_id).name != target_id
+            or target_id in {".", ".."}
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,119}", target_id)
+        ):
+            raise ValidationError("Dataset snapshot ID contains unsupported characters")
         target = target.parent / target_id
         if target.exists():
             raise ValidationError(f"Dataset snapshot already exists: {target}")

@@ -6,7 +6,7 @@ import math
 import os
 import tempfile
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -199,6 +199,10 @@ class FasterRCNNDatasetSpec:
     classes: tuple[str, ...]
     short_side_dimension: int = 640
     training_image_size: int | None = None
+    validation_image_dir: Path | None = None
+    validation_label_dir: Path | None = None
+    test_image_dir: Path | None = None
+    test_label_dir: Path | None = None
 
     @classmethod
     def from_mapping(
@@ -223,7 +227,22 @@ class FasterRCNNDatasetSpec:
         label_value = mapping.get("labels", "labels")
         if not isinstance(label_value, str):
             raise ValidationError("Dataset labels must be one directory")
-        label_dir = (root / label_value).resolve()
+        label_root = (root / label_value).resolve()
+        label_dir = label_root / "train" if (label_root / "train").is_dir() else label_root
+        validation_value = mapping.get("val")
+        test_value = mapping.get("test")
+        if not isinstance(validation_value, str):
+            raise ValidationError("Faster R-CNN training requires a validation directory")
+        validation_image_dir = (root / validation_value).resolve()
+        validation_label_dir = (
+            label_root / "validation" if (label_root / "validation").is_dir() else label_root
+        )
+        test_image_dir = (root / test_value).resolve() if isinstance(test_value, str) else None
+        test_label_dir = (
+            label_root / "test"
+            if test_image_dir is not None and (label_root / "test").is_dir()
+            else label_root if test_image_dir is not None else None
+        )
         classes = _classes_from_names(mapping.get("names"))
         short_side_dimension = mapping.get("short_side_dimension", 640)
         training_image_size = mapping.get("training_image_size")
@@ -241,6 +260,12 @@ class FasterRCNNDatasetSpec:
             raise ValidationError(f"Dataset image directory does not exist: {image_dir}")
         if not label_dir.is_dir():
             raise ValidationError(f"Dataset label directory does not exist: {label_dir}")
+        if not validation_image_dir.is_dir() or not validation_label_dir.is_dir():
+            raise ValidationError("Faster R-CNN validation images and labels are required")
+        if test_image_dir is not None and not test_image_dir.is_dir():
+            raise ValidationError(
+                f"Faster R-CNN test image directory does not exist: {test_image_dir}"
+            )
         return cls(
             yaml_path,
             root,
@@ -249,6 +274,10 @@ class FasterRCNNDatasetSpec:
             tuple(classes),
             short_side_dimension,
             training_image_size,
+            validation_image_dir,
+            validation_label_dir,
+            test_image_dir,
+            test_label_dir,
         )
 
     @classmethod
@@ -398,6 +427,18 @@ class FasterRCNNTrainer:
         config["training_image_size"] = spec.training_image_size or spec.short_side_dimension
         augment = bool(config.get("augment", True))
         dataset = FasterRCNNDataset(spec, augment=augment)
+        validation_spec = replace(
+            spec,
+            image_dir=spec.validation_image_dir or spec.image_dir,
+            label_dir=spec.validation_label_dir or spec.label_dir,
+        )
+        validation_dataset = FasterRCNNDataset(validation_spec, augment=False)
+        test_dataset = None
+        if spec.test_image_dir is not None and spec.test_label_dir is not None:
+            test_dataset = FasterRCNNDataset(
+                replace(spec, image_dir=spec.test_image_dir, label_dir=spec.test_label_dir),
+                augment=False,
+            )
         config["augmentation"] = {
             "backend": "torchvision-v2",
             "enabled": augment,
@@ -422,13 +463,7 @@ class FasterRCNNTrainer:
         in_features = model.roi_heads.box_predictor.cls_score.in_features
         model.roi_heads.box_predictor = FastRCNNPredictor(in_features, len(self.classes) + 1)
         model.to(device)
-        optimizer = torch.optim.SGD(
-            model.parameters(),
-            lr=float(config.get("learning_rate", 0.005)),
-            momentum=float(config.get("momentum", 0.9)),
-            weight_decay=float(config.get("weight_decay", 0.0005)),
-        )
-        start_epoch = 0
+        optimizer = None
         if initial_checkpoint and not resume_from:
             initial_state = torch.load(
                 Path(initial_checkpoint), map_location="cpu", weights_only=False
@@ -464,71 +499,167 @@ class FasterRCNNTrainer:
             state = torch.load(Path(resume_from), map_location="cpu", weights_only=False)
             if isinstance(state, dict) and "model_state_dict" in state:
                 model.load_state_dict(state["model_state_dict"])
-                if "optimizer_state_dict" in state:
-                    optimizer.load_state_dict(state["optimizer_state_dict"])
-                start_epoch = int(state.get("epoch", -1)) + 1
             else:
                 model.load_state_dict(state)
-        loader = DataLoader(
-            dataset,
-            batch_size=int(config.get("batch_size", 2)),
-            shuffle=True,
-            num_workers=int(config.get("num_workers", 0)),
-            collate_fn=detection_collate,
+        batch_size = int(config.get("batch_size", 16))
+        if batch_size <= 0:
+            raise ValidationError("batch_size must be positive")
+        loader_options = {
+            "batch_size": batch_size,
+            "num_workers": int(config.get("num_workers", 0)),
+            "collate_fn": detection_collate,
+        }
+        train_loader = DataLoader(dataset, shuffle=True, **loader_options)
+        validation_loader = DataLoader(validation_dataset, shuffle=False, **loader_options)
+        test_loader = (
+            DataLoader(test_dataset, shuffle=False, **loader_options) if test_dataset else None
         )
-        epochs = int(config.get("epochs", 1))
-        if epochs <= 0:
+        epochs_per_phase = int(config.get("epochs", 100))
+        if epochs_per_phase <= 0:
             raise ValidationError("epochs must be positive")
-        best_loss = float("inf")
-        metrics: list[dict[str, float | int]] = []
-        for epoch in range(start_epoch, start_epoch + epochs):
+        patience = int(config.get("patience", 25))
+        phase_specs = (
+            [("backbone-frozen", True, float(config.get("phase1_learning_rate", 0.0001))),
+             ("full-fine-tuning", False, float(config.get("phase2_learning_rate", 0.00005)))]
+            if config.get("freeze_strategy", "paper-phased") == "paper-phased"
+            else [("training", False, float(config.get("learning_rate", 0.0001)))]
+        )
+        phase_history: list[dict[str, Any]] = []
+
+        def run_loss(loader, *, training: bool) -> float:
             model.train()
-            total_loss = 0.0
-            for images, targets in loader:
-                image_batch = [image.to(device) for image in images]
-                target_batch = [
-                    {key: value.to(device) for key, value in target.items()} for target in targets
-                ]
-                losses = model(image_batch, target_batch)
-                loss = sum(loss_value for loss_value in losses.values())
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-                total_loss += float(loss.detach().cpu())
-            average_loss = total_loss / len(loader)
-            metrics.append({"epoch": epoch, "train_loss": average_loss})
-            state = {
-                "model_state_dict": model.state_dict(),
-                "optimizer_state_dict": optimizer.state_dict(),
-                "epoch": epoch,
-                "classes": self.classes,
-                "architecture": "faster_rcnn",
-            }
-            _save_torch_checkpoint(torch, output / "last.pt", state)
-            if average_loss <= best_loss:
-                best_loss = average_loss
-                _save_torch_checkpoint(torch, output / "best.pt", state)
-            if progress_callback is not None:
-                completed = epoch - start_epoch + 1
-                progress_callback(
-                    {
-                        "phase": "training",
-                        "message": f"Epoch {completed} of {epochs}",
-                        "epoch": completed,
-                        "epochs": epochs,
-                        "progress": min(1.0, completed / epochs),
-                        "train_loss": average_loss,
-                        "metrics": {"train_loss": average_loss},
-                        "device": str(device),
-                    }
+            if not training:
+                for module in model.modules():
+                    if isinstance(module, torch.nn.modules.batchnorm._BatchNorm):
+                        module.eval()
+            total = 0.0
+            batches = 0
+            context = torch.enable_grad() if training else torch.no_grad()
+            with context:
+                for images, targets in loader:
+                    image_batch = [image.to(device) for image in images]
+                    target_batch = [
+                        {key: value.to(device) for key, value in target.items()}
+                        for target in targets
+                    ]
+                    losses = model(image_batch, target_batch)
+                    loss = sum(loss_value for loss_value in losses.values())
+                    if training:
+                        optimizer.zero_grad()
+                        loss.backward()
+                        optimizer.step()
+                    total += float(loss.detach().cpu())
+                    batches += 1
+            return total / max(1, batches)
+
+        for phase_index, (phase_name, freeze_backbone, learning_rate) in enumerate(phase_specs, 1):
+            if phase_index > 1:
+                previous_best = output / f"phase-{phase_index - 1}" / "best.pt"
+                phase_state = torch.load(previous_best, map_location="cpu", weights_only=False)
+                model.load_state_dict(phase_state["model_state_dict"])
+            for parameter in model.parameters():
+                parameter.requires_grad_(True)
+            if freeze_backbone:
+                for parameter in model.backbone.parameters():
+                    parameter.requires_grad_(False)
+            optimizer = torch.optim.SGD(
+                [parameter for parameter in model.parameters() if parameter.requires_grad],
+                lr=learning_rate,
+                momentum=float(config.get("momentum", 0.9)),
+                weight_decay=float(config.get("weight_decay", 0.0005)),
+            )
+            phase_dir = output / f"phase-{phase_index}"
+            phase_dir.mkdir(parents=True, exist_ok=True)
+            best_validation_loss = float("inf")
+            epochs_without_improvement = 0
+            epochs_run = 0
+            epoch_metrics: list[dict[str, float | int]] = []
+            for epoch in range(1, epochs_per_phase + 1):
+                train_loss = run_loss(train_loader, training=True)
+                validation_loss = run_loss(validation_loader, training=False)
+                if not math.isfinite(train_loss) or not math.isfinite(validation_loss):
+                    raise ValidationError(
+                        f"{phase_name} produced a non-finite training or validation loss"
+                    )
+                epoch_metrics.append(
+                    {"epoch": epoch, "train_loss": train_loss, "validation_loss": validation_loss}
                 )
+                state = {
+                    "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "epoch": epoch,
+                    "classes": self.classes,
+                    "architecture": "faster_rcnn",
+                    "phase": phase_name,
+                    "validation_loss": validation_loss,
+                }
+                _save_torch_checkpoint(torch, phase_dir / "last.pt", state)
+                _save_torch_checkpoint(torch, output / "last.pt", state)
+                if validation_loss < best_validation_loss:
+                    best_validation_loss = validation_loss
+                    epochs_without_improvement = 0
+                    _save_torch_checkpoint(torch, phase_dir / "best.pt", state)
+                    _save_torch_checkpoint(torch, output / "best.pt", state)
+                else:
+                    epochs_without_improvement += 1
+                epochs_run = epoch
+                if progress_callback is not None:
+                    progress_callback(
+                        {
+                            "phase": phase_name,
+                            "training_phase": phase_name,
+                            "phase_index": phase_index,
+                            "phase_count": len(phase_specs),
+                            "message": (
+                                f"{phase_name.replace('-', ' ').title()} · epoch "
+                                f"{epoch} of {epochs_per_phase}"
+                            ),
+                            "epoch": epoch,
+                            "epochs": epochs_per_phase,
+                            "phase_progress": epoch / epochs_per_phase,
+                            "progress": ((phase_index - 1) + epoch / epochs_per_phase)
+                            / len(phase_specs),
+                            "metrics": {
+                                "train_loss": train_loss,
+                                "validation_loss": validation_loss,
+                            },
+                            "device": str(device),
+                        }
+                    )
+                if patience > 0 and epochs_without_improvement >= patience:
+                    break
+            phase_history.append(
+                {
+                    "phase": phase_name,
+                    "backbone_frozen": freeze_backbone,
+                    "learning_rate": learning_rate,
+                    "max_epochs": epochs_per_phase,
+                    "epochs_run": epochs_run,
+                    "patience": patience,
+                    "best_validation_loss": best_validation_loss,
+                    "epochs": epoch_metrics,
+                }
+            )
+        test_loss = None
+        if test_loader is not None:
+            best_state = torch.load(output / "best.pt", map_location="cpu", weights_only=False)
+            model.load_state_dict(best_state["model_state_dict"])
+            test_loss = run_loss(test_loader, training=False)
+        config["training_phases"] = [
+            {key: value for key, value in phase.items() if key != "epochs"}
+            for phase in phase_history
+        ]
+        config["evaluation"] = "test set" if test_loss is not None else "not evaluated"
+        metrics_payload = {
+            "evaluation": config["evaluation"],
+            "validation_strategy": "validation loss with early stopping",
+            "training_phases": phase_history,
+            "test_loss": test_loss,
+            "classes": self.classes,
+            "augmentation": config["augmentation"],
+        }
         atomic_write_json(
             output / "metrics.json",
-            {
-                "evaluation": "not evaluated",
-                "epochs": metrics,
-                "classes": self.classes,
-                "augmentation": config["augmentation"],
-            },
+            metrics_payload,
         )
-        return output / _selected_checkpoint_name(config)
+        return output / "best.pt"

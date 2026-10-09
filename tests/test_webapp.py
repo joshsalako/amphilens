@@ -442,6 +442,9 @@ def test_bootstrap_and_project_create_open_close_persist(client, tmp_path):
         "amphilens-yolo26-m",
         "amphilens-rtdetr-l",
         "amphilens-faster-rcnn-resnet50",
+        "amphilens-yolo26-m-domain",
+        "amphilens-rtdetr-l-domain",
+        "amphilens-faster-rcnn-resnet50-domain",
     }
     assert all(len(item["revision"]) == 40 for item in bootstrap["hosted_models"])
 
@@ -654,7 +657,11 @@ def test_hosted_training_uses_selected_architecture_checkpoint_and_target_classe
     monkeypatch.setattr(
         hosted, "download_hosted_checkpoint", lambda *args, **kwargs: hosted_checkpoint
     )
-    monkeypatch.setattr(webapp, "_project_snapshot", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(
+        webapp,
+        "_training_snapshots",
+        lambda *_args, **_kwargs: (object(), None, None),
+    )
 
     def load_detector(checkpoint, **kwargs):
         observed["checkpoint"] = checkpoint
@@ -666,7 +673,10 @@ def test_hosted_training_uses_selected_architecture_checkpoint_and_target_classe
         manifest_path = Path(output_dir) / "checkpoint.json"
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
         manifest_path.write_text("{}", encoding="utf-8")
-        return SimpleNamespace(checkpoint=trained_checkpoint)
+        return SimpleNamespace(
+            checkpoint=trained_checkpoint,
+            manifest=SimpleNamespace(training_config={"evaluation": "not evaluated"}),
+        )
 
     monkeypatch.setattr(models, "load_detector", load_detector)
     monkeypatch.setattr(
@@ -693,6 +703,95 @@ def test_hosted_training_uses_selected_architecture_checkpoint_and_target_classe
     assert observed["effective"]["image_size"] == 640
     assert observed["effective"]["hosted_model"]["revision"]
     assert output.result["message"].startswith("Training finished from amphilens-pretrained:")
+
+
+def test_cloud_hosted_training_defers_checkpoint_download_to_remote_worker(monkeypatch):
+    import amphilens.models.hosted_models as hosted
+    from amphilens.webapp import CloudTrainingRequest
+
+    monkeypatch.setattr(
+        hosted,
+        "download_hosted_checkpoint",
+        lambda *_args, **_kwargs: pytest.fail("cloud training must download weights remotely"),
+    )
+
+    source, model, checkpoint, manifest = webapp._training_checkpoint(
+        CloudTrainingRequest(
+            snapshot_path="unused",
+            training_source="amphilens-pretrained",
+            hosted_model_id="amphilens-yolo26-m",
+        ),
+        download_hosted=False,
+    )
+
+    assert source == "amphilens-pretrained"
+    assert model.model_id == "amphilens-yolo26-m"
+    assert checkpoint == ""
+    assert manifest is None
+
+
+def test_cloud_training_submits_hosted_model_without_local_checkpoint(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from amphilens.models.hosted_models import get_hosted_model
+    from amphilens.webapp import CloudTrainingRequest, run_cloud_training_job
+
+    hosted = get_hosted_model("amphilens-yolo26-m")
+    project_path = tmp_path / "project"
+    image_root = tmp_path / "images"
+    image_root.mkdir()
+    store = ProjectStore(project_path)
+    store.create(ProjectManifest.create("study", [image_root], list(hosted.source_classes)))
+    snapshots = tuple(
+        SimpleNamespace(
+            root=tmp_path / snapshot_id,
+            manifest=SimpleNamespace(snapshot_id=snapshot_id, classes=list(hosted.source_classes))
+        )
+        for snapshot_id in ("train-id", "validation-id", "test-id")
+    )
+    observed = {}
+
+    class FakeService:
+        def submit(self, **kwargs):
+            observed.update(kwargs)
+            return SimpleNamespace(run_id="cloud-test", to_dict=lambda: {"run_id": "cloud-test"})
+
+    monkeypatch.setattr(webapp, "_cloud_service", lambda *_args: (FakeService(), object()))
+    monkeypatch.setattr(webapp, "_training_snapshots", lambda *_args: snapshots)
+
+    import amphilens.models.hosted_models as hosted_module
+
+    monkeypatch.setattr(
+        hosted_module,
+        "download_hosted_checkpoint",
+        lambda *_args, **_kwargs: pytest.fail("Modal must fetch public weights remotely"),
+    )
+
+    response = run_cloud_training_job(
+        store,
+        CloudTrainingRequest(
+            snapshot_path=str(tmp_path / "train"),
+            gpu="T4",
+            epochs=1,
+            image_size=640,
+            training_source="amphilens-pretrained",
+            hosted_model_id=hosted.model_id,
+            validation_snapshot_path=str(tmp_path / "validation"),
+            test_snapshot_path=str(tmp_path / "test"),
+            patience=25,
+            batch_size=1,
+            estimated_usd=0.04,
+            max_cost_usd=2.0 / 3.0,
+            acknowledged=True,
+            uploads_dataset=True,
+        ),
+        object(),
+    )
+
+    assert response["job"]["run_id"] == "cloud-test"
+    assert observed["base_checkpoint"] is None
+    assert observed["base_manifest"] is None
+    assert observed["effective_configuration"]["hosted_model"]["revision"]
 
 
 def test_hosted_modal_prediction_sends_project_preprocessing(tmp_path, monkeypatch):

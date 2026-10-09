@@ -691,18 +691,64 @@ class ProjectStore:
         *,
         class_mapping: dict[str, str] | None = None,
         source_provenance: dict[str, Any] | None = None,
+        display_name: str | None = None,
+        snapshot_id: str | None = None,
     ):
         """Import an initial CVAT/COCO/YOLO archive under this project."""
         from .dataset import DatasetImporter
 
         manifest = self.load_manifest()
-        return DatasetImporter().import_archive(
+        snapshot = DatasetImporter().import_archive(
             archive_path,
             self.root / "datasets" / "incoming",
             classes=manifest.classes,
             class_mapping=class_mapping,
             source_provenance=source_provenance,
+            snapshot_id=snapshot_id,
         )
+        fallback = Path(archive_path).expanduser().stem or "Imported dataset"
+        self.set_dataset_display_name(snapshot.root, display_name or fallback)
+        return snapshot
+
+    def dataset_display_name(self, snapshot_path: str | Path) -> str:
+        snapshot = self._project_dataset_snapshot(snapshot_path)
+        catalog_path = self.root / "datasets" / "catalog.json"
+        if not catalog_path.is_file():
+            return snapshot.manifest.source_provenance.get("project_name") or Path(
+                snapshot.manifest.source_archive
+            ).stem or snapshot.manifest.snapshot_id
+        catalog = read_json(catalog_path)
+        names = catalog.get("display_names", {}) if isinstance(catalog, dict) else {}
+        value = names.get(snapshot.manifest.snapshot_id) if isinstance(names, dict) else None
+        return value or snapshot.manifest.source_provenance.get("project_name") or Path(
+            snapshot.manifest.source_archive
+        ).stem or snapshot.manifest.snapshot_id
+
+    def set_dataset_display_name(self, snapshot_path: str | Path, display_name: str) -> str:
+        snapshot = self._project_dataset_snapshot(snapshot_path)
+        selected = " ".join(str(display_name).split())
+        if not selected or len(selected) > 120:
+            raise ValidationError("Snapshot name must contain 1 to 120 characters")
+        catalog_path = self.root / "datasets" / "catalog.json"
+        catalog = read_json(catalog_path) if catalog_path.is_file() else {}
+        names = catalog.get("display_names", {}) if isinstance(catalog, dict) else {}
+        if not isinstance(names, dict):
+            names = {}
+        names[snapshot.manifest.snapshot_id] = selected
+        atomic_write_json(
+            catalog_path,
+            {"schema_version": 1, "display_names": names},
+        )
+        return selected
+
+    def _project_dataset_snapshot(self, snapshot_path: str | Path):
+        from .dataset import DatasetSnapshot
+
+        snapshot = DatasetSnapshot.load(snapshot_path)
+        dataset_root = (self.root / "datasets").resolve()
+        if not snapshot.root.is_relative_to(dataset_root):
+            raise ValidationError("Choose a dataset snapshot saved in the active project")
+        return snapshot
 
     def import_cvat_project(
         self,
@@ -719,6 +765,25 @@ class ProjectStore:
         return CVATProjectImportService(self, transport).import_project(
             project_id,
             class_mapping=class_mapping,
+        )
+
+    def import_cvat_project_tasks(
+        self,
+        project_id: str,
+        *,
+        class_mapping: dict[str, str] | None = None,
+        server_url: str | None = None,
+        display_name: str | None = None,
+    ):
+        """Import each CVAT task list as a separately selectable dataset snapshot."""
+        from .annotations.initial import CVATProjectImportService
+        from .annotations.managed import CVATSdkTransport
+
+        transport = CVATSdkTransport(server_url=server_url)
+        return CVATProjectImportService(self, transport).import_project_tasks(
+            project_id,
+            class_mapping=class_mapping,
+            display_name=display_name,
         )
 
     def merge_dataset_snapshot(self, incoming, parent=None):

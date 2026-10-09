@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .core import CheckpointManifest, ValidationError, atomic_write_json, read_json
-from .dataset import DatasetSnapshot
+from .dataset import DatasetSnapshot, prepare_yolo_training_dataset, split_snapshot_images
 from .preprocessing import PreprocessingConfig
 
 
@@ -25,7 +25,7 @@ class TrainingConfig:
     preprocessing: PreprocessingConfig | dict[str, Any] | str = field(
         default_factory=PreprocessingConfig
     )
-    freeze_strategy: str = "none"
+    freeze_strategy: str = "paper-phased"
     evaluation: str = "not evaluated"
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -171,28 +171,80 @@ def train_snapshot_and_register(
     output_dir: str | Path,
     config: TrainingConfig,
     preprocessing: PreprocessingConfig | dict[str, Any] | str | None = None,
+    validation_snapshot: DatasetSnapshot | None = None,
+    test_snapshot: DatasetSnapshot | None = None,
+    data_mode: str = "separate-snapshots",
+    allow_image_level_fallback: bool = False,
     resume_from: CheckpointManifest | None = None,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
     extra_training_config: dict[str, Any] | None = None,
 ) -> TrainingResult:
-    """Prepare an immutable snapshot and train through the existing adapter contract."""
+    """Prepare immutable data roles and train through the detector adapter contract."""
     output = Path(output_dir).expanduser().resolve()
     selected = PreprocessingConfig.from_any(preprocessing or config.preprocessing)
+    if data_mode == "auto-split":
+        split = split_snapshot_images(
+            snapshot,
+            seed=config.seed,
+            allow_image_level_fallback=allow_image_level_fallback,
+        )
+        role_counts = {role: len(images) for role, images in split.items()}
+    elif data_mode == "training-monitor":
+        image_count = len(snapshot.manifest.images)
+        role_counts = {"train": image_count, "validation": image_count}
+    else:
+        role_counts = {
+            "train": len(snapshot.manifest.images),
+            "validation": (
+                len(validation_snapshot.manifest.images)
+                if validation_snapshot is not None
+                else len(snapshot.manifest.images)
+            ),
+        }
+        if test_snapshot is not None:
+            role_counts["test"] = len(test_snapshot.manifest.images)
     if progress_callback is not None:
         progress_callback(
             {
                 "phase": "dataset_preparation",
-                "message": f"Preparing {len(snapshot.manifest.images)} labeled images",
+                "message": (
+                    f"Preparing {sum(role_counts.values())} images for training and evaluation"
+                ),
                 "completed": 0,
-                "total": len(snapshot.manifest.images),
+                "total": sum(role_counts.values()),
                 "progress": 0.0,
             }
         )
     try:
-        dataset_yaml = snapshot.to_yolo_dataset(
+        dataset_yaml = prepare_yolo_training_dataset(
             output / "prepared-dataset",
+            training_snapshot=snapshot,
+            validation_snapshot=validation_snapshot,
+            test_snapshot=test_snapshot,
+            data_mode=data_mode,
+            seed=config.seed,
+            allow_image_level_fallback=allow_image_level_fallback,
             preprocessing=selected,
         )
+        dataset_metadata = read_json(dataset_yaml)
+        config.evaluation = (
+            "test set"
+            if "test" in dataset_metadata.get("role_counts", {})
+            else "not evaluated"
+        )
+        config.metadata["dataset"] = {
+            key: dataset_metadata.get(key)
+            for key in (
+                "data_mode",
+                "validation_strategy",
+                "evaluation",
+                "role_counts",
+                "snapshot_ids",
+                "seed",
+                "short_side_dimension",
+                "preprocessing",
+            )
+        }
     except Exception as exc:
         if progress_callback is not None:
             progress_callback(
@@ -208,8 +260,8 @@ def train_snapshot_and_register(
             {
                 "phase": "dataset_preparation",
                 "message": "Labeled images are ready for training",
-                "completed": len(snapshot.manifest.images),
-                "total": len(snapshot.manifest.images),
+                "completed": sum(dataset_metadata["role_counts"].values()),
+                "total": sum(dataset_metadata["role_counts"].values()),
                 "progress": 1.0,
             }
         )

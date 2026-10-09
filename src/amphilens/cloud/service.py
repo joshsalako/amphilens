@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from ..core import CheckpointManifest, ProjectStore, ValidationError, atomic_write_json, read_json
-from ..dataset import DatasetSnapshot
+from ..dataset import DatasetSnapshot, prepare_yolo_training_dataset, split_snapshot_images
 from .estimate import CostEstimate, estimate_training_cost
 from .models import TERMINAL_CLOUD_JOB_STATES, CloudConsent, CloudJobRecord
 from .pack import pack_training_payload
@@ -111,6 +111,11 @@ class CloudTrainingService:
         max_cost_usd: float = 5.0,
         image_size: int = 640,
         preprocessing: dict[str, Any] | None = None,
+        validation_snapshot_path: str | Path | None = None,
+        test_snapshot_path: str | Path | None = None,
+        data_mode: str = "separate-snapshots",
+        seed: int = 42,
+        allow_image_level_fallback: bool = False,
     ) -> CostEstimate:
         snapshot = DatasetSnapshot.load(snapshot_path)
         project = self.store.load_manifest()
@@ -122,12 +127,53 @@ class CloudTrainingService:
         else:
             selected_preprocessing = preprocessing
         training_canvas_size = snapshot.training_canvas_size(selected_preprocessing)
+        train_count = len(snapshot.manifest.images)
         byte_count = sum(
             (snapshot.root / image.relative_path).stat().st_size
             for image in snapshot.manifest.images
         )
+        if data_mode == "auto-split":
+            split = split_snapshot_images(
+                snapshot,
+                seed=seed,
+                allow_image_level_fallback=allow_image_level_fallback,
+            )
+            train_count = len(split["train"])
+            byte_count = sum(
+                (snapshot.root / image.relative_path).stat().st_size
+                for role in ("train", "validation", "test")
+                for image in split[role]
+            )
+        elif data_mode == "training-monitor":
+            # The prepared cloud bundle contains separate train and validation copies.
+            byte_count *= 2
+        elif data_mode == "separate-snapshots":
+            for selected_path in (validation_snapshot_path, test_snapshot_path):
+                if not selected_path:
+                    continue
+                selected = DatasetSnapshot.load(selected_path)
+                if selected.manifest.classes != snapshot.manifest.classes:
+                    raise ValidationError("Dataset classes do not match the training snapshot")
+                byte_count += sum(
+                    (selected.root / image.relative_path).stat().st_size
+                    for image in selected.manifest.images
+                )
+        else:
+            raise ValidationError(f"Unsupported training data mode: {data_mode}")
+        if validation_snapshot_path and data_mode == "separate-snapshots":
+            validation = DatasetSnapshot.load(validation_snapshot_path)
+            training_canvas_size = max(
+                training_canvas_size,
+                validation.training_canvas_size(selected_preprocessing),
+            )
+        if test_snapshot_path and data_mode == "separate-snapshots":
+            test = DatasetSnapshot.load(test_snapshot_path)
+            training_canvas_size = max(
+                training_canvas_size,
+                test.training_canvas_size(selected_preprocessing),
+            )
         return estimate_training_cost(
-            image_count=len(snapshot.manifest.images),
+            image_count=train_count,
             dataset_bytes=byte_count,
             epochs=project.project_config.epochs if epochs is None else epochs,
             gpu=gpu,
@@ -145,6 +191,10 @@ class CloudTrainingService:
         gpu: str = "L4",
         base_checkpoint: str | Path | None = None,
         base_manifest: CheckpointManifest | None = None,
+        validation_snapshot_path: str | Path | None = None,
+        test_snapshot_path: str | Path | None = None,
+        data_mode: str = "separate-snapshots",
+        allow_image_level_fallback: bool = False,
     ) -> CloudJobRecord:
         if consent is None or not consent.acknowledged or not consent.uploads_dataset:
             raise ValidationError("Explicit cloud training and dataset upload consent is required")
@@ -167,7 +217,7 @@ class CloudTrainingService:
         normalized_training.setdefault("batch_size", int(effective.get("batch_size", 16)))
         normalized_training.setdefault("patience", int(effective.get("patience", 25)))
         normalized_training.setdefault("seed", int(effective.get("seed", 42)))
-        normalized_training.setdefault("val", False)
+        normalized_training.setdefault("val", True)
         if epochs <= 0 or image_size <= 0 or int(normalized_training["batch_size"]) <= 0:
             raise ValidationError(
                 "Cloud training epochs, image_size, and batch_size must be positive"
@@ -177,11 +227,16 @@ class CloudTrainingService:
         if normalized_training.get("device", "cuda") != "cuda":
             raise ValidationError("Cloud GPU training requires the training device to be cuda")
         normalized_training["device"] = "cuda"
-        if normalized_training["val"] is not False:
-            raise ValidationError("Cloud training does not evaluate or create validation splits")
-        normalized_training.setdefault("evaluation", "not evaluated")
-        if normalized_training["evaluation"] != "not evaluated":
-            raise ValidationError("Cloud training does not evaluate or create validation splits")
+        if normalized_training["val"] is not True:
+            raise ValidationError("Cloud training requires a validation dataset for early stopping")
+        normalized_training.setdefault(
+            "evaluation",
+            "test set"
+            if test_snapshot_path or data_mode == "auto-split"
+            else "not evaluated",
+        )
+        normalized_training["data_mode"] = data_mode
+        normalized_training["allow_image_level_split"] = bool(allow_image_level_fallback)
 
         checkpoint_path = Path(base_checkpoint).expanduser().resolve() if base_checkpoint else None
         if checkpoint_path is None and base_manifest is not None:
@@ -195,10 +250,15 @@ class CloudTrainingService:
         estimate = self.estimate(
             snapshot.root,
             gpu=gpu,
-            epochs=epochs,
+            epochs=epochs * 2,
             max_cost_usd=consent.max_cost_usd,
             image_size=image_size,
             preprocessing=effective.get("preprocessing"),
+            validation_snapshot_path=validation_snapshot_path,
+            test_snapshot_path=test_snapshot_path,
+            data_mode=data_mode,
+            seed=int(normalized_training.get("seed", 42)),
+            allow_image_level_fallback=allow_image_level_fallback,
         )
         if abs(consent.estimated_usd - estimate.high_usd) > 0.02:
             raise ValidationError("Cloud consent estimate is stale; review the current estimate")
@@ -207,7 +267,26 @@ class CloudTrainingService:
         identity = {
             "project": project.name,
             "snapshot_id": snapshot.manifest.snapshot_id,
-            "image_digests": sorted(image.sha256 for image in snapshot.manifest.images),
+            "validation_snapshot_id": (
+                DatasetSnapshot.load(validation_snapshot_path).manifest.snapshot_id
+                if validation_snapshot_path else None
+            ),
+            "test_snapshot_id": (
+                DatasetSnapshot.load(test_snapshot_path).manifest.snapshot_id
+                if test_snapshot_path else None
+            ),
+            "image_digests": sorted(
+                image.sha256
+                for role_snapshot in [
+                    snapshot,
+                    *(
+                        [DatasetSnapshot.load(validation_snapshot_path)]
+                        if validation_snapshot_path else []
+                    ),
+                    *([DatasetSnapshot.load(test_snapshot_path)] if test_snapshot_path else []),
+                ]
+                for image in role_snapshot.manifest.images
+            ),
             "effective_fingerprint": fingerprint,
             "training_config": normalized_training,
             "gpu": gpu,
@@ -280,14 +359,21 @@ class CloudTrainingService:
             self._save(record)
             attempt = run_dir / "upload" / "attempt-1"
             prepared = attempt / "prepared-dataset"
-            dataset_yaml = snapshot.to_yolo_dataset(
+            prepare_yolo_training_dataset(
                 prepared,
+                training_snapshot=snapshot,
+                validation_snapshot=(
+                    DatasetSnapshot.load(validation_snapshot_path)
+                    if validation_snapshot_path else None
+                ),
+                test_snapshot=(
+                    DatasetSnapshot.load(test_snapshot_path) if test_snapshot_path else None
+                ),
+                data_mode=data_mode,
+                seed=int(normalized_training.get("seed", 42)),
+                allow_image_level_fallback=allow_image_level_fallback,
                 preprocessing=effective.get("preprocessing"),
             )
-            dataset_config = json.loads(dataset_yaml.read_text(encoding="utf-8"))
-            # Ultralytics requires a val path even when training runs with val=False.
-            dataset_config["val"] = dataset_config["train"]
-            atomic_write_json(dataset_yaml, dataset_config)
             mount = f"/mnt/amphilens/jobs/{job_key}/dataset"
             payload_path = run_dir / "upload" / "payload.zip"
             payload = pack_training_payload(
@@ -365,8 +451,10 @@ class CloudTrainingService:
             record.error = self._safe_error(exc)
             return self._save(record)
         if result is None:
+            record.error = ""
             record.state, record.phase = "running", "remote-running"
             return self._save(record)
+        record.error = ""
         record.remote_state = str(result.get("remote_state", result.get("state", "")))
         record.progress = result.get("progress")
         details = result.get("progress_details")
@@ -472,7 +560,12 @@ class CloudTrainingService:
 
     def collect(self, run_id: str) -> CloudJobRecord:
         record = self.get_job(run_id)
-        if record.state != "finished":
+        retryable_result = (
+            record.state == "incomplete"
+            and record.remote_result.get("state") in {"finished", "success", "completed"}
+            and isinstance(record.remote_result.get("artifacts"), dict)
+        )
+        if record.state != "finished" and not retryable_result:
             raise ValidationError("Cloud job must be finished before collecting its results")
         try:
             result = record.remote_result
@@ -494,20 +587,28 @@ class CloudTrainingService:
                 if not isinstance(remote_ref, str) or not isinstance(expected_hash, str):
                     raise ValidationError(f"Remote artifact metadata is invalid: {name}")
                 destination = results_dir / name
+                size = int(metadata.get("size_bytes", -1))
+                if (
+                    destination.is_file()
+                    and destination.stat().st_size == size
+                    and _file_hash(destination) == expected_hash
+                ):
+                    downloaded[name] = destination
+                    continue
                 temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
-                self.transport.download(remote_ref, temporary)
-                if not temporary.is_file():
-                    raise ValidationError(f"Remote artifact was not downloaded: {name}")
-                digest = _file_hash(temporary)
-                if digest != expected_hash:
+                try:
+                    self.transport.download(remote_ref, temporary)
+                    if not temporary.is_file():
+                        raise ValidationError(f"Remote artifact was not downloaded: {name}")
+                    digest = _file_hash(temporary)
+                    if digest != expected_hash:
+                        raise ValidationError(f"Remote artifact hash mismatch: {name}")
+                    if temporary.stat().st_size != size:
+                        raise ValidationError(f"Remote artifact size mismatch: {name}")
+                    os.replace(temporary, destination)
+                    downloaded[name] = destination
+                finally:
                     temporary.unlink(missing_ok=True)
-                    raise ValidationError(f"Remote artifact hash mismatch: {name}")
-                size = int(metadata.get("size_bytes", temporary.stat().st_size))
-                if temporary.stat().st_size != size:
-                    temporary.unlink(missing_ok=True)
-                    raise ValidationError(f"Remote artifact size mismatch: {name}")
-                os.replace(temporary, destination)
-                downloaded[name] = destination
 
             remote_manifest = CheckpointManifest.from_dict(read_json(downloaded["checkpoint.json"]))
             best_path = downloaded["best.pt"]
@@ -533,8 +634,8 @@ class CloudTrainingService:
                 "gpu": record.gpu,
                 "timeout_seconds": record.timeout_seconds,
                 "environment": record.environment,
-                "evaluation": "not evaluated",
-                "checkpoint_selection": "last-no-validation",
+                "evaluation": str(record.training_config.get("evaluation", "not evaluated")),
+                "checkpoint_selection": "best-validation",
             }
             training_config = dict(record.training_config)
             training_config["effective_configuration"] = record.effective_configuration
@@ -561,6 +662,7 @@ class CloudTrainingService:
             atomic_write_json(checkpoint_dir / "checkpoint.json", local_manifest.to_dict())
             self._register_results(run_id, results_dir, checkpoint_dir)
             record.state, record.phase = "verified", "artifacts-verified-and-registered"
+            record.error = ""
             record.checkpoint_manifest = local_manifest
             self._cleanup(record)
             return self._save(record)

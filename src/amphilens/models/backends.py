@@ -375,7 +375,7 @@ class UltralyticsDetector:
             )
         cloud_provenance = config.get("cloud")
         is_cloud_training = isinstance(cloud_provenance, dict)
-        train_config = {
+        base_train_config = {
             "data": str(dataset_yaml),
             "project": str(output),
             "name": str(config.get("run_name", "train")),
@@ -383,7 +383,7 @@ class UltralyticsDetector:
             "imgsz": prepared_image_size,
             "batch": int(config.get("batch_size", 16)),
             "device": config.get("device", "auto"),
-            "val": bool(config.get("val", not is_cloud_training)),
+            "val": True,
             "patience": int(config.get("patience", 25)),
             "seed": int(config.get("seed", 42)),
             "exist_ok": True,
@@ -392,43 +392,123 @@ class UltralyticsDetector:
         # Ultralytics disables mosaic for the last close_mosaic epochs. Keep
         # this active for short smoke/fine-tuning runs (including 1 epoch),
         # where the default of 10 would turn it off for the entire run.
-        if train_config["epochs"] <= 10:
-            train_config["close_mosaic"] = 0
-        train_config.update(_ULTRALYTICS_AUGMENTATION)
+        if base_train_config["epochs"] <= 10:
+            base_train_config["close_mosaic"] = 0
+        base_train_config.update(_ULTRALYTICS_AUGMENTATION)
         config["augmentation"] = {
             "backend": "ultralytics",
             "parameters": dict(_ULTRALYTICS_AUGMENTATION),
         }
-        if is_cloud_training:
-            train_config["trainer"] = _training_only_trainer(model._smart_load("trainer"))
-        if resume_from is not None:
-            train_config["resume"] = str(resume_from.checkpoint_path)
-        if progress_callback is not None:
-
-            def report_epoch(trainer):
-                total = max(1, int(getattr(trainer, "epochs", train_config["epochs"])))
-                epoch = max(0, int(getattr(trainer, "epoch", -1)) + 1)
-                progress_callback(
-                    {
-                        "phase": "training",
-                        "message": f"Epoch {min(epoch, total)} of {total}",
-                        "epoch": min(epoch, total),
-                        "epochs": total,
-                        "progress": min(1.0, max(0.0, epoch / total)),
-                        "metrics": _trainer_metrics(trainer),
-                        "device": str(getattr(trainer, "device", "")),
-                    }
-                )
-
-            model.add_callback("on_fit_epoch_end", report_epoch)
-        results = model.train(
-            **train_config,
+        paper_phased = config.get("freeze_strategy", "paper-phased") == "paper-phased"
+        phases = (
+            [("backbone-frozen", 15), ("full-fine-tuning", 0)]
+            if paper_phased
+            else [("training", 0)]
         )
-        save_dir = Path(getattr(results, "save_dir", output / str(config.get("run_name", "train"))))
-        checkpoint = save_dir / "weights" / "best.pt"
-        if is_cloud_training:
-            checkpoint = save_dir / "weights" / "last.pt"
-            cloud_provenance["checkpoint_selection"] = "last-no-validation"
+        current_model = model
+        final_save_dir = output
+        selected_checkpoint: Path | None = None
+        phase_summaries: list[dict[str, str | int]] = []
+        for phase_index, (phase_name, freeze_layers) in enumerate(phases, start=1):
+            train_config = dict(base_train_config)
+            train_config["name"] = f"phase-{phase_index}-{phase_name}"
+            train_config["freeze"] = freeze_layers
+            if phase_index == 1 and resume_from is not None:
+                train_config["resume"] = str(resume_from.checkpoint_path)
+            if progress_callback is not None:
+
+                def report_epoch(trainer, *, selected_phase=phase_name, selected_index=phase_index):
+                    total = max(1, int(getattr(trainer, "epochs", train_config["epochs"])))
+                    epoch = max(0, int(getattr(trainer, "epoch", -1)) + 1)
+                    progress_callback(
+                        {
+                            "phase": selected_phase,
+                            "message": (
+                                f"{selected_phase.replace('-', ' ').title()} · epoch "
+                                f"{min(epoch, total)} of {total}"
+                            ),
+                            "training_phase": selected_phase,
+                            "phase_index": selected_index,
+                            "phase_count": len(phases),
+                            "epoch": min(epoch, total),
+                            "epochs": total,
+                            "phase_progress": min(1.0, max(0.0, epoch / total)),
+                            "progress": min(
+                                1.0,
+                                ((selected_index - 1) + min(1.0, max(0.0, epoch / total)))
+                                / len(phases),
+                            ),
+                            "metrics": _trainer_metrics(trainer),
+                            "device": str(getattr(trainer, "device", "")),
+                        }
+                    )
+
+                current_model.add_callback("on_fit_epoch_end", report_epoch)
+            results = current_model.train(**train_config)
+            final_save_dir = Path(
+                getattr(results, "save_dir", output / train_config["name"])
+            ).expanduser().resolve()
+            best_path = final_save_dir / "weights" / "best.pt"
+            last_path = final_save_dir / "weights" / "last.pt"
+            selected_checkpoint = best_path if best_path.is_file() else last_path
+            if selected_checkpoint is None or not selected_checkpoint.is_file():
+                raise RuntimeError(
+                    f"Training phase {phase_name} completed without a best or last checkpoint"
+                )
+            phase_summaries.append(
+                {
+                    "phase": phase_name,
+                    "freeze_layers": freeze_layers,
+                    "epochs": int(
+                        getattr(results, "epochs", train_config["epochs"])
+                        or train_config["epochs"]
+                    ),
+                    "checkpoint": best_path.name if best_path.is_file() else last_path.name,
+                }
+            )
+            if phase_index < len(phases):
+                current_model = type(current_model)(str(selected_checkpoint))
+        assert selected_checkpoint is not None
+        checkpoint = selected_checkpoint
+        config["training_phases"] = phase_summaries
+        config["freeze_strategy"] = "paper-phased" if paper_phased else "none"
+        metrics_path = output / "metrics.json"
+        if "test" in json.loads(Path(dataset_yaml).read_text(encoding="utf-8")):
+            eval_result = current_model.val(
+                data=str(dataset_yaml),
+                split="test",
+                imgsz=prepared_image_size,
+                device=base_train_config["device"],
+                plots=False,
+                verbose=False,
+            )
+            result_metrics = getattr(eval_result, "results_dict", {})
+            final_metrics = {}
+            if isinstance(result_metrics, dict):
+                for key, value in result_metrics.items():
+                    try:
+                        final_metrics[str(key)] = float(value)
+                    except (TypeError, ValueError):
+                        continue
+            config["evaluation"] = "test set"
+            atomic_metrics = {
+                "evaluation": "test set",
+                "metrics": final_metrics,
+                "training_phases": phase_summaries,
+                "checkpoint": str(checkpoint),
+            }
+        else:
+            config["evaluation"] = "not evaluated"
+            atomic_metrics = {
+                "evaluation": "not evaluated",
+                "training_phases": phase_summaries,
+                "checkpoint": str(checkpoint),
+            }
+        from ..core import atomic_write_json
+
+        atomic_write_json(metrics_path, atomic_metrics)
+        if is_cloud_training and isinstance(cloud_provenance, dict):
+            cloud_provenance["checkpoint_selection"] = "best-validation"
         if not checkpoint.is_file():
             raise RuntimeError(
                 f"Training completed without the selected checkpoint at {checkpoint}"

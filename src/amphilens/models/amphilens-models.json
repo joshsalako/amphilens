@@ -104,6 +104,99 @@
         "color_space": "rgb"
       },
       "license": "unverified"
+    },
+    {
+      "model_id": "amphilens-yolo26-m-domain",
+      "name": "AmphiLens YOLO26-M (Domain Pretrained)",
+      "architecture": "yolo",
+      "size": "medium",
+      "artifact": "yolo_domain.pt",
+      "sha256": "52b3a456db74b4ea6f310cf5ce7ea829d574854d79081de67ca8c9eb6d3c07c0",
+      "source_class_order": ["Frog", "Mouse", "Snail"],
+      "training_provenance": {
+        "phase": "Initial domain pretraining",
+        "initialization": "General pretrained weights",
+        "datasets": [
+          "iNaturalist",
+          "Open Images V7",
+          "California Small Animals (CSA)",
+          "Ohio Small Animals (OSA)"
+        ]
+      },
+      "inference_image_size": 640,
+      "preprocessing": {
+        "resize_enabled": true,
+        "short_side_dimension": 640,
+        "resize_interpolation": "opencv-linear",
+        "grayscale_enabled": false,
+        "clahe_enabled": false,
+        "clahe_clip_limit": 2.0,
+        "clahe_tile_grid_size": [8, 8],
+        "color_space": "rgb"
+      },
+      "license": "AGPL-3.0"
+    },
+    {
+      "model_id": "amphilens-rtdetr-l-domain",
+      "name": "AmphiLens RT-DETR-L (Domain Pretrained)",
+      "architecture": "rtdetr",
+      "size": "large",
+      "artifact": "rtdetr_domain.pt",
+      "sha256": "ec7b6dc9180c2664b485f8f912bb8a4c8fe8f46168d2bd4300ab483d90be4b0f",
+      "source_class_order": ["Frog", "Mouse", "Snail"],
+      "training_provenance": {
+        "phase": "Initial domain pretraining",
+        "initialization": "General pretrained weights",
+        "datasets": [
+          "iNaturalist",
+          "Open Images V7",
+          "California Small Animals (CSA)",
+          "Ohio Small Animals (OSA)"
+        ]
+      },
+      "inference_image_size": 640,
+      "preprocessing": {
+        "resize_enabled": true,
+        "short_side_dimension": 640,
+        "resize_interpolation": "opencv-linear",
+        "grayscale_enabled": false,
+        "clahe_enabled": false,
+        "clahe_clip_limit": 2.0,
+        "clahe_tile_grid_size": [8, 8],
+        "color_space": "rgb"
+      },
+      "license": "AGPL-3.0"
+    },
+    {
+      "model_id": "amphilens-faster-rcnn-resnet50-domain",
+      "name": "AmphiLens Faster R-CNN ResNet-50 (Domain Pretrained)",
+      "architecture": "faster_rcnn",
+      "size": "resnet50",
+      "artifact": "faster_rcnn_domain.pt",
+      "sha256": "97ed68343592d5502f389f3be70c0122ddc4a557e5d5160212159d5520847646",
+      "source_class_order": ["Frog", "Mouse", "Snail"],
+      "training_provenance": {
+        "phase": "Initial domain pretraining",
+        "initialization": "General pretrained weights",
+        "datasets": [
+          "iNaturalist",
+          "Open Images V7",
+          "California Small Animals (CSA)",
+          "Ohio Small Animals (OSA)"
+        ]
+      },
+      "inference_image_size": 640,
+      "preprocessing": {
+        "resize_enabled": true,
+        "short_side_dimension": 640,
+        "resize_interpolation": "opencv-linear",
+        "grayscale_enabled": false,
+        "clahe_enabled": false,
+        "clahe_clip_limit": 2.0,
+        "clahe_tile_grid_size": [8, 8],
+        "color_space": "rgb"
+      },
+      "license": "unverified"
     }
   ]
 }

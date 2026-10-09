@@ -38,9 +38,9 @@ multi-user service.
 
 ## Submit a job
 
-In the browser app, open **Train a model**, choose **Modal cloud GPU**, select a
-dataset snapshot and model settings, choose a GPU and budget, review the cost
-range, then check the upload and cost consent box before submitting.
+In the browser app, open **Train a model**, choose a data mode and its snapshot
+roles, then choose **Modal cloud GPU**, model settings, GPU, and budget. Review
+the estimate and confirm the upload and cost consent before submitting.
 
 The equivalent CLI flow is:
 
@@ -58,10 +58,12 @@ keyed by the dataset contents, effective configuration, checkpoint hash,
 source digest, GPU, and budget-derived timeout. Repeating the same request
 reuses its saved job. A changed GPU or budget makes a different request.
 
-AmphiLens prepares a copy from the immutable dataset snapshot, applies the
-selected preprocessing, removes image metadata by re-encoding the images, and
-packages images, YOLO labels, and a path-rewritten `dataset.yaml`. The local
-snapshot and source image folders are not changed. A selected base checkpoint
+AmphiLens prepares role-specific copies from the immutable dataset snapshots,
+applies the selected preprocessing, removes image metadata by re-encoding the
+images, and packages images, YOLO labels, and a path-rewritten `dataset.yaml`.
+Automatic splitting is deterministic and keeps source groups together unless
+the user explicitly allows image-level fallback. The local snapshots and source
+image folders are not changed. A selected base checkpoint
 is uploaded only with the same explicit consent. Its manifest is reduced to
 the compatibility fields needed to load it; local paths and unrelated
 training metadata are omitted. Image filenames remain in the uploaded data.
@@ -74,10 +76,11 @@ AmphiLens detector adapters and finalizer as local training. On success, it
 returns `best.pt`, `last.pt`, `metrics.json`, and `checkpoint.json` with hashes.
 The local app checks the returned job identity, file sizes, SHA-256 values,
 model compatibility, and checkpoint manifest before registering the checkpoint
-in the project. Training does not create validation splits and records
-`evaluation: not evaluated`. Since no validation score selects a best epoch,
-the cloud `best.pt` artifact aliases the final `last.pt` weights; the manifest
-records `checkpoint_selection: last-no-validation`.
+in the project. Validation data is used for early stopping in each of the two
+freeze/unfreeze phases. If a test partition or test snapshot was selected, it
+is used only for final evaluation. Otherwise, the run records
+`evaluation: not evaluated` and skips final evaluation. The returned
+`best.pt` is selected using validation performance.
 
 ## Status, cancel, and cleanup
 
@@ -109,7 +112,8 @@ timeout from the selected budget, capped at 24 hours.
 
 Runtime is a planning heuristic, not a measured AmphiLens benchmark. It starts
 from an unverified example of 2,000 images × 100 epochs taking 90–120 minutes
-on an L4, then scales by image count, epochs, and the square of image size.
+on an L4, then scales by training image count, the total epoch budget across
+both phases, and the square of image size.
 Actual speed depends on model, image dimensions, preprocessing, data loading,
 and GPU availability. Check current rates before submitting if prices may have
 changed.

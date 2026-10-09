@@ -326,6 +326,8 @@ def test_faster_rcnn_prediction_keeps_the_preprocessed_short_side(
 
 
 def test_ultralytics_adapter_passes_resume_checkpoint_to_training(tmp_path: Path):
+    dataset_yaml = tmp_path / "dataset.yaml"
+    dataset_yaml.write_text('{"train":"images","val":"images"}\n', encoding="utf-8")
     parent = tmp_path / "parent.pt"
     parent.write_bytes(b"parent")
     preprocessing = InferenceConfig(model_id="fixture").preprocessing_config.to_dict()
@@ -341,7 +343,7 @@ def test_ultralytics_adapter_passes_resume_checkpoint_to_training(tmp_path: Path
     detector._model = model
 
     result = detector.train(
-        tmp_path / "dataset.yaml",
+        dataset_yaml,
         tmp_path / "output",
         {"preprocessing": preprocessing, "epochs": 1},
         resume_from=manifest,
@@ -352,22 +354,25 @@ def test_ultralytics_adapter_passes_resume_checkpoint_to_training(tmp_path: Path
     assert model.train_calls["val"] is True
 
 
-def test_ultralytics_cloud_training_uses_last_weights_without_validation(tmp_path: Path):
+def test_ultralytics_cloud_training_monitors_training_data_without_test_split(tmp_path: Path):
+    dataset_yaml = tmp_path / "dataset.yaml"
+    dataset_yaml.write_text('{"train":"images","val":"images"}\n', encoding="utf-8")
     detector = UltralyticsDetector(tmp_path / "base.pt", "yolo", ["toad"])
     model = FakeUltralyticsModel(None)
     detector._model = model
     provenance = {"provider": "modal"}
     config = {"epochs": 1, "evaluation": "not evaluated", "cloud": provenance}
 
-    result = detector.train(tmp_path / "dataset.yaml", tmp_path / "output", config)
+    result = detector.train(dataset_yaml, tmp_path / "output", config)
 
-    assert result.name == "last.pt"
-    assert model.train_calls["val"] is False
-    assert provenance["checkpoint_selection"] == "last-no-validation"
-    trainer = model.train_calls["trainer"]()
-    assert trainer.validate() == ({}, 0.0)
-    assert trainer.best_fitness == 0.0
-    assert trainer.final_eval() is None
+    assert result.name == "best.pt"
+    assert model.train_calls["val"] is True
+    assert provenance["checkpoint_selection"] == "best-validation"
+    assert config["evaluation"] == "not evaluated"
+    assert [phase["phase"] for phase in config["training_phases"]] == [
+        "backbone-frozen",
+        "full-fine-tuning",
+    ]
 
 
 def test_load_detector_rejects_missing_and_stale_checkpoints(tmp_path: Path):
@@ -457,6 +462,7 @@ def test_faster_rcnn_dataset_spec_is_stable_for_yolo_layout(tmp_path: Path):
         {
             "path": str(tmp_path),
             "train": "images",
+            "val": "images",
             "labels": "labels",
             "names": ["toad"],
             "short_side_dimension": 640,

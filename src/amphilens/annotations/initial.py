@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import shutil
 import tempfile
 from pathlib import Path
 
 from ..core import ProjectStore, ValidationError
-from ..dataset import DatasetSnapshot
+from ..dataset import DatasetImporter, DatasetSnapshot
 from .managed import CVATProjectSummary, CVATTransport
 
 
@@ -91,3 +92,105 @@ class CVATProjectImportService:
                 class_mapping=mapping,
                 source_provenance=provenance,
             )
+
+    def import_project_tasks(
+        self,
+        project_id: str,
+        *,
+        class_mapping: dict[str, str] | None = None,
+        display_name: str | None = None,
+    ) -> list[DatasetSnapshot]:
+        """Import each CVAT task as a separately selectable immutable snapshot."""
+        mapping = dict(class_mapping or {})
+        project = self.get_project(project_id)
+        self._validate_project(project, mapping)
+        empty_tasks = [task.name for task in project.tasks if task.size == 0]
+        if empty_tasks:
+            names = ", ".join(repr(name) for name in empty_tasks)
+            raise ValidationError(f"CVAT task lists with no images cannot be imported: {names}")
+
+        base_name = " ".join(str(display_name or project.name).split())
+        importer = DatasetImporter()
+        with tempfile.TemporaryDirectory(prefix="amphilens-cvat-tasks-") as temporary:
+            temporary_root = Path(temporary)
+            staged: list[tuple[DatasetSnapshot, str]] = []
+            for task in project.tasks:
+                task_identity = "\0".join(
+                    (
+                        str(getattr(self.transport, "server_url", "")),
+                        project.project_id,
+                        task.task_id,
+                    )
+                )
+                task_key = hashlib.sha256(task_identity.encode("utf-8")).hexdigest()[:8]
+                archive = temporary_root / f"task-{task_key}.zip"
+                exported = Path(
+                    self.transport.export_task(task.task_id, archive)
+                ).expanduser().resolve()
+                if not exported.is_file():
+                    raise ValidationError(
+                        f"CVAT task {task.name!r} did not produce an export archive"
+                    )
+                archive_hash = _sha256(exported)
+                snapshot_id = f"snapshot-{archive_hash[:12]}-task-{task_key}"
+                provenance = {
+                    "source_type": "cvat-task",
+                    "server_url": str(getattr(self.transport, "server_url", "")),
+                    "project_id": project.project_id,
+                    "project_name": project.name,
+                    "task_id": task.task_id,
+                    "task_name": task.name,
+                    "task_status": task.status,
+                    "export_format": str(
+                        getattr(self.transport, "export_format", "CVAT for images 1.1")
+                    ),
+                    "client_version": str(
+                        getattr(self.transport, "client_version", "unknown")
+                    ),
+                    "archive_filename": exported.name,
+                    "archive_sha256": archive_hash,
+                }
+                task_suffix = f" · {task.name or f'Task {task.task_id}'}"
+                name_prefix = base_name[: max(0, 120 - len(task_suffix))].rstrip()
+                task_display_name = f"{name_prefix}{task_suffix}".strip()[:120]
+                staged_snapshot = importer.import_archive(
+                    exported,
+                    temporary_root / "snapshots" / "incoming",
+                    classes=self.store.load_manifest().classes,
+                    class_mapping=mapping,
+                    source_provenance=provenance,
+                    snapshot_id=snapshot_id,
+                )
+                staged.append((staged_snapshot, task_display_name))
+
+            dataset_root = self.store.root / "datasets"
+            dataset_root.mkdir(parents=True, exist_ok=True)
+            snapshots: list[DatasetSnapshot] = []
+            created_paths: list[Path] = []
+            try:
+                for staged_snapshot, task_display_name in staged:
+                    destination = dataset_root / staged_snapshot.manifest.snapshot_id
+                    if destination.is_dir():
+                        snapshot = DatasetSnapshot.load(destination)
+                        if (
+                            snapshot.manifest.source_archive_sha256
+                            != staged_snapshot.manifest.source_archive_sha256
+                            or snapshot.manifest.source_provenance.get("project_id")
+                            != staged_snapshot.manifest.source_provenance.get("project_id")
+                            or snapshot.manifest.source_provenance.get("task_id")
+                            != staged_snapshot.manifest.source_provenance.get("task_id")
+                        ):
+                            raise ValidationError(
+                                "Existing snapshot identity does not match the CVAT task export"
+                            )
+                    else:
+                        shutil.copytree(staged_snapshot.root, destination)
+                        created_paths.append(destination)
+                        snapshot = DatasetSnapshot.load(destination)
+                    self.store.set_dataset_display_name(snapshot.root, task_display_name)
+                    snapshots.append(snapshot)
+            except Exception:
+                for path in reversed(created_paths):
+                    shutil.rmtree(path, ignore_errors=True)
+                raise
+        return snapshots

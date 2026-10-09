@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -12,8 +13,8 @@ from typing import Any
 from ..core import DetectionRecord
 from ..preprocessing import PreprocessingConfig
 
-# Pin weights independently of the mutable Hub branch. Updated after the private upload.
-HF_MODEL_REVISION = "0fbcf6b047e0ef88d3f6eb3933f061d316d4fe9b"
+# Pin weights independently of the mutable Hub branch. Update after model uploads.
+HF_MODEL_REVISION = "a2c99d24e35e5fa8618b29a9ee5325eca275d41c"
 _MANIFEST_PATH = Path(__file__).with_name("amphilens-models.json")
 
 
@@ -195,6 +196,19 @@ def _progress_tqdm_class(callback: Callable[[dict[str, Any]], None] | None, mode
     return ReportingTqdm
 
 
+def _supports_tqdm_class(hf_hub_download) -> bool:
+    """Check whether the installed Hub client supports its optional progress hook."""
+    try:
+        parameters = inspect.signature(hf_hub_download).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(
+        parameter.name == "tqdm_class"
+        or parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters
+    )
+
+
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as source:
@@ -214,16 +228,18 @@ def download_hosted_checkpoint(
     if progress_callback is not None:
         progress_callback({"message": f"Checking access to {model.name}…", "progress": None})
     try:
-        path = Path(
-            hf_hub_download(
-                repo_id=model.repo_id,
-                filename=model.artifact,
-                repo_type="model",
-                revision=HF_MODEL_REVISION,
-                token=True if authenticated else False,
-                tqdm_class=_progress_tqdm_class(progress_callback, model.name),
+        download_options = {
+            "repo_id": model.repo_id,
+            "filename": model.artifact,
+            "repo_type": "model",
+            "revision": HF_MODEL_REVISION,
+            "token": True if authenticated else False,
+        }
+        if _supports_tqdm_class(hf_hub_download):
+            download_options["tqdm_class"] = _progress_tqdm_class(
+                progress_callback, model.name
             )
-        )
+        path = Path(hf_hub_download(**download_options))
     except Exception as exc:
         try:
             from huggingface_hub.errors import HfHubHTTPError

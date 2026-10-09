@@ -32,7 +32,15 @@ base_image = (
         f"huggingface-hub=={IMAGE_PINS['huggingface-hub']}",
     )
 )
-training_image = base_image.add_local_python_source("amphilens")
+training_image = (
+    base_image.env(
+        {
+            "HF_HOME": f"{MODEL_CACHE_MOUNT}/huggingface",
+            "TORCH_HOME": f"{MODEL_CACHE_MOUNT}/torch",
+        }
+    )
+    .add_local_python_source("amphilens")
+)
 
 app = modal.App(MODAL_APP_NAME)
 training_volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
@@ -57,13 +65,16 @@ def _sha256_file(path: Path) -> str:
     retries=0,
     max_containers=1,
     scaledown_window=10,
-    volumes={VOLUME_MOUNT: training_volume},
+    volumes={VOLUME_MOUNT: training_volume, MODEL_CACHE_MOUNT: model_cache_volume},
 )
 def train(payload: dict) -> dict:
+    model_cache_volume.reload()
     return run_remote_training(
         payload,
         volume_root=Path(VOLUME_MOUNT),
         volume_commit=training_volume.commit,
+        model_cache_root=Path(MODEL_CACHE_MOUNT),
+        model_cache_commit=model_cache_volume.commit,
     )
 
 

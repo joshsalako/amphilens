@@ -20,9 +20,8 @@ browser session. If an old project is inside the source checkout, open it and
 use **Move and remove original**; AmphiLens verifies the copy before deleting
 the old project folder and does not move the source image folder.
 
-Initial imported images are all used for training. AmphiLens does not invent a
-validation split. Until a separate validation dataset is supplied, results say
-`evaluation: not evaluated`.
+Snapshots keep generated IDs and image data fixed. Their project-local display
+names can be set during import or renamed later.
 
 ## 2. Import the initial dataset
 
@@ -35,10 +34,11 @@ validation split. Until a separate validation dataset is supplied, results say
 5. Confirm the labels or provide an explicit class mapping.
 6. Press **Import project**.
 
-AmphiLens exports the complete project through the CVAT API, including all
-tasks and images, then validates it through the same importer used for local
-archives. The dataset snapshot records the CVAT project ID, task IDs, server
-URL, export format, SDK version, and archive hash. Tokens are not recorded.
+AmphiLens imports each task list as its own named, immutable dataset snapshot.
+Names combine the group name you enter with the CVAT task name, so you can
+assign individual task lists to training, validation, or testing. Each snapshot
+records its CVAT project and task IDs, server URL, export format, SDK version,
+and archive hash. Tokens are not recorded.
 
 ### Import a local archive
 
@@ -122,10 +122,25 @@ configuration, but AmphiLens warns that its metadata could not be verified.
 In the browser app:
 
 1. Open **Train a model**.
-2. Select the labelled dataset snapshot.
-3. Select the model preset.
-4. Set epochs, batch size, image settings, and device.
+2. Choose one of three dataset setups:
+   - **Split one snapshot automatically** creates grouped 80/10/10 train,
+     validation, and test partitions. If source groups cannot populate every
+     partition, explicitly allow image-level splitting to continue.
+   - **Use training data for validation** monitors convergence on training
+     data and skips final evaluation.
+   - **Choose separate snapshots** requires training data and lets you choose
+     validation and test snapshots independently. An empty validation choice
+     monitors training data; an empty test choice skips final evaluation.
+3. Select the model preset and device.
+4. Set maximum epochs per phase, patience, and batch size. Defaults are 100,
+   25, and 16 respectively.
 5. Press **Train model**.
+
+Training follows the paper-aligned two-phase schedule: the backbone is frozen
+for phase one, then all layers are fine-tuned in phase two. Patience applies to
+each phase. Validation data controls early stopping; test data is reserved for
+the final evaluation and never controls training. The run records snapshot IDs,
+the selected data mode, split seed, preprocessing, phase settings, and metrics.
 
 The trainer writes `best.pt`, `last.pt`, `metrics.json`, and a checkpoint
 manifest. The manifest records classes, preprocessing, configuration, and
@@ -210,7 +225,7 @@ before training starts.
 
 ## 11. Evaluate honestly
 
-Training metrics currently describe training loss and explicitly report
-`evaluation: not evaluated` when no holdout dataset is supplied. Use a separate
-validation dataset for scientific evaluation, and record the dataset, model,
-preprocessing, device, and software versions with the result.
+Training metrics report validation loss for early stopping. If a test snapshot
+was selected, final metrics are reported for that test set. Training-monitor
+mode explicitly records `evaluation: not evaluated` because no independent
+test data was selected.

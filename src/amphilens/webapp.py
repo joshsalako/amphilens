@@ -533,6 +533,7 @@ class PredictionsRequest:
 class DatasetImportRequest:
     archive: str
     class_mapping: dict[str, str] | None = None
+    display_name: str | None = None
 
 
 @dataclass(slots=True)
@@ -545,6 +546,13 @@ class CvatProjectImportRequest:
     project_id: str
     class_mapping: dict[str, str] | None = None
     server_url: str | None = None
+    display_name: str | None = None
+
+
+@dataclass(slots=True)
+class DatasetRenameRequest:
+    snapshot_path: str
+    display_name: str
 
 
 @dataclass(slots=True)
@@ -557,6 +565,13 @@ class TrainingRequest:
     device: Literal["auto", "cpu", "cuda", "mps"] | None = None
     training_source: str | None = None
     hosted_model_id: str | None = None
+    data_mode: Literal[
+        "auto-split", "training-monitor", "separate-snapshots"
+    ] = "separate-snapshots"
+    validation_snapshot_path: str | None = None
+    test_snapshot_path: str | None = None
+    patience: int | None = None
+    allow_image_level_split: bool = False
 
 
 @dataclass(slots=True)
@@ -593,6 +608,13 @@ class CloudEstimateRequest:
     image_size: int = 640
     training_source: str | None = None
     hosted_model_id: str | None = None
+    data_mode: Literal[
+        "auto-split", "training-monitor", "separate-snapshots"
+    ] = "separate-snapshots"
+    validation_snapshot_path: str | None = None
+    test_snapshot_path: str | None = None
+    patience: int | None = None
+    allow_image_level_split: bool = False
 
 
 @dataclass(slots=True)
@@ -760,7 +782,9 @@ def _request(cls, payload: dict[str, Any]):
         )
     if cls is DatasetImportRequest:
         return cls(
-            archive=_string(payload, "archive"), class_mapping=_mapping(payload, "class_mapping")
+            archive=_string(payload, "archive"),
+            class_mapping=_mapping(payload, "class_mapping"),
+            display_name=_optional_string(payload, "display_name"),
         )
     if cls is CvatProjectListRequest:
         return cls(server_url=_optional_string(payload, "server_url"))
@@ -769,13 +793,27 @@ def _request(cls, payload: dict[str, Any]):
             project_id=_string(payload, "project_id"),
             class_mapping=_mapping(payload, "class_mapping"),
             server_url=_optional_string(payload, "server_url"),
+            display_name=_optional_string(payload, "display_name"),
+        )
+    if cls is DatasetRenameRequest:
+        return cls(
+            snapshot_path=_string(payload, "snapshot_path"),
+            display_name=_string(payload, "display_name"),
         )
     if cls is TrainingRequest:
         epochs = _integer(payload, "epochs", minimum=1)
         batch_size = _integer(payload, "batch_size", minimum=1)
+        patience = _integer(payload, "patience", 25, minimum=0)
         device = _optional_string(payload, "device")
         if device is not None and device not in {"auto", "cpu", "cuda", "mps"}:
             raise ValueError("device must be auto, cpu, cuda, or mps")
+        data_mode = _string(
+            payload, "data_mode", required=False, default="separate-snapshots"
+        )
+        if data_mode not in {"auto-split", "training-monitor", "separate-snapshots"}:
+            raise ValueError(
+                "data_mode must be auto-split, training-monitor, or separate-snapshots"
+            )
         return cls(
             snapshot_path=_string(payload, "snapshot_path"),
             checkpoint=_optional_string(payload, "checkpoint"),
@@ -785,6 +823,11 @@ def _request(cls, payload: dict[str, Any]):
             device=device,
             training_source=_optional_string(payload, "training_source"),
             hosted_model_id=_optional_string(payload, "hosted_model_id"),
+            data_mode=data_mode,
+            validation_snapshot_path=_optional_string(payload, "validation_snapshot_path"),
+            test_snapshot_path=_optional_string(payload, "test_snapshot_path"),
+            patience=patience,
+            allow_image_level_split=_boolean(payload, "allow_image_level_split", False),
         )
     if cls is ActiveLearningRequest:
         return cls(
@@ -814,6 +857,13 @@ def _request(cls, payload: dict[str, Any]):
             token_id=_string(payload, "token_id"), token_secret=_string(payload, "token_secret")
         )
     if cls is CloudEstimateRequest:
+        data_mode = _string(
+            payload, "data_mode", required=False, default="separate-snapshots"
+        )
+        if data_mode not in {"auto-split", "training-monitor", "separate-snapshots"}:
+            raise ValueError(
+                "data_mode must be auto-split, training-monitor, or separate-snapshots"
+            )
         return cls(
             snapshot_path=_string(payload, "snapshot_path"),
             gpu=_string(payload, "gpu", required=False, default="L4"),
@@ -822,6 +872,11 @@ def _request(cls, payload: dict[str, Any]):
             image_size=_integer(payload, "image_size", 640, minimum=1),
             training_source=_optional_string(payload, "training_source"),
             hosted_model_id=_optional_string(payload, "hosted_model_id"),
+            data_mode=data_mode,
+            validation_snapshot_path=_optional_string(payload, "validation_snapshot_path"),
+            test_snapshot_path=_optional_string(payload, "test_snapshot_path"),
+            patience=_integer(payload, "patience", 25, minimum=0),
+            allow_image_level_split=_boolean(payload, "allow_image_level_split", False),
         )
     if cls is CloudTrainingRequest:
         base = _request(CloudEstimateRequest, payload)
@@ -840,6 +895,11 @@ def _request(cls, payload: dict[str, Any]):
             image_size=base.image_size,
             training_source=base.training_source,
             hosted_model_id=base.hosted_model_id,
+            data_mode=base.data_mode,
+            validation_snapshot_path=base.validation_snapshot_path,
+            test_snapshot_path=base.test_snapshot_path,
+            patience=base.patience,
+            allow_image_level_split=base.allow_image_level_split,
             checkpoint=_optional_string(payload, "checkpoint"),
             batch_size=batch_size,
             device=device,
@@ -930,7 +990,15 @@ def _project_summary(store: ProjectStore) -> dict[str, Any]:
     ):
         snapshot = DatasetSnapshot.load(path)
         datasets.append(
-            {"path": str(path), "name": path.name, "image_count": len(snapshot.manifest.images)}
+            {
+                "path": str(path),
+                "name": store.dataset_display_name(path),
+                "snapshot_id": snapshot.manifest.snapshot_id,
+                "image_count": len(snapshot.manifest.images),
+                "source_type": snapshot.manifest.source_provenance.get("source_type"),
+                "task_id": snapshot.manifest.source_provenance.get("task_id"),
+                "task_name": snapshot.manifest.source_provenance.get("task_name"),
+            }
         )
     checkpoints = []
     checkpoint_root = store.root / "checkpoints"
@@ -995,6 +1063,54 @@ def _project_snapshot(store: ProjectStore, snapshot_path: str | Path):
     if not snapshot.manifest.images:
         raise ValueError("The selected labelled dataset snapshot contains no images")
     return snapshot
+
+
+def _training_snapshots(store: ProjectStore, request):
+    """Resolve role snapshots and reject mode-incompatible selectors before model setup."""
+    from .dataset import split_snapshot_images
+
+    training = _project_snapshot(store, request.snapshot_path)
+    validation = None
+    test = None
+    if request.data_mode == "separate-snapshots":
+        if request.validation_snapshot_path:
+            validation = _project_snapshot(store, request.validation_snapshot_path)
+        if request.test_snapshot_path:
+            test = _project_snapshot(store, request.test_snapshot_path)
+        if validation and validation.manifest.snapshot_id == training.manifest.snapshot_id:
+            raise ValueError("Choose a separate validation snapshot or leave validation empty")
+        if test and test.manifest.snapshot_id == training.manifest.snapshot_id:
+            raise ValueError("Choose a separate test snapshot or leave test empty")
+        if validation and test and validation.manifest.snapshot_id == test.manifest.snapshot_id:
+            raise ValueError("Choose different validation and test snapshots")
+        role_images = {
+            "train": {item.sha256 for item in training.manifest.images},
+            "validation": (
+                {item.sha256 for item in validation.manifest.images}
+                if validation
+                else {item.sha256 for item in training.manifest.images}
+            ),
+        }
+        if test:
+            role_images["test"] = {item.sha256 for item in test.manifest.images}
+        for index, role in enumerate(role_images):
+            for other in list(role_images)[index + 1 :]:
+                if (role, other) == ("train", "validation") and validation is None:
+                    continue
+                if role_images[role] & role_images[other]:
+                    raise ValueError(f"The {role} and {other} snapshots contain duplicate images")
+    elif request.validation_snapshot_path or request.test_snapshot_path:
+        raise ValueError(
+            "Validation and test snapshot selectors are only used in separate-snapshot mode"
+        )
+    elif request.data_mode == "auto-split":
+        project_config = store.load_manifest().project_config
+        split_snapshot_images(
+            training,
+            seed=project_config.random_seed,
+            allow_image_level_fallback=request.allow_image_level_split,
+        )
+    return training, validation, test
 
 
 def prediction_preflight(
@@ -1418,9 +1534,16 @@ def run_prediction_job(
 
 
 def run_dataset_import_job(store: ProjectStore, request: DatasetImportRequest) -> dict[str, Any]:
-    snapshot = store.import_dataset(request.archive, class_mapping=request.class_mapping)
+    snapshot = store.import_dataset(
+        request.archive,
+        class_mapping=request.class_mapping,
+        display_name=request.display_name,
+    )
     return {
-        "message": f"Imported {len(snapshot.manifest.images)} reviewed images.",
+        "message": (
+            f"Imported {len(snapshot.manifest.images)} images as "
+            f"{store.dataset_display_name(snapshot.root)}."
+        ),
         "paths": {"snapshot": str(snapshot.root)},
         "snapshot": snapshot.manifest.to_dict(),
     }
@@ -1431,13 +1554,31 @@ def run_cvat_import_job(store: ProjectStore, request: CvatProjectImportRequest) 
     from .annotations.managed import CVATSdkTransport
 
     transport = CVATSdkTransport(server_url=request.server_url)
-    snapshot = CVATProjectImportService(store, transport).import_project(
-        request.project_id, class_mapping=request.class_mapping
+    snapshots = CVATProjectImportService(store, transport).import_project_tasks(
+        request.project_id,
+        class_mapping=request.class_mapping,
+        display_name=request.display_name,
     )
+    snapshot_summaries = [
+        {
+            "path": str(snapshot.root),
+            "snapshot_id": snapshot.manifest.snapshot_id,
+            "name": store.dataset_display_name(snapshot.root),
+            "task_id": snapshot.manifest.source_provenance.get("task_id"),
+            "task_name": snapshot.manifest.source_provenance.get("task_name"),
+            "image_count": len(snapshot.manifest.images),
+        }
+        for snapshot in snapshots
+    ]
+    details = ", ".join(
+        f"{item['name']} ({item['image_count']} images)" for item in snapshot_summaries
+    )
+    total_images = sum(item["image_count"] for item in snapshot_summaries)
     return {
-        "message": f"Imported {len(snapshot.manifest.images)} reviewed images from CVAT.",
-        "paths": {"snapshot": str(snapshot.root)},
-        "snapshot": snapshot.manifest.to_dict(),
+        "message": (
+            f"Imported {len(snapshots)} CVAT task lists ({total_images} images): {details}."
+        ),
+        "snapshots": snapshot_summaries,
     }
 
 
@@ -1445,6 +1586,7 @@ def _training_checkpoint(
     request: TrainingRequest | CloudTrainingRequest,
     *,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    download_hosted: bool = True,
 ):
     from .configuration import discover_checkpoint_manifest
     from .models.hosted_models import download_hosted_checkpoint, get_hosted_model
@@ -1457,6 +1599,8 @@ def _training_checkpoint(
     )
     if source == "amphilens-pretrained":
         hosted_model = get_hosted_model(request.hosted_model_id or "")
+        if not download_hosted:
+            return source, hosted_model, "", None
         checkpoint_path = download_hosted_checkpoint(
             hosted_model.model_id,
             progress_callback=progress_callback,
@@ -1493,6 +1637,7 @@ def run_training_job(
     from .training import TrainingConfig, train_snapshot_and_register
 
     project = store.load_manifest()
+    snapshot, validation_snapshot, test_snapshot = _training_snapshots(store, request)
     if progress_callback is not None:
         progress_callback(
             {
@@ -1512,6 +1657,9 @@ def run_training_job(
         overrides["batch_size"] = request.batch_size
     if request.device is not None:
         overrides["device"] = request.device
+    if request.patience is not None:
+        overrides["patience"] = request.patience
+    overrides["freeze_strategy"] = "paper-phased"
     effective = resolve_effective_configuration(
         project,
         checkpoint_manifest=checkpoint_manifest,
@@ -1541,7 +1689,6 @@ def run_training_job(
                 "device": effective.device,
             }
         )
-    snapshot = _project_snapshot(store, request.snapshot_path)
     default_output = (
         store.root / "checkpoints" / f"cycle-{len(list((store.root / 'checkpoints').glob('*')))}"
     )
@@ -1557,11 +1704,20 @@ def run_training_job(
             patience=effective.patience,
             seed=effective.seed,
             device=effective.device,
-            freeze_strategy=effective.freeze_strategy,
+            freeze_strategy="paper-phased",
             preprocessing=effective.preprocessing,
+            evaluation=(
+                "test set"
+                if test_snapshot or request.data_mode == "auto-split"
+                else "not evaluated"
+            ),
             metadata={"effective_configuration": effective.to_dict()},
         ),
         preprocessing=effective.preprocessing,
+        validation_snapshot=validation_snapshot,
+        test_snapshot=test_snapshot,
+        data_mode=request.data_mode,
+        allow_image_level_fallback=request.allow_image_level_split,
         resume_from=checkpoint_manifest,
         progress_callback=progress_callback,
     )
@@ -1583,7 +1739,7 @@ def run_training_job(
                 "checkpoint": str(result.checkpoint),
                 "manifest": str(output_dir / "checkpoint.json"),
             },
-            "evaluation": "not evaluated",
+            "evaluation": result.manifest.training_config.get("evaluation", "not evaluated"),
         },
         downloads=[
             DownloadArtifact(result.checkpoint, "Model checkpoint", "best.pt"),
@@ -1697,7 +1853,7 @@ def run_cloud_training_job(
             "Modal credentials are not configured. Save credentials or set both "
             "Modal environment variables."
         )
-    _project_snapshot(store, request.snapshot_path)
+    snapshot, validation_snapshot, test_snapshot = _training_snapshots(store, request)
     if progress_callback is not None:
         progress_callback(
             {
@@ -1708,6 +1864,7 @@ def run_cloud_training_job(
     source, hosted_model, checkpoint, checkpoint_manifest = _training_checkpoint(
         request,
         progress_callback=_phase_progress(progress_callback, "model_download"),
+        download_hosted=False,
     )
     project = store.load_manifest()
     overrides: dict[str, Any] = {"device": "cuda"}
@@ -1715,6 +1872,9 @@ def run_cloud_training_job(
         overrides["epochs"] = request.epochs
     if request.batch_size is not None:
         overrides["batch_size"] = request.batch_size
+    if request.patience is not None:
+        overrides["patience"] = request.patience
+    overrides["freeze_strategy"] = "paper-phased"
     effective = resolve_effective_configuration(
         project,
         checkpoint_manifest=checkpoint_manifest,
@@ -1737,7 +1897,27 @@ def run_cloud_training_job(
         "patience": effective.patience,
         "seed": effective.seed,
         "device": "cuda",
-        "evaluation": "not evaluated",
+        "evaluation": (
+            "test set"
+            if test_snapshot or request.data_mode == "auto-split"
+            else "not evaluated"
+        ),
+        "data_mode": request.data_mode,
+        "validation_strategy": (
+            "training-set-monitor"
+            if request.data_mode == "training-monitor" or validation_snapshot is None
+            else "separate-snapshot"
+        ),
+        "snapshot_ids": {
+            "train": snapshot.manifest.snapshot_id,
+            **(
+                {"validation": validation_snapshot.manifest.snapshot_id}
+                if validation_snapshot
+                else {}
+            ),
+            **({"test": test_snapshot.manifest.snapshot_id} if test_snapshot else {}),
+        },
+        "freeze_strategy": "paper-phased",
     }
     if progress_callback is not None:
         progress_callback(
@@ -1749,6 +1929,12 @@ def run_cloud_training_job(
         )
     job = service.submit(
         snapshot_path=request.snapshot_path,
+        validation_snapshot_path=(
+            str(validation_snapshot.root) if validation_snapshot else None
+        ),
+        test_snapshot_path=str(test_snapshot.root) if test_snapshot else None,
+        data_mode=request.data_mode,
+        allow_image_level_fallback=request.allow_image_level_split,
         effective_configuration=effective.to_dict(),
         training_config=training_config,
         consent=CloudConsent(
@@ -2173,6 +2359,16 @@ def create_app(
         except Exception as exc:
             return _failure(exc)
 
+    async def dataset_rename(request: Request) -> Response:
+        try:
+            body = _request(DatasetRenameRequest, await _read_body(request))
+            display_name = active_store().set_dataset_display_name(
+                body.snapshot_path, body.display_name
+            )
+            return _json({"display_name": display_name})
+        except Exception as exc:
+            return _failure(exc)
+
     async def cvat_projects(request: Request) -> Response:
         try:
             body = _request(CvatProjectListRequest, await _read_body(request))
@@ -2276,14 +2472,22 @@ def create_app(
         try:
             body = _request(CloudEstimateRequest, await _read_body(request))
             store = active_store()
-            _project_snapshot(store, body.snapshot_path)
+            snapshot, validation_snapshot, test_snapshot = _training_snapshots(store, body)
             service, _ = _cloud_service(store, app.state.cloud_credentials_store)
+            project_config = store.load_manifest().project_config
             estimate = service.estimate(
-                body.snapshot_path,
+                snapshot.root,
                 gpu=body.gpu,
-                epochs=body.epochs,
+                epochs=(body.epochs or project_config.epochs) * 2,
                 max_cost_usd=body.max_cost_usd,
                 image_size=_cloud_estimate_image_size(body),
+                validation_snapshot_path=(
+                    validation_snapshot.root if validation_snapshot else None
+                ),
+                test_snapshot_path=test_snapshot.root if test_snapshot else None,
+                data_mode=body.data_mode,
+                seed=project_config.random_seed,
+                allow_image_level_fallback=body.allow_image_level_split,
             )
             return _json({"estimate": estimate.to_dict()})
         except Exception as exc:
@@ -2364,6 +2568,7 @@ def create_app(
     app.add_route("/api/predictions/preflight", predictions_preflight, methods=["POST"])
     app.add_route("/api/datasets/import", dataset_import, methods=["POST"])
     app.add_route("/api/datasets/import-cvat", dataset_import_cvat, methods=["POST"])
+    app.add_route("/api/datasets/rename", dataset_rename, methods=["POST"])
     app.add_route("/api/cvat/projects", cvat_projects, methods=["POST"])
     app.add_route("/api/training", training, methods=["POST"])
     app.add_route("/api/active-learning/select", active_learning, methods=["POST"])

@@ -271,6 +271,44 @@ def test_hosted_checkpoint_checksum_failure_does_not_enter_verified_cache(tmp_pa
     assert not commits
 
 
+def test_hosted_checkpoint_download_supports_hub_versions_without_progress_hook(tmp_path):
+    content = b"public checkpoint"
+    digest = hashlib.sha256(content).hexdigest()
+    source = tmp_path / "downloaded.pt"
+    source.write_bytes(content)
+    calls = []
+
+    class Hosted:
+        model_id = "public-model"
+        repo_id = "org/public-model"
+        artifact = "model.pt"
+        sha256 = digest
+
+        def to_summary(self):
+            return {"revision": "c" * 40}
+
+    def older_hf_hub_download(
+        repo_id, filename, *, repo_type, revision, token, cache_dir
+    ):
+        calls.append((repo_id, filename, repo_type, revision, token, cache_dir))
+        return source
+
+    progress = []
+    verified = download_verified_hosted_checkpoint(
+        Hosted(),
+        tmp_path / "remote-cache",
+        hf_hub_download=older_hf_hub_download,
+        progress_callback=progress.append,
+    )
+
+    assert verified.read_bytes() == content
+    assert calls == [
+        ("org/public-model", "model.pt", "model", "c" * 40, False,
+         str((tmp_path / "remote-cache" / "huggingface").resolve()))
+    ]
+    assert progress[0]["phase"] == "model_download"
+
+
 def test_modal_prediction_spending_limit_stops_scheduling_after_observed_batch_cost(tmp_path):
     first = tmp_path / "first.jpg"
     second = tmp_path / "second.jpg"

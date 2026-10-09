@@ -174,9 +174,10 @@ The first supported model choices are:
 - **Faster R-CNN with ResNet-50 FPN v2**.
 
 For training, **General pretrained weights** remains the default. You can also
-choose one of the three public AmphiLens fine-tuned models or a checkpoint
-already saved in the current project. Choosing an AmphiLens model fixes that
-run to its recorded architecture, size, preprocessing profile, and input size.
+choose one of the three public AmphiLens domain-pretrained models, one of the
+three later fine-tuned models, or a checkpoint already saved in the current
+project. Choosing an AmphiLens model fixes that run to its recorded
+architecture, size, preprocessing profile, and input size.
 
 The AmphiLens models are hosted in the public
 [`josh-salako/amphilens` Hugging Face repository](https://huggingface.co/josh-salako/amphilens).
@@ -220,8 +221,10 @@ until you provide a separate validation dataset, results say:
 The training source starts as **General pretrained weights**. Select
 **AmphiLens pretrained model** to initialize from one of the hosted checkpoints;
 AmphiLens adapts the detector output head to the current project's target
-classes while keeping compatible learned weights. **Existing project
-checkpoint** continues from a checkpoint already registered in the project.
+classes while keeping compatible learned weights. The domain-pretrained models
+are the earlier transfer-learning stage; the fine-tuned models use the study's
+three wildlife classes. **Existing project checkpoint** continues from a
+checkpoint already registered in the project.
 
 Use **Find wildlife** to run a selected base model or trained checkpoint over
 an unlabeled image folder.

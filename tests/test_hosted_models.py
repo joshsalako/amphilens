@@ -24,6 +24,9 @@ def test_hosted_catalog_contains_exact_architectures_classes_and_artifact_hashes
         "amphilens-yolo26-m",
         "amphilens-rtdetr-l",
         "amphilens-faster-rcnn-resnet50",
+        "amphilens-yolo26-m-domain",
+        "amphilens-rtdetr-l-domain",
+        "amphilens-faster-rcnn-resnet50-domain",
     }
     assert models["amphilens-yolo26-m"].architecture == "yolo"
     assert models["amphilens-yolo26-m"].size == "medium"

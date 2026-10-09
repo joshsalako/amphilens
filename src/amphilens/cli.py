@@ -167,7 +167,7 @@ if typer is not None:
         estimate = service.estimate(
             selected.root,
             gpu=gpu,
-            epochs=project.project_config.epochs if epochs is None else epochs,
+            epochs=(project.project_config.epochs if epochs is None else epochs) * 2,
             image_size=(project.project_config.image_size if image_size is None else image_size),
             max_cost_usd=max_cost_usd,
         )
@@ -207,6 +207,7 @@ if typer is not None:
             overrides["epochs"] = epochs
         if batch_size is not None:
             overrides["batch_size"] = batch_size
+        overrides["freeze_strategy"] = "paper-phased"
         effective = resolve_effective_configuration(
             project,
             checkpoint_manifest=checkpoint_manifest,
@@ -219,7 +220,7 @@ if typer is not None:
         estimate = service.estimate(
             selected_snapshot.root,
             gpu=gpu,
-            epochs=effective.epochs,
+            epochs=effective.epochs * 2,
             image_size=effective.image_size,
             max_cost_usd=max_cost_usd,
         )
@@ -243,6 +244,7 @@ if typer is not None:
                 "seed": effective.seed,
                 "device": "cuda",
                 "evaluation": "not evaluated",
+                "freeze_strategy": "paper-phased",
             },
             consent=CloudConsent(
                 acknowledged=True,
@@ -366,20 +368,34 @@ if typer is not None:
         project_id: str = typer.Option(..., "--project-id"),
         class_mapping: str = typer.Option("{}", "--class-mapping"),
         server_url: str | None = typer.Option(None, "--server-url"),
+        display_name: str | None = typer.Option(None, "--name"),
     ):
-        """Import a complete existing CVAT project through the CVAT API."""
+        """Import each task in a CVAT project as a selectable dataset snapshot."""
         try:
             mapping = json.loads(class_mapping)
         except json.JSONDecodeError as exc:
             raise ValueError("--class-mapping must be a JSON object") from exc
         if not isinstance(mapping, dict):
             raise ValueError("--class-mapping must be a JSON object")
-        snapshot = ProjectStore(project_dir).import_cvat_project(
+        store = ProjectStore(project_dir)
+        snapshots = store.import_cvat_project_tasks(
             project_id,
             class_mapping=mapping,
             server_url=server_url,
+            display_name=display_name,
         )
-        typer.echo(json.dumps(snapshot.manifest.to_dict(), indent=2))
+        typer.echo(
+            json.dumps(
+                [
+                    {
+                        "name": store.dataset_display_name(snapshot.root),
+                        "snapshot": snapshot.manifest.to_dict(),
+                    }
+                    for snapshot in snapshots
+                ],
+                indent=2,
+            )
+        )
 
     @app.command()
     def train(
@@ -420,6 +436,7 @@ if typer is not None:
             overrides["batch_size"] = batch_size
         if device is not None:
             overrides["device"] = device
+        overrides["freeze_strategy"] = "paper-phased"
         if short_side_dimension is not None or grayscale is not None or clahe is not None:
             project_preprocessing = project.project_config.preprocessing
             overrides["preprocessing"] = PreprocessingConfig(
