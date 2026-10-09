@@ -15,6 +15,7 @@
     modalGpus: [],
     jobs: new Map(),
     jobMeta: new Map(),
+    timestampJobs: new Map(),
     activeJob: null,
     cvatProjects: null,
     cvatServerUrl: "",
@@ -1108,6 +1109,15 @@
     const prediction = result.prediction && typeof result.prediction === "object" ? result.prediction : null;
     const collection = result.image_collection && typeof result.image_collection === "object" ? result.image_collection : null;
     const detectionCount = Number(prediction?.detection_count || 0);
+    const timestampJobId = app.timestampJobs.get(job.job_id || "");
+    const timestampJob = timestampJobId ? app.jobs.get(timestampJobId) : null;
+    const timestampState = String(timestampJob?.state || "").toLowerCase();
+    const timestampActive = timestampJob && !["completed", "failed", "canceled"].includes(timestampState);
+    const timestampProgress = timestampJob?.progress || {};
+    const timestampDownloads = Array.isArray(timestampJob?.result?.downloads) ? timestampJob.result.downloads : [];
+    const timestampProgressText = timestampActive
+      ? `Processed ${formatNumber(timestampProgress.completed || 0)} of ${formatNumber(timestampProgress.total || 0)} unique images · ${formatNumber(timestampProgress.recognized || 0)} recognized · ${formatNumber(timestampProgress.unparsed || 0)} unresolved`
+      : "";
     const progressText = typeof job.progress === "object" ? job.progress.message || job.progress.label || "" : "";
     const progressContext = [activity.device, humanize(details.phase), activity.phasePercent != null ? `Step ${Math.round(activity.phasePercent)}%` : "", activity.epochText, activity.counts, activity.metrics, activity.eta ? `About ${activity.eta} left` : ""].filter(Boolean).join(" · ");
     return `<section class="job-card" aria-label="Job status"><div class="job-head"><div class="job-title"><span class="status-dot" aria-hidden="true"></span>${failed ? "This run needs attention" : canceled ? "Prediction canceled" : completed ? "Run complete" : "Working on your request"}</div><span class="job-state ${completed ? "is-completed" : failed ? "is-failed" : ""}"><span class="status-dot" aria-hidden="true"></span>${escapeHtml(state)}</span></div>
@@ -1121,6 +1131,7 @@
       ${paths.length ? `<ul class="path-list">${paths.map(([label, value]) => `<li><span>${escapeHtml(String(label).replace(/[_-]+/g, " "))}</span><span>${escapeHtml(value)}</span></li>`).join("")}</ul>` : ""}
       ${downloads.length ? `<div class="download-list">${downloads.map((item) => `<a class="download-link" href="${escapeHtml(safeHref(item.url))}" download="${escapeHtml(item.filename || "")}">${escapeHtml(item.label || item.filename || "Download file")}</a>`).join("")}</div>` : ""}
       ${completed && app.activeJob?.kind === "predict" && prediction ? `<div class="collection-actions"><button class="button small" type="button" data-collect-images="${escapeHtml(job.job_id || "")}" ${detectionCount <= 0 ? "disabled" : ""}>Collect detected images</button>${detectionCount <= 0 ? `<p class="job-description">There are no detected images to collect.</p>` : ""}${collection ? `<p class="job-description">Copied ${formatNumber(collection.copied_count)} image${Number(collection.copied_count) === 1 ? "" : "s"} to <code>${escapeHtml(collection.folder || "")}</code>. ${formatNumber(collection.already_present_count)} already collected; ${formatNumber(collection.missing_count)} source image${Number(collection.missing_count) === 1 ? " was" : "s were"} missing.</p>` : ""}</div>` : ""}
+      ${completed && app.activeJob?.kind === "predict" && prediction ? `<div class="collection-actions timestamp-actions"><button class="button small" type="button" data-ocr-timestamps="${escapeHtml(job.job_id || "")}" ${detectionCount <= 0 || timestampActive ? "disabled" : ""}>${timestampActive ? "Running timestamp OCR…" : "Run OCR to extract date and time"}</button>${detectionCount <= 0 ? `<p class="job-description">There are no detections to process.</p>` : ""}${timestampActive ? `<p class="job-description" role="status">${escapeHtml(timestampProgressText)}</p><div class="progress-track" role="progressbar" aria-label="Timestamp OCR progress" aria-valuemin="0" aria-valuemax="100"${timestampProgress.total ? ` aria-valuenow="${Math.round((timestampProgress.completed || 0) * 100 / timestampProgress.total)}"` : ""}><div class="progress-fill${timestampProgress.total ? "" : " indeterminate"}"${timestampProgress.total ? ` style="width:${Math.round((timestampProgress.completed || 0) * 100 / timestampProgress.total)}%"` : ""}></div></div>` : ""}${timestampJob?.error ? `<p class="job-detail" role="alert">${escapeHtml(timestampJob.error)}</p>` : ""}${timestampState === "completed" ? `<p class="job-description" role="status">${escapeHtml(timestampJob.result?.message || `Recognized ${formatNumber(timestampJob.result?.recognized_count)} images; ${formatNumber(timestampJob.result?.unparsed_count)} unresolved.`)}</p>${timestampDownloads.length ? `<div class="download-list">${timestampDownloads.map((item) => `<a class="download-link" href="${escapeHtml(safeHref(item.url))}" download="${escapeHtml(item.filename || "")}">${escapeHtml(item.label || "Download updated predictions CSV")}</a>`).join("")}</div>` : ""}` : ""}</div>` : ""}
       ${app.activeJob?.kind === "cvat" && (job.result?.task_url || job.result?.cvat_url || job.result?.server_url || app.managedCvatUrl) ? `<div class="download-list"><a class="download-link" href="${escapeHtml(safeHref(job.result?.task_url || job.result?.cvat_url || job.result?.server_url || app.managedCvatUrl))}" target="_blank" rel="noopener noreferrer">Open CVAT</a></div>` : ""}
       ${job.status_offline ? `<button class="button small" type="button" data-poll-job-id="${escapeHtml(job.job_id || "")}">Check status again</button>` : ""}
     </section>`;
@@ -1161,6 +1172,25 @@
         app.jobs.set(jobId, job);
         if (app.activeJob?.id === jobId) renderJobSlot();
         renderActivity();
+        return;
+      }
+    }
+  }
+
+  async function pollTimestampJob(jobId, predictionJobId) {
+    for (;;) {
+      await new Promise((resolve) => window.setTimeout(resolve, 900));
+      try {
+        const job = await api(`/api/jobs/${encodeURIComponent(jobId)}`, { method: "GET", headers: {} });
+        app.jobs.set(jobId, job);
+        if (app.activeJob?.id === predictionJobId) renderJobSlot();
+        if (["completed", "failed", "canceled"].includes(String(job.state).toLowerCase())) return;
+      } catch (error) {
+        const job = app.jobs.get(jobId) || { job_id: jobId, state: "running" };
+        job.status_offline = true;
+        job.error = `Could not refresh OCR status: ${error.message}`;
+        app.jobs.set(jobId, job);
+        if (app.activeJob?.id === predictionJobId) renderJobSlot();
         return;
       }
     }
@@ -1252,6 +1282,32 @@
       } catch (error) {
         collectButton.disabled = false;
         collectButton.textContent = "Collect detected images";
+        toast(error.message, true);
+      }
+      return;
+    }
+    const ocrButton = event.target.closest("[data-ocr-timestamps]");
+    if (ocrButton) {
+      event.preventDefault();
+      const predictionJobId = ocrButton.dataset.ocrTimestamps;
+      ocrButton.disabled = true;
+      ocrButton.textContent = "Starting timestamp OCR…";
+      try {
+        const result = await api(`/api/jobs/${encodeURIComponent(predictionJobId)}/ocr-timestamps`, {
+          method: "POST",
+          body: JSON.stringify({}),
+        });
+        app.timestampJobs.set(predictionJobId, result.job_id);
+        app.jobs.set(result.job_id, {
+          job_id: result.job_id,
+          state: "queued",
+          result: { message: result.message },
+        });
+        renderJobSlot();
+        pollTimestampJob(result.job_id, predictionJobId);
+      } catch (error) {
+        ocrButton.disabled = false;
+        ocrButton.textContent = "Run OCR to extract date and time";
         toast(error.message, true);
       }
       return;

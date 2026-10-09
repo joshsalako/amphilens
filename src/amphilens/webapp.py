@@ -2504,6 +2504,95 @@ def create_app(
         except Exception as exc:
             return _failure(exc)
 
+    async def job_ocr_timestamps(request: Request) -> Response:
+        try:
+            job = app.state.jobs.snapshot(request.path_params["job_id"])
+            if job is None:
+                return _json({"detail": "Workflow job was not found"}, 404)
+            if job["state"] != "completed":
+                return _json(
+                    {"detail": "Timestamps can only be extracted from a completed prediction"},
+                    409,
+                )
+            result = job.get("result") or {}
+            prediction = result.get("prediction")
+            if not isinstance(prediction, dict):
+                raise ValueError("This job does not contain prediction results")
+            try:
+                detection_count = int(prediction.get("detection_count", 0))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Prediction detection count is invalid") from exc
+            if detection_count <= 0:
+                raise ValueError("There are no detections to process")
+
+            from .core import RunManifest, _validate_run_id, read_json
+
+            project_root = prediction.get("project_root")
+            run_id = prediction.get("run_id")
+            csv_value = prediction.get("csv")
+            image_root_value = prediction.get("image_root")
+            if not all(isinstance(value, str) and value for value in (project_root, run_id)):
+                raise ValueError("Prediction project or run information is missing")
+            if not isinstance(csv_value, str) or not csv_value:
+                raise ValueError("Prediction CSV path is missing")
+            if not isinstance(image_root_value, str) or not image_root_value:
+                raise ValueError("Prediction image folder is missing")
+
+            _validate_run_id(run_id)
+            store = ProjectStore(project_root)
+            store.load_manifest()
+            csv_path = Path(csv_value).expanduser().resolve()
+            image_root = Path(image_root_value).expanduser().resolve()
+            if csv_path.name != "predictions.csv" or not csv_path.is_file():
+                raise ValueError("Prediction CSV is missing or invalid")
+            if not image_root.is_dir():
+                raise ValueError("Prediction image folder was not found")
+            run_manifest_path = csv_path.parent / "run.json"
+            if not run_manifest_path.is_file():
+                raise ValueError("Prediction run metadata was not found")
+            run_manifest = RunManifest.from_dict(read_json(run_manifest_path))
+            if (
+                run_manifest.kind != "inference"
+                or run_manifest.run_id != run_id
+                or run_manifest.status not in {"completed", "completed_with_failures"}
+            ):
+                raise ValueError("Prediction run is not complete or does not match this job")
+
+            def run_ocr(progress_callback):
+                from .timestamp_ocr import process_prediction_csv
+
+                summary = process_prediction_csv(
+                    csv_path,
+                    image_root,
+                    progress_callback=progress_callback,
+                )
+                return JobOutput(
+                    result={
+                        "message": (
+                            f"Read timestamps for {summary.recognized_count} of "
+                            f"{summary.image_count} unique detected images; "
+                            f"{summary.unparsed_count} were unresolved."
+                        ),
+                        "prediction_csv": str(summary.csv_path),
+                        "image_count": summary.image_count,
+                        "recognized_count": summary.recognized_count,
+                        "unparsed_count": summary.unparsed_count,
+                    },
+                    downloads=[
+                        DownloadArtifact(
+                            summary.csv_path,
+                            "Predictions CSV with timestamps",
+                            "predictions.csv",
+                            "text/csv",
+                        )
+                    ],
+                )
+
+            job_id = app.state.jobs.submit(run_ocr, with_progress=True)
+            return _json({"job_id": job_id, "message": "Timestamp OCR started."})
+        except Exception as exc:
+            return _failure(exc)
+
     async def job_download(request: Request) -> Response:
         artifact = app.state.jobs.download(
             request.path_params["job_id"], request.path_params["download_id"]
@@ -2650,6 +2739,7 @@ def create_app(
     app.add_route("/api/jobs/{job_id:str}", job_status, methods=["GET"])
     app.add_route("/api/jobs/{job_id:str}/cancel", job_cancel, methods=["POST"])
     app.add_route("/api/jobs/{job_id:str}/collect-images", job_collect_images, methods=["POST"])
+    app.add_route("/api/jobs/{job_id:str}/ocr-timestamps", job_ocr_timestamps, methods=["POST"])
     app.add_route(
         "/api/jobs/{job_id:str}/downloads/{download_id:str}", job_download, methods=["GET"]
     )

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import csv
+import sys
+import threading
 import time
 from subprocess import CompletedProcess
 
@@ -9,7 +12,7 @@ pytest.importorskip("starlette")
 from starlette.testclient import TestClient
 
 import amphilens.webapp as webapp
-from amphilens.core import ProjectManifest, ProjectStore
+from amphilens.core import ProjectManifest, ProjectStore, RunManifest, atomic_write_json
 from amphilens.runs import InferenceInterruption
 from amphilens.state import UserStateStore
 from amphilens.webapp import DownloadArtifact, JobManager, JobOutput, create_app
@@ -69,6 +72,10 @@ def test_static_frontend_and_assets_are_served(client):
     assert "Prediction run:" in script
     assert "Collect detected images" in script
     assert "/collect-images" in script
+    assert "Run OCR to extract date and time" in script
+    assert "/ocr-timestamps" in script
+    assert 'data-ocr-timestamps="' in script
+    assert 'detectionCount <= 0 || timestampActive ? "disabled" : ""' in script
     assert 'detectionCount <= 0 ? "disabled" : ""' in script
     assert "There are no detected images to collect." in script
     assert 'name="training_source"' in script
@@ -332,6 +339,128 @@ def test_prediction_job_can_collect_unique_images_into_its_project_run_folder(
     no_detections = client.post(f"/api/jobs/{empty_job_id}/collect-images")
     assert no_detections.status_code == 400
     assert "no detected images" in no_detections.json()["detail"].lower()
+
+
+def test_ocr_job_updates_prediction_csv_and_returns_fresh_download(
+    client, jobs, tmp_path, monkeypatch
+):
+    import cv2
+    import numpy as np
+
+    import amphilens.timestamp_ocr as timestamp_ocr
+
+    image_root = tmp_path / "images"
+    image_root.mkdir()
+    image_path = image_root / "frame.jpg"
+    assert cv2.imwrite(str(image_path), np.zeros((200, 300, 3), dtype=np.uint8))
+    project_root = tmp_path / "project"
+    project = ProjectStore(project_root)
+    project.create(ProjectManifest.create("Survey", [image_root], ["toad"]))
+    run_id = "run-ocr-test123"
+    output_dir = project_root / "runs" / run_id
+    output_dir.mkdir(parents=True)
+    run = RunManifest.create("inference", {"model_id": "test"})
+    run.run_id = run_id
+    run.status = "completed"
+    atomic_write_json(output_dir / "run.json", run.to_dict())
+    predictions_csv = output_dir / "predictions.csv"
+    with predictions_csv.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["image_path", "class_name"])
+        writer.writeheader()
+        writer.writerows(
+            [
+                {"image_path": str(image_path), "class_name": "toad"},
+                {"image_path": str(image_path), "class_name": "frog"},
+            ]
+        )
+
+    rapidocr_factory = timestamp_ocr.create_rapidocr_engine
+    monkeypatch.setattr(
+        timestamp_ocr,
+        "create_rapidocr_engine",
+        lambda: (lambda crop: "09/10/2026 18:42:07"),
+    )
+    prediction_job = jobs.submit(
+        lambda: JobOutput(
+            result={
+                "prediction": {
+                    "run_id": run_id,
+                    "csv": str(predictions_csv),
+                    "image_root": str(image_root),
+                    "project_root": str(project_root),
+                    "detection_count": 2,
+                }
+            }
+        )
+    )
+    assert _wait_for_job(client, prediction_job)["state"] == "completed"
+
+    started = client.post(
+        f"/api/jobs/{prediction_job}/ocr-timestamps",
+        json={"csv": str(tmp_path / "untrusted.csv"), "image_root": str(tmp_path)},
+    )
+    assert started.status_code == 200, started.text
+    ocr_job_id = started.json()["job_id"]
+    ocr_job = _wait_for_job(client, ocr_job_id)
+    assert ocr_job["state"] == "completed"
+    assert ocr_job["progress"]["completed"] == 1
+    assert ocr_job["progress"]["recognized"] == 1
+    assert ocr_job["progress"]["unparsed"] == 0
+    assert ocr_job["result"]["recognized_count"] == 1
+    assert ocr_job["result"]["unparsed_count"] == 0
+    assert len(ocr_job["result"]["downloads"]) == 1
+    download = client.get(ocr_job["result"]["downloads"][0]["url"])
+    assert download.status_code == 200
+    assert b"date,time" in download.content
+    with predictions_csv.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert [(row["date"], row["time"]) for row in rows] == [
+        ("2026-10-09", "18:42:07"),
+        ("2026-10-09", "18:42:07"),
+    ]
+
+    updated_csv = predictions_csv.read_bytes()
+    monkeypatch.setattr(timestamp_ocr, "create_rapidocr_engine", rapidocr_factory)
+    monkeypatch.setitem(sys.modules, "rapidocr", None)
+    missing_extra = client.post(f"/api/jobs/{prediction_job}/ocr-timestamps", json={})
+    assert missing_extra.status_code == 200
+    dependency_job = _wait_for_job(client, missing_extra.json()["job_id"])
+    assert dependency_job["state"] == "failed"
+    assert "uv sync --extra web --extra inference --extra ocr" in dependency_job["error"]
+    assert predictions_csv.read_bytes() == updated_csv
+
+
+def test_ocr_action_requires_completed_prediction_with_detections(client, jobs):
+    gate = threading.Event()
+    running_job = jobs.submit(lambda: gate.wait(1))
+    try:
+        response = client.post(f"/api/jobs/{running_job}/ocr-timestamps", json={})
+        assert response.status_code == 409
+        assert "completed prediction" in response.json()["detail"].lower()
+    finally:
+        gate.set()
+
+    non_prediction = jobs.submit(lambda: {"message": "not a prediction"})
+    assert _wait_for_job(client, non_prediction)["state"] == "completed"
+    response = client.post(f"/api/jobs/{non_prediction}/ocr-timestamps", json={})
+    assert response.status_code == 400
+    assert "prediction results" in response.json()["detail"].lower()
+
+    empty = jobs.submit(
+        lambda: {
+            "prediction": {
+                "run_id": "run-no-detections",
+                "csv": "unused.csv",
+                "image_root": "unused-images",
+                "project_root": "unused-project",
+                "detection_count": 0,
+            }
+        }
+    )
+    assert _wait_for_job(client, empty)["state"] == "completed"
+    response = client.post(f"/api/jobs/{empty}/ocr-timestamps", json={})
+    assert response.status_code == 400
+    assert "no detections" in response.json()["detail"].lower()
 
 
 def test_prediction_request_rejects_unsupported_modal_gpu_and_batch_size():

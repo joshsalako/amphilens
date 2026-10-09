@@ -45,6 +45,11 @@ cloud = [
   "pillow>=10.0",
   "python-dotenv>=1.0",
 ]
+ocr = [
+  "onnxruntime>=1.18",
+  "opencv-python-headless>=4.10",
+  "rapidocr>=3.6.0",
+]
 dev = [
   "amphilens[cli,web,inference]",
   "python-dotenv>=1.0",
@@ -58,7 +63,7 @@ release = [
   "twine>=5.1",
 ]
 all = [
-  "amphilens[cli,web,inference,training,cvat,cloud,release]",
+  "amphilens[cli,web,inference,training,cvat,cloud,ocr,release]",
 ]
 
 [project.scripts]
