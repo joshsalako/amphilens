@@ -12,6 +12,7 @@ pytest.importorskip("starlette")
 from starlette.testclient import TestClient
 
 import amphilens.webapp as webapp
+from amphilens.cloud.provider_settings import CloudProviderSettingsStore
 from amphilens.core import ProjectManifest, ProjectStore, RunManifest, atomic_write_json
 from amphilens.runs import InferenceInterruption
 from amphilens.state import UserStateStore
@@ -35,6 +36,7 @@ def client(tmp_path, jobs, monkeypatch):
     )
     app = create_app(
         user_state_store=UserStateStore(tmp_path / "state.json"),
+        cloud_provider_settings_store=CloudProviderSettingsStore(tmp_path / "cloud-providers.json"),
         jobs=jobs,
         source_checkout=tmp_path / "checkout",
     )
@@ -112,6 +114,71 @@ def test_bootstrap_includes_cvat_url_from_dotenv_but_never_token(client, tmp_pat
     assert response.status_code == 200
     assert response.json()["cvat_server_url"] == "https://cvat.example.org"
     assert "fixture-token-must-not-leak" not in response.text
+
+
+def test_managed_provider_settings_are_local_nonsecret_and_allowlisted(client, tmp_path):
+    settings = {
+        "subscription_id": "subscription",
+        "resource_group": "wildlife-rg",
+        "workspace_name": "amphilens",
+        "location": "eastus",
+        "managed_identity_client_id": "identity-client-id",
+    }
+
+    response = client.post(
+        "/api/cloud/providers/settings",
+        json={"provider": "azure_ml", "settings": settings},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["settings"] == settings
+    saved = tmp_path / "cloud-providers.json"
+    assert "subscription" in saved.read_text(encoding="utf-8")
+    assert "access_token" not in saved.read_text(encoding="utf-8")
+    assert saved.stat().st_mode & 0o777 == 0o600
+
+    rejected = client.post(
+        "/api/cloud/providers/settings",
+        json={"provider": "azure_ml", "settings": {**settings, "access_token": "secret"}},
+    )
+    assert rejected.status_code == 400
+    assert "access_token" not in saved.read_text(encoding="utf-8")
+
+
+def test_managed_provider_check_reports_connection_from_adapter(client, monkeypatch, tmp_path):
+    class FakeTransport:
+        def probe(self):
+            return {"provider": "vertex_ai", "connectivity": "connected", "region": "us-central1"}
+
+    monkeypatch.setattr(
+        webapp,
+        "_cloud_service",
+        lambda *_args, **_kwargs: (type("Service", (), {"transport": FakeTransport()})(), None),
+    )
+    configured = client.post(
+        "/api/cloud/providers/settings",
+        json={
+            "provider": "vertex_ai",
+            "settings": {
+                "project_id": "project",
+                "location": "us-central1",
+                "staging_bucket": "staging",
+                "service_account": "runner@example.com",
+            },
+        },
+    )
+    assert configured.status_code == 200
+    image_root = tmp_path / "images"
+    image_root.mkdir()
+    project = ProjectStore(tmp_path / "project")
+    project.create(ProjectManifest.create("field-study", [image_root], ["frog"]))
+    opened = client.post("/api/projects/open", json={"path": str(project.root)})
+    assert opened.status_code == 200
+
+    response = client.post("/api/cloud/providers/check", json={"provider": "vertex_ai"})
+
+    assert response.status_code == 200, response.text
+    assert response.json()["connection"]["region"] == "us-central1"
 
 
 def test_local_path_picker_returns_the_selected_path(client, monkeypatch, tmp_path):
@@ -378,7 +445,7 @@ def test_ocr_job_updates_prediction_csv_and_returns_fresh_download(
     monkeypatch.setattr(
         timestamp_ocr,
         "create_rapidocr_engine",
-        lambda: (lambda crop: "09/10/2026 18:42:07"),
+        lambda: lambda crop: "09/10/2026 18:42:07",
     )
     prediction_job = jobs.submit(
         lambda: JobOutput(
@@ -1009,7 +1076,7 @@ def test_cloud_training_submits_hosted_model_without_local_checkpoint(tmp_path, 
     snapshots = tuple(
         SimpleNamespace(
             root=tmp_path / snapshot_id,
-            manifest=SimpleNamespace(snapshot_id=snapshot_id, classes=list(hosted.source_classes))
+            manifest=SimpleNamespace(snapshot_id=snapshot_id, classes=list(hosted.source_classes)),
         )
         for snapshot_id in ("train-id", "validation-id", "test-id")
     )
@@ -1120,6 +1187,47 @@ def test_hosted_modal_prediction_sends_project_preprocessing(tmp_path, monkeypat
 
     assert observed["model_spec"]["preprocessing"]["short_side_dimension"] == 512
     assert observed["model_spec"]["preprocessing"]["clahe_enabled"] is True
+
+
+def test_managed_prediction_blocks_unknown_price_before_upload(tmp_path):
+    from PIL import Image
+
+    from amphilens.webapp import PredictionsRequest, run_prediction_job
+
+    image_root = tmp_path / "images"
+    image_root.mkdir()
+    image_path = image_root / "sample.jpg"
+    Image.new("RGB", (32, 24), color="gray").save(image_path)
+    store = ProjectStore(tmp_path / "project")
+    store.create(ProjectManifest.create("field-study", [image_root], ["frog"]))
+
+    class FakeTransport:
+        uploads = []
+
+        def price_rate(self, _gpu):
+            raise ValueError("current Azure GPU rate is unavailable; submission is blocked")
+
+        def upload_prediction_batch(self, *args):
+            self.uploads.append(args)
+
+    transport = FakeTransport()
+    request = PredictionsRequest(
+        run_name="Managed prediction",
+        image_root=str(image_root),
+        output_dir=str(tmp_path / "output"),
+        execution="azure_ml",
+        gpu="T4",
+        max_cost_usd=1.0,
+        acknowledged=True,
+        uploads_dataset=True,
+        expected_image_count=1,
+        expected_total_bytes=image_path.stat().st_size,
+    )
+
+    with pytest.raises(ValueError, match="submission is blocked"):
+        run_prediction_job(store, request, cloud_transport=transport)
+
+    assert transport.uploads == []
 
 
 def test_job_errors_are_actionable_and_redact_credentials(client, jobs):

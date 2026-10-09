@@ -1,8 +1,9 @@
-# Cloud GPU training
+# Cloud GPU training and batch prediction
 
-AmphiLens can run one training job in your own Modal account while keeping the
-project folder and result registry on your computer. The cloud path is an
-optional provider adapter; local training remains available.
+AmphiLens can run training and batch prediction locally or through Modal, Azure
+Machine Learning, and Google Vertex AI. Cloud jobs use your configured account
+and existing storage resources; the project folder and result registry stay on
+your computer. Cloud SDKs are optional dependencies.
 
 ## Setup and credentials
 
@@ -12,6 +13,60 @@ Install the cloud extra in addition to the usual training and browser app depend
 uv sync --locked --python 3.11 \
   --extra cli --extra web --extra inference --extra training --extra cloud
 ```
+
+The `cloud` extra installs Modal. Install `cloud-azure` or `cloud-gcp` instead
+when using those providers:
+
+```bash
+uv sync --locked --python 3.11 \
+  --extra cli --extra web --extra inference --extra training --extra cloud-azure
+# or use --extra cloud-gcp
+```
+
+### Azure Machine Learning
+
+Sign in on the computer running AmphiLens and configure the existing Azure ML
+workspace in **Check your setup**:
+
+```bash
+az login
+```
+
+Enter the subscription, resource group, workspace, region, and the client ID of
+the user-assigned managed identity configured on that workspace. The signed-in
+user needs permission to submit Azure ML jobs and access the workspace's
+`workspaceblobstore`. The workspace identity needs permission to read and write
+job objects in that storage container; allow deletion too so staged files can
+be cleaned up. Azure ML serverless jobs use the selected VM type for each run.
+The app's connection check verifies the local identity, workspace identity, and
+storage access without uploading a project dataset. See the [Azure ML serverless
+compute guide](https://learn.microsoft.com/en-us/azure/machine-learning/how-to-use-serverless-compute?view=azureml-api-2)
+and [Azure ML authentication guide](https://learn.microsoft.com/en-us/azure/machine-learning/how-to-setup-authentication?view=azureml-api-2).
+
+### Google Vertex AI
+
+Configure Application Default Credentials on the computer running AmphiLens,
+then enter an existing project, region, staging bucket, and least-privilege job
+service account in **Check your setup**:
+
+```bash
+gcloud auth application-default login
+```
+
+Enable the Vertex AI and Cloud Storage APIs. The signed-in user needs permission
+to submit custom jobs, impersonate the selected job service account, and read,
+write, and delete objects in the staging bucket. The job service account also
+needs read, write, and delete access to that bucket. The app's connection check
+verifies Vertex job-list access and that the bucket is visible; it does not
+submit a GPU job. See Google's [local ADC setup](https://docs.cloud.google.com/docs/authentication/set-up-adc-local-dev-environment),
+[custom training service account guide](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/general/custom-service-account),
+and [Vertex AI Python SDK reference](https://docs.cloud.google.com/python/docs/reference/aiplatform/latest/google.cloud.aiplatform.CustomJob).
+
+For both providers, AmphiLens creates temporary per-run GPU jobs and staged
+objects. It does not create a workspace, project, bucket, or persistent GPU
+cluster. Cloud estimates use the provider's public price catalog for the chosen
+region; an unknown rate blocks submission. Estimates are advisory and are not
+billing caps. Review the upload consent and spending limit before each job.
 
 Create a Modal API token in your Modal account, then save it in the masked
 fields on the cloud training screen or with the CLI. Neither path puts token

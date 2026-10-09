@@ -13,6 +13,7 @@
     models: [],
     hostedModels: [],
     modalGpus: [],
+    cloudProviderSettings: {},
     jobs: new Map(),
     jobMeta: new Map(),
     timestampJobs: new Map(),
@@ -203,6 +204,7 @@
       app.hostedModels = data.hosted_models || app.project?.hosted_models || [];
       app.cvatServerUrl = data.cvat_server_url || app.cvatServerUrl || "";
       app.modalGpus = data.modal_gpus || [];
+      app.cloudProviderSettings = data.cloud_provider_settings || {};
       app.bootstrapped = true;
       updateProjectHeader();
       populateModelPreset();
@@ -340,9 +342,29 @@
 
   function syncPredictionExecutionControls(form) {
     if (!form) return;
-    const cloud = form.elements.execution?.value === "modal";
-    form.querySelector("[data-modal-prediction-settings]")?.toggleAttribute("hidden", !cloud);
+    const provider = form.elements.execution?.value || "local";
+    const cloud = provider !== "local";
+    form.querySelector("[data-cloud-prediction-settings]")?.toggleAttribute("hidden", !cloud);
     form.querySelector("[data-local-prediction-settings]")?.toggleAttribute("hidden", cloud);
+    const gpu = form.elements.gpu;
+    if (gpu && cloud) gpu.innerHTML = cloudGpuOptions(provider, gpu.value);
+  }
+
+  function cloudGpuOptions(provider, selected = "") {
+    const names = provider === "modal"
+      ? app.modalGpus.map((item) => item.name)
+      : provider === "azure_ml" ? ["T4", "A10G", "A100"] : ["T4", "L4", "A100"];
+    const fallback = names.includes(selected) ? selected : (names.includes("L4") ? "L4" : names[0]);
+    return names.map((name) => {
+      const modalRate = provider === "modal"
+        ? ` · $${Number(app.modalGpus.find((item) => item.name === name)?.usd_per_hour || 0).toFixed(3)}/hour`
+        : " · current regional rate checked before submit";
+      return `<option value="${escapeHtml(name)}"${name === fallback ? " selected" : ""}>${escapeHtml(name)}${modalRate}</option>`;
+    }).join("");
+  }
+
+  function providerLabel(provider) {
+    return ({ modal: "Modal", azure_ml: "Azure Machine Learning", vertex_ai: "Google Vertex AI" })[provider] || "Cloud provider";
   }
 
   function renderPredict() {
@@ -357,13 +379,13 @@
           <div class="field"><label for="prediction-model">Model</label><select id="prediction-model" name="model_choice">${modelOptions()}</select></div>
           <div id="prediction-hosted-details" class="hosted-model-panel" hidden></div>
           <div id="prediction-class-mapping" class="hosted-class-mapping" hidden></div>
-          <div class="field"><label for="prediction-execution">Where to run</label><select id="prediction-execution" name="execution"><option value="local">This computer</option><option value="modal">Modal cloud GPU</option></select><span class="field-help">Cloud prediction transfers images in small batches. Images remain in this project on your computer.</span></div>
+          <div class="field"><label for="prediction-execution">Where to run</label><select id="prediction-execution" name="execution"><option value="local">This computer</option><option value="modal">Modal cloud GPU</option><option value="azure_ml">Azure Machine Learning</option><option value="vertex_ai">Google Vertex AI</option></select><span class="field-help">Cloud prediction transfers images in small batches. Images remain in this project on your computer.</span></div>
           <details class="advanced-settings"><summary>Detection settings</summary><div class="advanced-body">
             <div class="field"><label for="confidence">Confidence threshold</label><div class="range-field"><input id="confidence" name="confidence" type="range" min="0.05" max="0.95" step="0.05" value="0.25"><output class="range-value" for="confidence">0.25</output></div><span class="field-help">Higher values keep only more confident detections.</span></div>
             <div class="field"><label for="prediction-output">Save results in <span class="optional">optional</span></label>${pathPickerControl("prediction-output", "output_dir", "directory", "Use the project runs folder", { label: "a results folder" })}</div>
             <div class="field" data-local-prediction-settings><label for="prediction-device">Local device</label><select id="prediction-device" name="device"><option value="auto">Auto</option><option value="cpu">CPU</option>${app.doctor?.cuda_available ? `<option value="cuda">CUDA GPU</option>` : ""}${app.doctor?.mps_available ? `<option value="mps">Apple MPS GPU</option>` : ""}</select><span class="field-help">Auto uses CUDA or Apple MPS when available, then CPU.</span></div>
             <div class="field"><label for="prediction-batch-size">Batch size</label><select id="prediction-batch-size" name="batch_size"><option value="auto" selected>Auto</option>${Array.from({ length: 32 }, (_, index) => `<option value="${index + 1}">${index + 1}</option>`).join("")}</select><span class="field-help">Auto starts at up to 8 images on GPU and reduces the batch if memory is low. CPU always processes one image at a time.</span></div>
-            <div class="modal-prediction-settings" data-modal-prediction-settings hidden><div class="field"><label for="prediction-gpu">Modal GPU</label><select id="prediction-gpu" name="gpu">${app.modalGpus.map((gpu) => `<option value="${escapeHtml(gpu.name)}"${gpu.name === "L4" ? " selected" : ""}>${escapeHtml(gpu.name)} · $${Number(gpu.usd_per_hour).toFixed(3)}/GPU hour</option>`).join("")}</select><span class="field-help">One remote GPU worker processes one image batch at a time.</span></div><div class="field"><label for="prediction-max-cost">Spending limit (USD)</label><input id="prediction-max-cost" name="max_cost_usd" type="number" min="0.01" step="0.01" value="5.00" required><span class="field-help">The worker stops scheduling batches when its runtime-based estimate reaches this amount.</span></div></div>
+            <div class="cloud-prediction-settings" data-cloud-prediction-settings hidden><div class="field"><label for="prediction-gpu">Cloud GPU</label><select id="prediction-gpu" name="gpu">${cloudGpuOptions("modal", "L4")}</select><span class="field-help">The current full VM rate is checked for the selected provider and region before transfer.</span></div><div class="field"><label for="prediction-max-cost">Spending limit (USD)</label><input id="prediction-max-cost" name="max_cost_usd" type="number" min="0.01" step="0.01" value="5.00" required><span class="field-help">AmphiLens stops scheduling batches when its runtime estimate reaches this amount. This is not a billing cap.</span></div></div>
           </div></details>
           <div class="form-actions"><button class="button primary" type="submit">Run detection</button><span class="muted" style="font-size:.75rem">You can leave this page while it runs.</span></div>
         </form><div id="job-slot" aria-live="polite"></div>
@@ -531,11 +553,12 @@
         <div class="field" data-training-hosted hidden><label for="training-hosted-model">AmphiLens model</label><select id="training-hosted-model" name="hosted_model_id"><option value="">Choose a model</option>${(app.hostedModels || []).map((item) => `<option value="${escapeHtml(item.model_id)}">${escapeHtml(item.name || item.model_id)}</option>`).join("")}</select><span class="field-help">The model supplies the architecture, size, and input preprocessing for this run.</span></div>
         <div class="hosted-model-panel" data-training-hosted-details hidden></div>
         <div class="field" data-training-checkpoint hidden><label for="training-checkpoint">Project checkpoint</label><select id="training-checkpoint" name="checkpoint"><option value="">Choose a saved checkpoint</option>${checkpoints.map((item) => `<option value="${escapeHtml(item.path)}">${escapeHtml(item.name || item.model_id || basename(item.path))}</option>`).join("")}</select></div>
-        <div class="field"><label for="training-execution">Where should it run?</label><select id="training-execution" name="execution"><option value="local">On this computer</option><option value="cloud">Modal cloud GPU</option></select></div>
+        <div class="field"><label for="training-execution">Where should it run?</label><select id="training-execution" name="execution"><option value="local">On this computer</option><option value="cloud">Cloud GPU</option></select></div>
         <details class="advanced-settings"><summary>Training settings</summary><div class="advanced-body"><div class="field-row"><div class="field"><label for="training-epochs">Maximum epochs per phase</label><input id="training-epochs" name="epochs" type="number" min="1" max="1000" value="100"></div><div class="field"><label for="training-patience">Patience</label><input id="training-patience" name="patience" type="number" min="0" max="1000" value="25"></div></div><div class="field-row"><div class="field"><label for="training-batch">Batch size</label><input id="training-batch" name="batch_size" type="number" min="1" max="256" value="16"></div><div class="field"><label for="training-output">Save run in <span class="optional">optional</span></label>${pathPickerControl("training-output", "output_dir", "directory", "Use the project runs folder", { label: "a run folder" })}</div></div><div class="field"><label for="training-device">Local device</label><select id="training-device" name="device"><option value="auto">Choose automatically</option><option value="cpu">CPU</option><option value="cuda">CUDA GPU</option>${app.doctor?.mps_available ? `<option value="mps">Apple MPS GPU</option>` : ""}</select></div></div></details>
         <div class="cloud-settings hidden" data-cloud-settings>
           <div class="notice warning"><span class="notice-mark" aria-hidden="true">!</span><p>Cloud training uploads a prepared copy of the selected dataset and checkpoint. Review the estimate and approve both the upload and cost before submitting.</p></div>
-          <div class="field-row" style="margin-top:15px"><div class="field"><label for="training-gpu">GPU</label><select id="training-gpu" name="gpu"><option value="T4">T4</option><option value="A10G">A10G</option><option value="A100">A100</option></select></div><div class="field"><label for="training-max-cost">Maximum budget · USD</label><input id="training-max-cost" name="max_cost_usd" type="number" min="0.01" step="0.01" placeholder="Enter your limit"></div></div>
+          <div class="field" style="margin-top:15px"><label for="training-provider">Cloud provider</label><select id="training-provider" name="provider"><option value="modal">Modal</option><option value="azure_ml">Azure Machine Learning</option><option value="vertex_ai">Google Vertex AI</option></select><span class="field-help">Configure cloud identity and an existing workspace or project in Check your setup.</span></div>
+          <div class="field-row" style="margin-top:12px"><div class="field"><label for="training-gpu">GPU</label><select id="training-gpu" name="gpu">${cloudGpuOptions("modal", "L4")}</select></div><div class="field"><label for="training-max-cost">Maximum budget · USD</label><input id="training-max-cost" name="max_cost_usd" type="number" min="0.01" step="0.01" placeholder="Enter your limit"></div></div>
           <button class="button" type="button" data-cloud-estimate>Request estimate</button><div id="cloud-estimate-slot" aria-live="polite">${renderCloudEstimate()}</div>
           <label class="consent-row"><input type="checkbox" name="uploads_dataset"><span>I approve uploading the prepared dataset and selected checkpoint for this run.</span></label>
           <label class="consent-row"><input type="checkbox" name="acknowledged"><span>I understand the estimate is a planning range, not a guaranteed billing cap.</span></label>
@@ -543,7 +566,7 @@
         <div class="form-actions"><button class="button primary" type="submit">Train model</button></div>
       </form><div id="job-slot" aria-live="polite"></div>
     </section></div>
-      <section class="surface panel cloud-jobs-panel"><div class="panel-heading"><div><h2>Cloud jobs</h2><p>Active Modal training progress refreshes automatically while AmphiLens is open.</p></div><button class="button small" type="button" data-refresh-cloud-jobs>Refresh jobs</button></div><div id="cloud-jobs-slot" aria-live="polite"><p class="empty-inline">Loading saved cloud jobs…</p></div></section>` : `<section class="surface empty-state" style="margin-top:0"><div class="empty-illustration" aria-hidden="true">↗</div><h2>No labeled dataset yet</h2><p>Import a reviewed archive or CVAT project first. You can still use Find wildlife with a pretrained model while you gather annotations.</p><div class="project-actions"><button class="button primary" type="button" data-view="import">Import labeled images</button><button class="button" type="button" data-view="predict">Find wildlife</button></div></section>`;
+      <section class="surface panel cloud-jobs-panel"><div class="panel-heading"><div><h2>Cloud jobs</h2><p>Training progress refreshes automatically while AmphiLens is open.</p></div><button class="button small" type="button" data-refresh-cloud-jobs>Refresh jobs</button></div><div id="cloud-jobs-slot" aria-live="polite"><p class="empty-inline">Loading saved cloud jobs…</p></div></section>` : `<section class="surface empty-state" style="margin-top:0"><div class="empty-illustration" aria-hidden="true">↗</div><h2>No labeled dataset yet</h2><p>Import a reviewed archive or CVAT project first. You can still use Find wildlife with a pretrained model while you gather annotations.</p><div class="project-actions"><button class="button primary" type="button" data-view="import">Import labeled images</button><button class="button" type="button" data-view="predict">Find wildlife</button></div></section>`;
     root.innerHTML = `${pageHead("Train a model", "Fine-tune a model using a validated labeled dataset snapshot.")}${workflow}`;
     const form = root.querySelector('form[data-form="training"]');
     restoreWorkflowViewState("training");
@@ -557,6 +580,10 @@
     if (!form) return;
     const cloud = form.elements.execution?.value === "cloud";
     form.querySelector("[data-cloud-settings]")?.classList.toggle("hidden", !cloud);
+    form.querySelector("#training-device")?.closest(".field")?.classList.toggle("hidden", cloud);
+    const provider = form.elements.provider?.value || "modal";
+    const gpu = form.elements.gpu;
+    if (gpu && cloud) gpu.innerHTML = cloudGpuOptions(provider, gpu.value);
     form.querySelector('.form-actions button[type="submit"]')?.replaceChildren(
       document.createTextNode(cloud ? "Submit cloud training" : "Train model"),
     );
@@ -571,6 +598,7 @@
       patience: numberOrUndefined(form.elements.patience?.value),
       allow_image_level_split: Boolean(form.elements.allow_image_level_split?.checked),
       gpu: form.elements.gpu?.value || "",
+      provider: form.elements.provider?.value || "modal",
       epochs: numberOrUndefined(form.elements.epochs?.value),
       max_cost_usd: numberOrUndefined(form.elements.max_cost_usd?.value),
       training_source: form.elements.training_source?.value || "general-pretrained",
@@ -595,6 +623,9 @@
       ["Dataset upload time", estimate.upload_time_low_seconds != null && estimate.upload_time_high_seconds != null ? `${duration(estimate.upload_time_low_seconds)}–${duration(estimate.upload_time_high_seconds)}` : null],
       ["Images in snapshot", estimate.image_count != null ? formatNumber(estimate.image_count) : null],
       ["GPU", estimate.gpu || null],
+      ["Provider", estimate.provider || null],
+      ["Region", estimate.region || null],
+      ["Price source", estimate.price_source || null],
     ].filter(([, value]) => value !== undefined && value !== null && value !== "");
     return `<div class="estimate-card"><p>${escapeHtml(estimate.disclaimer || "Planning range based on recent provider rates and an unverified runtime estimate.")}</p>${fields.length ? `<div class="estimate-values">${fields.map(([label, value]) => `<div class="estimate-value"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join("")}</div>` : ""}${estimate.time_limit_seconds != null ? `<p style="margin-top:9px">Budget-derived run time limit: ${escapeHtml(duration(estimate.time_limit_seconds))}. Provider billing is not capped by this estimate.</p>` : ""}${estimate.rates_stale ? `<p style="margin-top:9px">Provider rates may be out of date. Checked ${escapeHtml(estimate.rate_checked_at || "previously")}.</p>` : ""}</div>`;
   }
@@ -607,6 +638,7 @@
     form.elements.acknowledged.checked = false;
     const payload = {
       snapshot_path: form.elements.snapshot_path.value,
+      provider: form.elements.provider?.value || "modal",
       validation_snapshot_path: form.elements.data_mode.value === "separate-snapshots" ? form.elements.validation_snapshot_path.value || undefined : undefined,
       test_snapshot_path: form.elements.data_mode.value === "separate-snapshots" ? form.elements.test_snapshot_path.value || undefined : undefined,
       data_mode: form.elements.data_mode.value,
@@ -844,7 +876,23 @@
     const checks = doctorChecks(app.doctor);
     root.innerHTML = `${pageHead("Check your setup", "Review local tools and optional services used by AmphiLens.", `<button class="button" type="button" data-health-refresh>Refresh check</button>`)}
       <div class="content-grid"><section class="surface panel"><div class="panel-heading"><div><h2>Local environment</h2><p>Tools AmphiLens can use on this computer.</p></div></div>${checks.length ? `<div class="health-list">${checks.map((check) => { const status = check.status || "info"; const name = check.name || "System check"; const message = check.message || ""; return `<div class="health-row"><span class="health-indicator ${statusTone(status)}" aria-hidden="true"></span><div class="health-copy"><strong>${escapeHtml(String(name).replace(/[_-]+/g, " "))}</strong><span>${escapeHtml(message)}</span></div><span class="health-status">${escapeHtml(status)}</span></div>`; }).join("")}</div>` : `<div class="notice warning"><span class="notice-mark" aria-hidden="true">!</span><p>Health details are not available yet. Refresh the check to ask the local service for the latest status.</p></div>`}</section>
-      <aside class="surface panel"><div class="panel-heading"><div><h2>Optional connections</h2><p>Only needed for the workflows you choose.</p></div></div><div class="health-list"><div class="health-row"><span class="health-indicator" aria-hidden="true"></span><div class="health-copy"><strong>CVAT</strong><span>Needed to send annotation queues or import a CVAT project. Local archive import remains available.</span></div><span class="health-status">Optional</span></div><div class="health-row"><span class="health-indicator" aria-hidden="true"></span><div class="health-copy"><strong>Cloud GPU</strong><span>Needed for Modal training or prediction. Each cloud prediction asks before transferring images and requires a spending limit.</span></div><span class="health-status">Optional</span></div></div><details class="advanced-settings credential-settings"><summary>Configure Modal credentials</summary><form class="form-stack" data-form="cloud-credentials" style="margin-top:13px"><div class="field"><label for="modal-token-id">Token ID</label><input id="modal-token-id" name="token_id" type="password" autocomplete="new-password" required></div><div class="field"><label for="modal-token-secret">Token secret</label><input id="modal-token-secret" name="token_secret" type="password" autocomplete="new-password" required></div><button class="button" type="submit">Save credentials</button></form></details><button class="button panel-action" type="button" data-check-cloud>Check cloud connection</button><div id="cloud-status" aria-live="polite"></div></aside></div>`;
+      <aside class="surface panel"><div class="panel-heading"><div><h2>Optional connections</h2><p>Only needed for the workflows you choose.</p></div></div><div class="health-list"><div class="health-row"><span class="health-indicator" aria-hidden="true"></span><div class="health-copy"><strong>CVAT</strong><span>Needed to send annotation queues or import a CVAT project. Local archive import remains available.</span></div><span class="health-status">Optional</span></div><div class="health-row"><span class="health-indicator" aria-hidden="true"></span><div class="health-copy"><strong>Cloud GPU</strong><span>Modal, Azure Machine Learning, and Vertex AI can run training and batch prediction. Cloud images and datasets require explicit approval and a spending limit.</span></div><span class="health-status">Optional</span></div></div>
+      <details class="advanced-settings credential-settings"><summary>Configure Modal credentials</summary><form class="form-stack" data-form="cloud-credentials" style="margin-top:13px"><div class="field"><label for="modal-token-id">Token ID</label><input id="modal-token-id" name="token_id" type="password" autocomplete="new-password" required></div><div class="field"><label for="modal-token-secret">Token secret</label><input id="modal-token-secret" name="token_secret" type="password" autocomplete="new-password" required></div><button class="button" type="submit">Save credentials</button></form></details>
+      <details class="advanced-settings credential-settings"><summary>Configure Azure Machine Learning</summary><p class="field-help">Sign in with <code>az login</code>. AmphiLens uses your Azure CLI identity. Configure an existing workspace with its storage access identity; no access token is saved here.</p><form class="form-stack" data-form="cloud-provider-settings" data-provider="azure_ml" style="margin-top:13px"><div class="field"><label for="azure-subscription">Subscription ID</label><input id="azure-subscription" name="subscription_id" autocomplete="off" required></div><div class="field"><label for="azure-resource-group">Resource group</label><input id="azure-resource-group" name="resource_group" autocomplete="off" required></div><div class="field"><label for="azure-workspace">Workspace name</label><input id="azure-workspace" name="workspace_name" autocomplete="off" required></div><div class="field"><label for="azure-location">Region</label><input id="azure-location" name="location" placeholder="e.g. eastus" autocomplete="off" required></div><div class="field"><label for="azure-identity">User-assigned managed identity client ID</label><input id="azure-identity" name="managed_identity_client_id" autocomplete="off" required></div><button class="button" type="submit">Save Azure settings</button><button class="button" type="button" data-check-provider="azure_ml">Check Azure connection</button></form></details>
+      <details class="advanced-settings credential-settings"><summary>Configure Google Vertex AI</summary><p class="field-help">Sign in with <code>gcloud auth application-default login</code>. Configure an existing Google Cloud project, enabled Vertex AI APIs, a staging bucket, and a least-privilege job service account. No access token is saved here.</p><form class="form-stack" data-form="cloud-provider-settings" data-provider="vertex_ai" style="margin-top:13px"><div class="field"><label for="gcp-project">Project ID</label><input id="gcp-project" name="project_id" autocomplete="off" required></div><div class="field"><label for="gcp-location">Region</label><input id="gcp-location" name="location" placeholder="e.g. us-central1" autocomplete="off" required></div><div class="field"><label for="gcp-bucket">GCS staging bucket</label><input id="gcp-bucket" name="staging_bucket" placeholder="bucket-name" autocomplete="off" required></div><div class="field"><label for="gcp-service-account">Job service account</label><input id="gcp-service-account" name="service_account" placeholder="training-job@project.iam.gserviceaccount.com" autocomplete="off" required></div><button class="button" type="submit">Save Google Cloud settings</button><button class="button" type="button" data-check-provider="vertex_ai">Check Google Cloud connection</button></form></details><button class="button panel-action" type="button" data-check-cloud>Check Modal connection</button><div id="cloud-status" aria-live="polite"></div></aside></div>`;
+    const azure = app.cloudProviderSettings.azure_ml || {};
+    const vertex = app.cloudProviderSettings.vertex_ai || {};
+    Object.entries({
+      "azure-subscription": azure.subscription_id,
+      "azure-resource-group": azure.resource_group,
+      "azure-workspace": azure.workspace_name,
+      "azure-location": azure.location,
+      "azure-identity": azure.managed_identity_client_id,
+      "gcp-project": vertex.project_id,
+      "gcp-location": vertex.location,
+      "gcp-bucket": vertex.staging_bucket,
+      "gcp-service-account": vertex.service_account,
+    }).forEach(([id, value]) => { const input = document.getElementById(id); if (input && value) input.value = value; });
   }
 
   function render() {
@@ -982,6 +1030,19 @@
           form.elements.token_secret.value = "";
         }
         return;
+      } else if (form.dataset.form === "cloud-provider-settings") {
+        const provider = form.dataset.provider;
+        const settings = Object.fromEntries(new FormData(form).entries());
+        const response = await api("/api/cloud/providers/settings", {
+          method: "POST",
+          body: JSON.stringify({ provider, settings }),
+        });
+        app.cloudProviderSettings = {
+          ...(app.cloudProviderSettings || {}),
+          [provider]: response.settings,
+        };
+        toast(`${providerLabel(provider)} settings saved on this computer.`);
+        return;
       } else if (form.dataset.form === "initial-cvat") {
         const mapping = {};
         form.querySelectorAll("[data-cvat-map-source]").forEach((select) => {
@@ -1015,7 +1076,7 @@
           gpu: values.gpu || "L4",
           max_cost_usd: numberOrUndefined(values.max_cost_usd) ?? 5,
         };
-        if (payload.execution === "modal") {
+        if (payload.execution !== "local") {
           const preview = await api("/api/predictions/preflight", { method: "POST", body: JSON.stringify(payload) });
           const bytes = Number(preview.total_bytes || 0);
           const formattedBytes = bytes < 1024 ? `${bytes} bytes` : bytes < 1024 ** 2 ? `${(bytes / 1024).toFixed(1)} KB` : bytes < 1024 ** 3 ? `${(bytes / 1024 ** 2).toFixed(2)} MB` : `${(bytes / 1024 ** 3).toFixed(2)} GB`;
@@ -1023,12 +1084,13 @@
             ? "No timing history is available for this model and GPU."
             : `Estimated cost from prior timing: $${Number(preview.estimated_cost_usd).toFixed(4)}.`;
           const checkpointNotice = kind === "checkpoint" ? " The selected local checkpoint will also be uploaded once and SHA-256 verified." : "";
-          const approved = window.confirm(`Modal cloud prediction\n\nImages to transfer: ${formatNumber(preview.image_count)} (${formattedBytes})\nGPU: ${preview.gpu}\n${estimate}\nSpending limit: $${Number(payload.max_cost_usd).toFixed(2)}.${checkpointNotice}\n\nImages are uploaded in bounded batches and deleted from the Modal volume after each batch. The estimate and execution timeout are not guaranteed billing caps. Continue?`);
+          const approved = window.confirm(`${providerLabel(payload.execution)} cloud prediction\n\nImages to transfer: ${formatNumber(preview.image_count)} (${formattedBytes})\nGPU: ${preview.gpu}\nRegion: ${preview.region}\nVM rate: $${Number(preview.rate_usd_per_hour).toFixed(4)}/hour (${preview.price_source})\n${estimate}\nSpending limit: $${Number(payload.max_cost_usd).toFixed(2)}.${checkpointNotice}\n\nImages are uploaded in bounded batches and temporary staged images are deleted after each batch. The estimate and execution timeout are not guaranteed billing caps. Continue?`);
           if (!approved) return;
           payload.acknowledged = true;
           payload.uploads_dataset = true;
           payload.expected_image_count = preview.image_count;
           payload.expected_total_bytes = preview.total_bytes;
+          payload.expected_rate_usd_per_hour = preview.rate_usd_per_hour;
         }
       } else if (form.dataset.form === "import") {
         endpoint = "/api/datasets/import";
@@ -1054,7 +1116,7 @@
           const estimatedUsd = app.cloudEstimate.high_usd;
           if (estimatedUsd === undefined || estimatedUsd === null) throw new Error("The returned estimate has no numeric estimated_usd value for the training request.");
           endpoint = "/api/cloud/training";
-          payload = { ...common, image_size: trainingImageSize(form), gpu: values.gpu, max_cost_usd: numberOrUndefined(values.max_cost_usd), estimated_usd: Number(estimatedUsd), acknowledged: true, uploads_dataset: true };
+          payload = { ...common, provider: values.provider || "modal", image_size: trainingImageSize(form), gpu: values.gpu, max_cost_usd: numberOrUndefined(values.max_cost_usd), estimated_usd: Number(estimatedUsd), acknowledged: true, uploads_dataset: true };
         } else {
           endpoint = "/api/training";
           payload = { ...common, output_dir: values.output_dir || undefined, device: values.device || undefined };
@@ -1249,6 +1311,24 @@
     }
   }
 
+  async function checkManagedProvider(button) {
+    const provider = button.dataset.checkProvider;
+    const slot = document.getElementById("cloud-status");
+    button.disabled = true;
+    const label = button.textContent;
+    button.textContent = "Checking…";
+    if (slot) slot.innerHTML = `<p class="job-description">Checking ${escapeHtml(providerLabel(provider))} identity, workspace, and storage…</p>`;
+    try {
+      const result = await api("/api/cloud/providers/check", { method: "POST", body: JSON.stringify({ provider }) });
+      if (slot) slot.innerHTML = `<div class="notice" style="margin-top:12px"><span class="notice-mark" aria-hidden="true">✓</span><p>${escapeHtml(providerLabel(provider))} is connected in ${escapeHtml(result.connection?.region || "the configured region")}.</p></div>`;
+    } catch (error) {
+      if (slot) slot.innerHTML = `<div class="notice error" style="margin-top:12px"><span class="notice-mark" aria-hidden="true">!</span><p>${escapeHtml(error.message)}</p></div>`;
+    } finally {
+      button.disabled = false;
+      button.textContent = label;
+    }
+  }
+
   document.addEventListener("submit", handleSubmit);
   document.addEventListener("click", async (event) => {
     const activityPanel = document.getElementById("activity-panel");
@@ -1361,6 +1441,7 @@
     if (event.target.closest("[data-retry-bootstrap]")) { refreshBootstrap(); return; }
     if (event.target.closest("[data-health-refresh]")) { await refreshBootstrap(); setPage("health"); return; }
     if (event.target.closest("[data-check-cloud]")) { refreshCloud(); return; }
+    if (event.target.closest("[data-check-provider]")) { checkManagedProvider(event.target.closest("[data-check-provider]")); return; }
     const renameButton = event.target.closest("[data-rename-snapshot]");
     if (renameButton) {
       const name = window.prompt("Snapshot name", renameButton.dataset.name || "");
@@ -1477,6 +1558,18 @@
     }
     if (event.target.id === "training-execution") {
       syncTrainingExecutionControls(event.target.form);
+    }
+    if (event.target.id === "training-provider") {
+      const form = event.target.form;
+      syncTrainingExecutionControls(form);
+      if (form) {
+        form.elements.uploads_dataset.checked = false;
+        form.elements.acknowledged.checked = false;
+        app.cloudEstimate = null;
+        app.cloudEstimateSignature = null;
+        const slot = document.getElementById("cloud-estimate-slot");
+        if (slot) slot.innerHTML = renderCloudEstimate();
+      }
     }
     if (event.target.id === "training-data-mode") {
       syncTrainingDataControls(event.target.form);

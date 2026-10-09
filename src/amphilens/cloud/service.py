@@ -65,6 +65,13 @@ class CloudTrainingService:
     ):
         self.store = store
         self.transport = transport
+        description = getattr(transport, "describe", lambda: {})()
+        provider = (
+            description.get("provider", "modal") if isinstance(description, dict) else "modal"
+        )
+        if provider not in {"modal", "azure_ml", "vertex_ai"}:
+            raise ValueError(f"Unsupported cloud training provider: {provider}")
+        self.provider = provider
         self._now = now or (lambda: datetime.now(timezone.utc))
 
     def _run_path(self, run_id: str) -> Path:
@@ -101,6 +108,16 @@ class CloudTrainingService:
         message = str(error)
         redactor = getattr(self.transport, "redact", None)
         return str(redactor(message)) if callable(redactor) else message
+
+    def _redact_remote_value(self, value):
+        redactor = getattr(self.transport, "redact", None)
+        if isinstance(value, str):
+            return str(redactor(value)) if callable(redactor) else value
+        if isinstance(value, dict):
+            return {key: self._redact_remote_value(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [self._redact_remote_value(item) for item in value]
+        return value
 
     def estimate(
         self,
@@ -172,6 +189,14 @@ class CloudTrainingService:
                 training_canvas_size,
                 test.training_canvas_size(selected_preprocessing),
             )
+        pricing = None
+        if self.provider != "modal":
+            rate_lookup = getattr(self.transport, "price_rate", None)
+            if not callable(rate_lookup):
+                raise ValidationError(
+                    "Managed cloud transport cannot resolve a current GPU VM price"
+                )
+            pricing = rate_lookup(gpu)
         return estimate_training_cost(
             image_count=train_count,
             dataset_bytes=byte_count,
@@ -179,6 +204,11 @@ class CloudTrainingService:
             gpu=gpu,
             max_cost_usd=max_cost_usd,
             image_size=training_canvas_size,
+            rate_per_second=(pricing.usd_per_hour / 3600.0 if pricing else None),
+            provider=self.provider,
+            region=str(getattr(pricing, "region", "")),
+            price_source=str(getattr(pricing, "price_source", "Modal GPU price table")),
+            rate_checked_at=getattr(pricing, "rate_checked_at", None),
         )
 
     def submit(
@@ -231,9 +261,7 @@ class CloudTrainingService:
             raise ValidationError("Cloud training requires a validation dataset for early stopping")
         normalized_training.setdefault(
             "evaluation",
-            "test set"
-            if test_snapshot_path or data_mode == "auto-split"
-            else "not evaluated",
+            "test set" if test_snapshot_path or data_mode == "auto-split" else "not evaluated",
         )
         normalized_training["data_mode"] = data_mode
         normalized_training["allow_image_level_split"] = bool(allow_image_level_fallback)
@@ -265,15 +293,18 @@ class CloudTrainingService:
 
         code_digest = _code_digest()
         identity = {
+            "provider": self.provider,
             "project": project.name,
             "snapshot_id": snapshot.manifest.snapshot_id,
             "validation_snapshot_id": (
                 DatasetSnapshot.load(validation_snapshot_path).manifest.snapshot_id
-                if validation_snapshot_path else None
+                if validation_snapshot_path
+                else None
             ),
             "test_snapshot_id": (
                 DatasetSnapshot.load(test_snapshot_path).manifest.snapshot_id
-                if test_snapshot_path else None
+                if test_snapshot_path
+                else None
             ),
             "image_digests": sorted(
                 image.sha256
@@ -281,7 +312,8 @@ class CloudTrainingService:
                     snapshot,
                     *(
                         [DatasetSnapshot.load(validation_snapshot_path)]
-                        if validation_snapshot_path else []
+                        if validation_snapshot_path
+                        else []
                     ),
                     *([DatasetSnapshot.load(test_snapshot_path)] if test_snapshot_path else []),
                 ]
@@ -342,10 +374,13 @@ class CloudTrainingService:
             estimate=estimate.to_dict(),
             gpu=gpu,
             timeout_seconds=estimate.time_limit_seconds,
+            provider=self.provider,
+            region=estimate.region,
             base_checkpoint_path=str(checkpoint_path) if checkpoint_path else None,
             base_checkpoint_sha256=base_hash,
             code_digest=code_digest,
             expected_echo={
+                "provider": self.provider,
                 "job_key": job_key,
                 "payload_sha256": "",
                 "effective_fingerprint": fingerprint,
@@ -364,7 +399,8 @@ class CloudTrainingService:
                 training_snapshot=snapshot,
                 validation_snapshot=(
                     DatasetSnapshot.load(validation_snapshot_path)
-                    if validation_snapshot_path else None
+                    if validation_snapshot_path
+                    else None
                 ),
                 test_snapshot=(
                     DatasetSnapshot.load(test_snapshot_path) if test_snapshot_path else None
@@ -374,7 +410,8 @@ class CloudTrainingService:
                 allow_image_level_fallback=allow_image_level_fallback,
                 preprocessing=effective.get("preprocessing"),
             )
-            mount = f"/mnt/amphilens/jobs/{job_key}/dataset"
+            mount_root = "/mnt/amphilens" if self.provider == "modal" else "/tmp/amphilens"
+            mount = f"{mount_root}/jobs/{job_key}/dataset"
             payload_path = run_dir / "upload" / "payload.zip"
             payload = pack_training_payload(
                 prepared,
@@ -399,6 +436,7 @@ class CloudTrainingService:
                 .isoformat()
             )
             remote_payload = {
+                "provider": self.provider,
                 "run_id": run_id,
                 "job_key": job_key,
                 "payload_sha256": payload.sha256,
@@ -454,6 +492,7 @@ class CloudTrainingService:
             record.error = ""
             record.state, record.phase = "running", "remote-running"
             return self._save(record)
+        result = self._redact_remote_value(result)
         record.error = ""
         record.remote_state = str(result.get("remote_state", result.get("state", "")))
         record.progress = result.get("progress")
@@ -624,7 +663,7 @@ class CloudTrainingService:
             if remote_manifest.model_id != effective["model_id"]:
                 raise ValidationError("Remote checkpoint model id does not match the submitted job")
             cloud_provenance = {
-                "provider": "modal",
+                "provider": record.provider,
                 "job_key": record.job_key,
                 "payload_sha256": record.payload_hash,
                 "effective_fingerprint": record.effective_fingerprint,

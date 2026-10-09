@@ -133,10 +133,15 @@ class ModalTransport:
         )
 
     def _redact(self, value: str) -> str:
-        if self._credentials is None:
-            return value
-        return value.replace(self._credentials.token_secret, "[redacted]").replace(
-            self._credentials.token_id, "[redacted]"
+        if self._credentials is not None:
+            value = value.replace(self._credentials.token_secret, "[redacted]").replace(
+                self._credentials.token_id, "[redacted]"
+            )
+        value = re.sub(r"(?i)(https?://[^\s?#]+)\?[^\s\"'<>)]*", r"\1?[redacted]", value)
+        return re.sub(
+            r"(?i)((?:token|secret|password|api[_-]?key|access[_-]?token|client[_-]?secret|sig|signature)\b\s*[:=]\s*)[^\s,;&]+",
+            r"\1[redacted]",
+            value,
         )
 
     def upload(
@@ -222,6 +227,7 @@ class ModalTransport:
         *,
         cancellation_requested=None,
         progress_callback=None,
+        job_id_callback=None,
     ) -> dict[str, Any]:
         """Submit one staged batch to a single dynamically selected Modal GPU worker."""
         from .prediction import PredictionCancelled
@@ -247,6 +253,10 @@ class ModalTransport:
                     gpu_type=gpu,
                 )
                 call = engine.predict_batch.spawn(payload)
+                if job_id_callback is not None:
+                    call_id = getattr(call, "object_id", None)
+                    if call_id:
+                        job_id_callback(str(call_id))
                 deadline = time.monotonic() + timeout + 120
                 while True:
                     try:
@@ -314,7 +324,10 @@ class ModalTransport:
         except Exception:
             return {}
 
-    def upload_model_checkpoint(self, source: Path, sha256: str) -> str:
+    def upload_model_checkpoint(
+        self, source: Path, sha256: str, *, job_key: str | None = None
+    ) -> str:
+        del job_key  # Modal keeps its content-addressed model cache across prediction runs.
         if not re.fullmatch(r"[0-9a-f]{64}", sha256):
             raise ValueError("Invalid model checkpoint SHA-256")
         source = Path(source).expanduser().resolve()

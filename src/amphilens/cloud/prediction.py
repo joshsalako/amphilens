@@ -104,9 +104,7 @@ def download_verified_hosted_checkpoint(
     shutil.copy2(downloaded, verified)
     cache_commit()
     if progress_callback is not None:
-        progress_callback(
-            {"phase": "model_setup", "message": "Verified and cached model weights"}
-        )
+        progress_callback({"phase": "model_setup", "message": "Verified and cached model weights"})
     return verified
 
 
@@ -244,8 +242,8 @@ def run_remote_prediction_batch(
             pass
 
 
-class ModalPredictionDetector:
-    """Detector adapter that transfers only its current bounded batch to Modal."""
+class CloudPredictionDetector:
+    """Detector adapter that transfers only its current bounded batch to a GPU provider."""
 
     def __init__(
         self,
@@ -261,6 +259,10 @@ class ModalPredictionDetector:
         progress_callback=None,
         image_count: int = 0,
         cancellation_requested=None,
+        provider: str = "modal",
+        rate_per_second: float | None = None,
+        region: str = "",
+        price_source: str = "",
     ):
         self.transport = transport
         self.job_key = job_key
@@ -277,36 +279,47 @@ class ModalPredictionDetector:
         )
         self.image_count = image_count
         self.cancellation_requested = cancellation_requested or (lambda: False)
+        self.provider = str(provider)
+        self.region = str(region)
+        self.price_source = str(price_source)
+        self._provider_rate = (
+            float(rate_per_second)
+            if rate_per_second is not None and math.isfinite(float(rate_per_second))
+            else None
+        )
+        self.provider_label = {
+            "modal": "Modal",
+            "azure_ml": "Azure ML",
+            "vertex_ai": "Vertex AI",
+        }.get(self.provider, self.provider)
         self.model_id = str(model_spec["model_id"])
         self._batch_number = 0
         self._uploaded_images = 0
-        self.device_name = "Modal GPU"
+        self.device_name = f"{self.provider_label} GPU"
         self._cost_path = self.output_dir / "cloud-cost.json"
         self.estimated_cost_usd = 0.0
         self.elapsed_seconds = 0.0
         self.completed_image_count = 0
+        self.remote_job_ids: list[str] = []
         if self._cost_path.is_file():
             try:
-                self.estimated_cost_usd = float(
-                    json.loads(self._cost_path.read_text(encoding="utf-8")).get(
-                        "estimated_cost_usd", 0.0
-                    )
-                )
-                self.elapsed_seconds = float(
-                    json.loads(self._cost_path.read_text(encoding="utf-8")).get(
-                        "elapsed_seconds", 0.0
-                    )
-                )
-                self.completed_image_count = int(
-                    json.loads(self._cost_path.read_text(encoding="utf-8")).get(
-                        "completed_images", 0
-                    )
-                )
+                saved_cost = json.loads(self._cost_path.read_text(encoding="utf-8"))
+                if saved_cost.get("provider", "modal") == self.provider:
+                    self.estimated_cost_usd = float(saved_cost.get("estimated_cost_usd", 0.0))
+                    self.elapsed_seconds = float(saved_cost.get("elapsed_seconds", 0.0))
+                    self.completed_image_count = int(saved_cost.get("completed_images", 0))
+                    saved_ids = saved_cost.get("remote_job_ids", [])
+                    if isinstance(saved_ids, list):
+                        self.remote_job_ids = [str(value) for value in saved_ids if value]
                 self._uploaded_images = self.completed_image_count
             except (OSError, ValueError, TypeError):
                 self.estimated_cost_usd = 0.0
 
     def _rate_per_second(self) -> float:
+        if self._provider_rate is not None:
+            return self._provider_rate
+        if self.provider != "modal":
+            raise RuntimeError("Current cloud GPU pricing is unavailable; prediction is blocked")
         return (
             GPU_RATES_PER_SECOND[self.gpu]
             + MODAL_CPU_RATE_PER_CORE_SECOND * CPU_CORES
@@ -328,11 +341,14 @@ class ModalPredictionDetector:
         atomic_write_json(
             self._cost_path,
             {
-                "provider": "modal",
+                "provider": self.provider,
                 "gpu": self.gpu,
+                "region": self.region,
+                "price_source": self.price_source,
                 "model_id": self.model_id,
                 "elapsed_seconds": round(self.elapsed_seconds, 3),
                 "completed_images": self.completed_image_count,
+                "remote_job_ids": self.remote_job_ids,
                 "estimated_cost_usd": round(self.estimated_cost_usd, 6),
                 "max_cost_usd": self.max_cost_usd,
                 "disclaimer": (
@@ -340,6 +356,12 @@ class ModalPredictionDetector:
                 ),
             },
         )
+
+    def _record_remote_job_id(self, value: str) -> None:
+        remote_id = str(value).strip()
+        if remote_id and remote_id not in self.remote_job_ids:
+            self.remote_job_ids.append(remote_id)
+            self._record_cost(elapsed_seconds=0.0)
 
     def predict(self, image_paths, config: InferenceConfig):
         paths = [Path(path).resolve() for path in image_paths]
@@ -350,13 +372,14 @@ class ModalPredictionDetector:
         remaining = self.max_cost_usd - self.estimated_cost_usd
         if remaining <= 0:
             raise PredictionBudgetReached(
-                f"Estimated Modal cost reached your ${self.max_cost_usd:.2f} spending limit. "
+                f"Estimated {self.provider_label} cost reached your "
+                f"${self.max_cost_usd:.2f} spending limit. "
                 "Completed images are saved locally; increase the limit to resume."
             )
         timeout = min(self.timeout_seconds, math.floor(remaining / self._rate_per_second()))
         if timeout < 1:
             raise PredictionBudgetReached(
-                "Less than one estimated Modal GPU-second remains under the "
+                f"Less than one estimated {self.provider_label} GPU-second remains under the "
                 f"${self.max_cost_usd:.2f} "
                 "limit. Completed images are saved locally; increase the limit to resume."
             )
@@ -367,7 +390,7 @@ class ModalPredictionDetector:
             self.progress_callback(
                 {
                     "phase": "image_transfer",
-                    "message": f"Uploading batch {self._batch_number} to Modal",
+                    "message": f"Uploading batch {self._batch_number} to {self.provider_label}",
                     "completed": self._uploaded_images,
                     "failed": 0,
                     "total": self.image_count,
@@ -423,9 +446,7 @@ class ModalPredictionDetector:
                         "total": self.image_count,
                         "remaining": max(0, self.image_count - self._uploaded_images),
                         "progress": (
-                            self._uploaded_images / self.image_count
-                            if self.image_count
-                            else 0.0
+                            self._uploaded_images / self.image_count if self.image_count else 0.0
                         ),
                         "batch": self._batch_number,
                         "gpu": self.gpu,
@@ -443,6 +464,7 @@ class ModalPredictionDetector:
                 payload,
                 cancellation_requested=self.cancellation_requested,
                 progress_callback=report_remote,
+                job_id_callback=self._record_remote_job_id,
             )
         finally:
             self.transport.cleanup_prediction_batch(self.job_key, batch_id)
@@ -451,21 +473,27 @@ class ModalPredictionDetector:
             setup = float(result.get("setup_seconds", 0.0)) if isinstance(result, dict) else 0.0
             self._record_cost(elapsed_seconds=elapsed, setup_seconds=setup)
             if isinstance(result, dict):
-                message = result.get("error", "Modal prediction returned an invalid response")
+                message = result.get(
+                    "error", f"{self.provider_label} prediction returned an invalid response"
+                )
             else:
-                message = "Modal prediction returned an invalid response"
+                message = f"{self.provider_label} prediction returned an invalid response"
             raise RuntimeError(str(message))
+        if result.get("remote_job_id"):
+            self._record_remote_job_id(str(result["remote_job_id"]))
         self._record_cost(
             elapsed_seconds=float(result.get("elapsed_seconds", 0.0)),
             setup_seconds=float(result.get("setup_seconds", 0.0)),
             completed_images=len(paths),
         )
         if result.get("gpu_name"):
-            self.device_name = f"Modal {self.gpu} · {result['gpu_name']}"
+            self.device_name = f"{self.provider_label} {self.gpu} · {result['gpu_name']}"
         records = []
         for row in result.get("records", []):
             if not isinstance(row, dict) or row.get("local_image_id") not in local_paths:
-                raise RuntimeError("Modal prediction returned an unknown local image ID")
+                raise RuntimeError(
+                    f"{self.provider_label} prediction returned an unknown local image ID"
+                )
             path = local_paths[str(row["local_image_id"])]
             records.append(
                 DetectionRecord(
@@ -491,7 +519,7 @@ class ModalPredictionDetector:
                 {
                     "phase": "prediction",
                     "message": f"Processed {self._uploaded_images} of {self.image_count} images; "
-                    f"estimated Modal spend ${self.estimated_cost_usd:.2f} of "
+                    f"estimated {self.provider_label} spend ${self.estimated_cost_usd:.2f} of "
                     f"${self.max_cost_usd:.2f}.",
                     "completed": self._uploaded_images,
                     "failed": 0,
@@ -511,3 +539,6 @@ class ModalPredictionDetector:
         cleanup = getattr(self.transport, "cleanup_prediction_progress", None)
         if callable(cleanup):
             cleanup(self.job_key)
+
+
+ModalPredictionDetector = CloudPredictionDetector

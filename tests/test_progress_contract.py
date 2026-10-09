@@ -75,8 +75,17 @@ class ProgressModalTransport:
             for _ in sources
         ]
 
-    def predict_batch(self, payload, *, cancellation_requested=None, progress_callback=None):
+    def predict_batch(
+        self,
+        payload,
+        *,
+        cancellation_requested=None,
+        progress_callback=None,
+        job_id_callback=None,
+    ):
         del payload, cancellation_requested
+        if job_id_callback:
+            job_id_callback("progress-call")
         if progress_callback:
             progress_callback(
                 {"phase": "model_download", "message": "Downloading model", "progress": 0.5}
@@ -188,27 +197,25 @@ class ProgressContractTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             runs = root / "runs"
-            for name, model, gpu, elapsed in (
-                ("match", "model-a", "L4", 20),
-                ("wrong-model", "model-b", "L4", 10),
-                ("wrong-gpu", "model-a", "A10G", 5),
+            for name, model, gpu, elapsed, provider in (
+                ("match", "model-a", "L4", 20, None),
+                ("wrong-model", "model-b", "L4", 10, "modal"),
+                ("wrong-gpu", "model-a", "A10G", 5, "modal"),
+                ("wrong-provider", "model-a", "L4", 50, "vertex_ai"),
             ):
                 run = runs / name
                 run.mkdir(parents=True)
-                atomic_write_json(
-                    run / "cloud-cost.json",
-                    {
-                        "provider": "modal",
-                        "model_id": model,
-                        "gpu": gpu,
-                        "elapsed_seconds": elapsed,
-                        "completed_images": 10,
-                    },
-                )
+                sample = {
+                    "model_id": model,
+                    "gpu": gpu,
+                    "elapsed_seconds": elapsed,
+                    "completed_images": 10,
+                }
+                if provider is not None:
+                    sample["provider"] = provider
+                atomic_write_json(run / "cloud-cost.json", sample)
 
-            samples = _modal_prediction_timing_samples(
-                SimpleNamespace(root=root), "model-a", "L4"
-            )
+            samples = _modal_prediction_timing_samples(SimpleNamespace(root=root), "model-a", "L4")
 
             self.assertEqual(samples, [2.0])
 

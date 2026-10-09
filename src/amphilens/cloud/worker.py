@@ -218,7 +218,7 @@ def _load_training_detector(
             progress_callback(
                 {
                     "phase": "model_download",
-                    "message": f"Downloading {hosted.repo_id} on the Modal worker",
+                    "message": f"Downloading {hosted.repo_id} on the cloud worker",
                     "phase_progress": None,
                 }
             )
@@ -249,19 +249,23 @@ def run_remote_training(
     model_cache_root: str | Path = MODEL_CACHE_MOUNT,
     model_cache_commit: Callable[[], Any] = lambda: None,
 ) -> dict[str, Any]:
-    """Run one verified cloud training job and return volume-backed artifact references."""
+    """Run one verified cloud training job and return staged artifact references."""
+    provider = str(payload.get("provider", "modal"))
+    if provider not in {"modal", "azure_ml", "vertex_ai"}:
+        return _remote_result(payload, "failed", error="Cloud job provider is invalid")
     job_key = str(payload.get("job_key", ""))
     if not job_key or any(part in job_key for part in ("/", "\\", "..")):
         return _remote_result(payload, "failed", error="Cloud job identity is invalid")
     expected_echo = payload.get("echo")
     if not isinstance(expected_echo, dict) or expected_echo.get("job_key") != job_key:
         return _remote_result(payload, "failed", error="Cloud job identity echo is invalid")
-    if payload.get("volume_name") != VOLUME_NAME:
+    if provider == "modal" and payload.get("volume_name") != VOLUME_NAME:
         return _remote_result(payload, "failed", error="Cloud volume identity does not match")
     prefix = f"jobs/{job_key}"
     if payload.get("remote_prefix") != prefix:
         return _remote_result(payload, "failed", error="Cloud result path identity does not match")
-    expected_mount = f"{VOLUME_MOUNT}/{prefix}/dataset"
+    mount_root = VOLUME_MOUNT if provider == "modal" else "/tmp/amphilens"
+    expected_mount = f"{mount_root}/{prefix}/dataset"
     if payload.get("dataset_mount") != expected_mount:
         return _remote_result(payload, "failed", error="Cloud dataset path identity does not match")
     if _code_digest() != payload.get("code_digest"):
@@ -364,7 +368,7 @@ def run_remote_training(
             volume_commit,
             state="running",
             phase="model_setup",
-            message="Loading the selected model on the Modal GPU",
+            message="Loading the selected model on the cloud GPU",
             progress=0.0,
             phase_progress=None,
             gpu=str(payload.get("gpu", "")),
@@ -379,6 +383,7 @@ def run_remote_training(
                 preprocessing=dict(effective["preprocessing"]),
             )
         else:
+
             def report_model_progress(values: dict[str, Any]) -> None:
                 phase = str(values.get("phase", "model_download"))
                 progress = values.get("phase_progress")
@@ -391,8 +396,7 @@ def run_remote_training(
                     progress=0.0,
                     phase_progress=(
                         float(progress)
-                        if isinstance(progress, (int, float))
-                        and 0.0 <= float(progress) <= 1.0
+                        if isinstance(progress, (int, float)) and 0.0 <= float(progress) <= 1.0
                         else None
                     ),
                     gpu=str(payload.get("gpu", "")),
@@ -408,12 +412,12 @@ def run_remote_training(
             root,
             volume_commit,
             state="running",
-                phase="dataset_preparation",
-                message="The model and approved training snapshot are ready",
-                progress=0.0,
-                phase_progress=1.0,
-                gpu=str(payload.get("gpu", "")),
-            )
+            phase="dataset_preparation",
+            message="The model and approved training snapshot are ready",
+            progress=0.0,
+            phase_progress=1.0,
+            gpu=str(payload.get("gpu", "")),
+        )
 
         submitted_config = dict(payload.get("training_config", {}))
         training = TrainingConfig(
@@ -453,7 +457,7 @@ def run_remote_training(
             environment=environment,
         )
         cloud_provenance = {
-            "provider": "modal",
+            "provider": provider,
             "job_key": job_key,
             "payload_sha256": payload["payload_sha256"],
             "effective_fingerprint": payload["effective_fingerprint"],

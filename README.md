@@ -28,14 +28,13 @@ flowchart TD
 
 ## Links
 
-- [AmphiLens on GitHub](https://github.com/joshsalako/amphilens)
 - [Pretrained models on Hugging Face](https://huggingface.co/josh-salako/amphilens)
 - [Detection, fine-tuning, and active learning guide](docs/training.md)
 - [Project paper](https://openreview.net/pdf?id=0YnE65NGna)
 
 ## Install and run
 
-1. Download and unzip the project from [AmphiLens on GitHub](https://github.com/joshsalako/amphilens).
+1. Clone this repo or download and unzip it.
 2. Install [uv](https://docs.astral.sh/uv/getting-started/installation/). See the
    [uv GitHub repository](https://github.com/astral-sh/uv) for more information.
 3. Open a terminal in the unzipped `amphilens` folder and run:

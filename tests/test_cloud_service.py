@@ -9,6 +9,7 @@ import pytest
 from PIL import Image
 
 from amphilens.cloud.models import CloudConsent
+from amphilens.cloud.pricing import ProviderRate
 from amphilens.cloud.service import CloudTrainingService
 from amphilens.core import ProjectManifest, ProjectStore, atomic_write_json
 from amphilens.dataset import DatasetImage, DatasetManifest
@@ -16,6 +17,7 @@ from amphilens.dataset import DatasetImage, DatasetManifest
 
 class FakeCloudTransport:
     def __init__(self):
+        self.provider = "modal"
         self.uploaded = {}
         self.downloads = {}
         self.submissions = []
@@ -25,6 +27,19 @@ class FakeCloudTransport:
         self.poll_error = None
         self.cleanup_success = True
         self.cancel_error = None
+
+    def describe(self):
+        return {"provider": self.provider}
+
+    def price_rate(self, gpu):
+        return ProviderRate(
+            provider=self.provider,
+            gpu=gpu,
+            region="us-central1",
+            usd_per_hour=1.0,
+            price_source="fake catalog",
+            rate_checked_at="2026-10-09",
+        )
 
     def upload(self, source, remote_path, sha256):
         self.uploaded[remote_path] = (Path(source).read_bytes(), sha256)
@@ -238,6 +253,116 @@ def test_cloud_submit_requires_explicit_consent_before_upload(tmp_path: Path):
 
     assert transport.uploaded == {}
     assert transport.submissions == []
+
+
+def test_cloud_training_persists_the_selected_transport_provider(tmp_path: Path):
+    store, snapshot = make_project(tmp_path)
+    transport = FakeCloudTransport()
+    transport.provider = "vertex_ai"
+    service = CloudTrainingService(store, transport)
+
+    record = service.submit(
+        snapshot_path=snapshot,
+        effective_configuration=config(),
+        training_config={"epochs": 1, "image_size": 64},
+        consent=consent(),
+        gpu="T4",
+        data_mode="training-monitor",
+    )
+
+    assert record.provider == "vertex_ai"
+    assert record.region == "us-central1"
+    assert transport.submissions[0]["provider"] == "vertex_ai"
+
+    resumed = service.submit(
+        snapshot_path=snapshot,
+        effective_configuration=config(),
+        training_config={"epochs": 1, "image_size": 64},
+        consent=consent(),
+        gpu="T4",
+        data_mode="training-monitor",
+    )
+    assert resumed.run_id == record.run_id
+    assert len(transport.submissions) == 1
+
+
+def test_cloud_job_record_without_provider_defaults_to_modal(tmp_path: Path):
+    from amphilens.cloud.models import CloudJobRecord
+
+    store, snapshot = make_project(tmp_path)
+    service = CloudTrainingService(store, FakeCloudTransport())
+    record = service.submit(
+        snapshot_path=snapshot,
+        effective_configuration=config(),
+        training_config={"epochs": 1, "image_size": 64},
+        consent=consent(),
+        gpu="T4",
+        data_mode="training-monitor",
+    )
+    legacy_payload = record.to_dict()
+    legacy_payload.pop("provider")
+
+    assert CloudJobRecord.from_dict(legacy_payload).provider == "modal"
+
+
+def test_cloud_training_blocks_before_upload_when_provider_price_is_unknown(tmp_path: Path):
+    store, snapshot = make_project(tmp_path)
+    transport = FakeCloudTransport()
+    transport.provider = "azure_ml"
+
+    def unknown_rate(_gpu):
+        raise ValueError("current Azure GPU rate is unavailable; submission is blocked")
+
+    transport.price_rate = unknown_rate
+    service = CloudTrainingService(store, transport)
+
+    with pytest.raises(ValueError, match="submission is blocked"):
+        service.submit(
+            snapshot_path=snapshot,
+            effective_configuration=config(),
+            training_config={"epochs": 1, "image_size": 64},
+            consent=consent(),
+            gpu="T4",
+            data_mode="training-monitor",
+        )
+
+    assert transport.uploaded == {}
+    assert transport.submissions == []
+
+
+def test_cloud_job_record_redacts_remote_tokens_and_signed_urls(tmp_path: Path):
+    from amphilens.cloud.provider_settings import AzureMLSettings
+    from amphilens.cloud.providers import AzureMLTransport
+
+    store, snapshot = make_project(tmp_path)
+    transport = FakeCloudTransport()
+    transport.redact = AzureMLTransport(
+        AzureMLSettings("sub", "rg", "workspace", "eastus", "identity")
+    ).redact
+    service = CloudTrainingService(store, transport)
+    record = service.submit(
+        snapshot_path=snapshot,
+        effective_configuration=config(),
+        training_config={"epochs": 1, "image_size": 64},
+        consent=consent(),
+        gpu="T4",
+        data_mode="training-monitor",
+    )
+    transport.poll_result = {
+        "state": "finished",
+        "progress_details": {
+            "message": "Bearer access-secret",
+            "log_tail": "https://storage.example/file?sig=signed-secret",
+        },
+    }
+
+    refreshed = service.refresh(record.run_id)
+    saved = (store.root / "runs" / record.run_id / "cloud-job.json").read_text(encoding="utf-8")
+
+    assert refreshed.state == "finished"
+    assert "access-secret" not in saved
+    assert "signed-secret" not in saved
+    assert "[redacted]" in saved
 
 
 def test_cloud_training_yaml_uses_train_monitor_without_final_evaluation(tmp_path: Path):

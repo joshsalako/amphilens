@@ -80,6 +80,8 @@ class CloudJobRecord:
     estimate: dict[str, Any]
     gpu: str
     timeout_seconds: int
+    provider: str = "modal"
+    region: str = ""
     deadline_at: str | None = None
     payload_hash: str = ""
     payload_size_bytes: int = 0
@@ -105,6 +107,8 @@ class CloudJobRecord:
     schema_version: int = 1
 
     def __post_init__(self) -> None:
+        if self.provider not in {"modal", "azure_ml", "vertex_ai"}:
+            raise ValidationError(f"Unknown cloud job provider: {self.provider}")
         if self.state not in CLOUD_JOB_STATES:
             raise ValidationError(f"Unknown cloud job state: {self.state}")
         if not self.run_id or not self.job_key:

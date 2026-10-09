@@ -52,12 +52,19 @@ class CostEstimate:
     rate_checked_at: str
     rates_stale: bool
     disclaimer: str
+    provider: str = "modal"
+    region: str = ""
+    price_source: str = "Modal GPU price table"
 
     def to_dict(self) -> dict:
         return asdict(self)
 
 
-def _cost_rate(gpu: str) -> float:
+def _cost_rate(gpu: str, rate_per_second: float | None = None) -> float:
+    if rate_per_second is not None:
+        if not math.isfinite(rate_per_second) or rate_per_second <= 0:
+            raise ValidationError("Cloud VM price rate must be a positive finite value")
+        return rate_per_second
     try:
         gpu_rate = GPU_RATES_PER_SECOND[gpu]
     except KeyError as exc:
@@ -77,6 +84,11 @@ def estimate_training_cost(
     gpu: str = "L4",
     max_cost_usd: float = 5.0,
     image_size: int = 640,
+    rate_per_second: float | None = None,
+    provider: str = "modal",
+    region: str = "",
+    price_source: str = "Modal GPU price table",
+    rate_checked_at: str | None = None,
 ) -> CostEstimate:
     """Return a rough runtime/cost range and derive a server-side time limit.
 
@@ -87,7 +99,7 @@ def estimate_training_cost(
         raise ValidationError("image_count, epochs, and image_size must be positive")
     if not math.isfinite(max_cost_usd) or max_cost_usd <= 0:
         raise ValidationError("max_cost_usd must be a positive finite value")
-    rate = _cost_rate(gpu)
+    rate = _cost_rate(gpu, rate_per_second)
     work_scale = image_count * epochs / IMAGE_EPOCHS_REFERENCE
     resolution_scale = (image_size / 640) ** 2
     runtime_low = max(60, math.ceil(REFERENCE_RUNTIME_LOW_SECONDS * work_scale * resolution_scale))
@@ -107,7 +119,13 @@ def estimate_training_cost(
     )
     upload_low = math.ceil(dataset_bytes / UPLOAD_FAST_BYTES_PER_SECOND)
     upload_high = math.ceil(dataset_bytes / UPLOAD_SLOW_BYTES_PER_SECOND)
-    age_days = (date.today() - date.fromisoformat(RATE_CHECKED_AT)).days
+    checked_at = rate_checked_at or RATE_CHECKED_AT
+    try:
+        age_days = (date.today() - date.fromisoformat(checked_at)).days
+    except ValueError as exc:
+        raise ValidationError("Cloud price source returned an invalid checked date") from exc
+    if provider != "modal" and rate_per_second is None:
+        raise ValidationError("Managed cloud rates must be resolved before estimating a job")
     return CostEstimate(
         gpu=gpu,
         image_count=image_count,
@@ -119,11 +137,14 @@ def estimate_training_cost(
         time_limit_seconds=timeout_seconds,
         upload_time_low_seconds=upload_low,
         upload_time_high_seconds=upload_high,
-        rate_checked_at=RATE_CHECKED_AT,
+        rate_checked_at=checked_at,
         rates_stale=age_days > 90,
         disclaimer=(
-            "Planning estimate based on unverified training-time assumptions. The budget derives "
-            "a server-side time limit; startup, preemption retries, and provider billing can vary, "
-            "so this is not a guaranteed billing cap."
+            "Planning estimate based on an advisory VM rate and unverified training-time "
+            "assumptions. Startup, preemption retries, storage, and provider billing can vary; "
+            "this is not a guaranteed billing cap."
         ),
+        provider=provider,
+        region=region,
+        price_source=price_source,
     )

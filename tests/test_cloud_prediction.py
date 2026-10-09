@@ -34,8 +34,17 @@ class FakeTransport:
             for index, path in enumerate(sources)
         ]
 
-    def predict_batch(self, payload, *, cancellation_requested=None, progress_callback=None):
+    def predict_batch(
+        self,
+        payload,
+        *,
+        cancellation_requested=None,
+        progress_callback=None,
+        job_id_callback=None,
+    ):
         del cancellation_requested, progress_callback
+        if job_id_callback is not None:
+            job_id_callback("fake-call-id")
         self.payload = payload
         return self.result
 
@@ -287,9 +296,7 @@ def test_hosted_checkpoint_download_supports_hub_versions_without_progress_hook(
         def to_summary(self):
             return {"revision": "c" * 40}
 
-    def older_hf_hub_download(
-        repo_id, filename, *, repo_type, revision, token, cache_dir
-    ):
+    def older_hf_hub_download(repo_id, filename, *, repo_type, revision, token, cache_dir):
         calls.append((repo_id, filename, repo_type, revision, token, cache_dir))
         return source
 
@@ -303,8 +310,14 @@ def test_hosted_checkpoint_download_supports_hub_versions_without_progress_hook(
 
     assert verified.read_bytes() == content
     assert calls == [
-        ("org/public-model", "model.pt", "model", "c" * 40, False,
-         str((tmp_path / "remote-cache" / "huggingface").resolve()))
+        (
+            "org/public-model",
+            "model.pt",
+            "model",
+            "c" * 40,
+            False,
+            str((tmp_path / "remote-cache" / "huggingface").resolve()),
+        )
     ]
     assert progress[0]["phase"] == "model_download"
 
@@ -358,8 +371,17 @@ def test_modal_batches_are_sequential_and_resume_from_local_progress(tmp_path):
             self.active_calls = 0
             self.max_active_calls = 0
 
-        def predict_batch(self, payload, *, cancellation_requested=None, progress_callback=None):
+        def predict_batch(
+            self,
+            payload,
+            *,
+            cancellation_requested=None,
+            progress_callback=None,
+            job_id_callback=None,
+        ):
             del cancellation_requested, progress_callback
+            if job_id_callback is not None:
+                job_id_callback(f"fake-call-{len(self.uploaded)}")
             self.active_calls += 1
             self.max_active_calls = max(self.max_active_calls, self.active_calls)
             self.payload = payload

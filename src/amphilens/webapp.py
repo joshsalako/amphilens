@@ -233,6 +233,12 @@ def redact_sensitive_text(message: str) -> str:
         if value:
             message = message.replace(value, "[redacted]")
     message = _URL_CREDENTIAL_PATTERN.sub(r"\1[redacted]@", message)
+    message = re.sub(r"(?i)(https?://[^\s?#]+)\?[^\s\"'<>)]*", r"\1?[redacted]", message)
+    message = re.sub(
+        r"(?i)((?:token|secret|password|api[_-]?key|access[_-]?token|client[_-]?secret|sig|signature)\b\s*[:=]\s*)[^\s,;&]+",
+        r"\1[redacted]",
+        message,
+    )
     return _CREDENTIAL_PATTERN.sub(r"\1[redacted]", message)
 
 
@@ -524,7 +530,7 @@ class PredictionsRequest:
     output_dir: str | None = None
     confidence: float | None = None
     device: Literal["auto", "cpu", "cuda", "mps"] | None = None
-    execution: Literal["local", "modal"] = "local"
+    execution: Literal["local", "modal", "azure_ml", "vertex_ai"] = "local"
     batch_size: int | None = None
     gpu: str = "L4"
     max_cost_usd: float = 5.0
@@ -532,6 +538,7 @@ class PredictionsRequest:
     uploads_dataset: bool = False
     expected_image_count: int | None = None
     expected_total_bytes: int | None = None
+    expected_rate_usd_per_hour: float | None = None
     model_preset: str | None = None
     hosted_model_id: str | None = None
     class_mapping: dict[str, str | None] | None = None
@@ -579,9 +586,9 @@ class TrainingRequest:
     device: Literal["auto", "cpu", "cuda", "mps"] | None = None
     training_source: str | None = None
     hosted_model_id: str | None = None
-    data_mode: Literal[
-        "auto-split", "training-monitor", "separate-snapshots"
-    ] = "separate-snapshots"
+    data_mode: Literal["auto-split", "training-monitor", "separate-snapshots"] = (
+        "separate-snapshots"
+    )
     validation_snapshot_path: str | None = None
     test_snapshot_path: str | None = None
     patience: int | None = None
@@ -616,15 +623,16 @@ class CloudCredentialsRequest:
 @dataclass(slots=True)
 class CloudEstimateRequest:
     snapshot_path: str
+    provider: Literal["modal", "azure_ml", "vertex_ai"] = "modal"
     gpu: str = "L4"
     epochs: int | None = None
     max_cost_usd: float = 5.0
     image_size: int = 640
     training_source: str | None = None
     hosted_model_id: str | None = None
-    data_mode: Literal[
-        "auto-split", "training-monitor", "separate-snapshots"
-    ] = "separate-snapshots"
+    data_mode: Literal["auto-split", "training-monitor", "separate-snapshots"] = (
+        "separate-snapshots"
+    )
     validation_snapshot_path: str | None = None
     test_snapshot_path: str | None = None
     patience: int | None = None
@@ -739,6 +747,17 @@ def _mapping(data: dict[str, Any], key: str) -> dict[str, str | None] | None:
     return value
 
 
+def _cloud_gpus(provider: str) -> set[str]:
+    if provider == "modal":
+        from .cloud.estimate import GPU_RATES_PER_SECOND
+
+        return set(GPU_RATES_PER_SECOND)
+    return {
+        "azure_ml": {"T4", "A10G", "A100"},
+        "vertex_ai": {"T4", "L4", "A100"},
+    }.get(provider, set())
+
+
 def _request(cls, payload: dict[str, Any]):
     """Parse the small local API contract without adding a schema dependency."""
     if cls is ProjectOpenRequest:
@@ -770,8 +789,8 @@ def _request(cls, payload: dict[str, Any]):
         if device is not None and device not in {"auto", "cpu", "cuda", "mps"}:
             raise ValueError("device must be auto, cpu, cuda, or mps")
         execution = _string(payload, "execution", required=False, default="local")
-        if execution not in {"local", "modal"}:
-            raise ValueError("execution must be local or modal")
+        if execution not in {"local", "modal", "azure_ml", "vertex_ai"}:
+            raise ValueError("execution must be local, modal, azure_ml, or vertex_ai")
         raw_batch_size = payload.get("batch_size", "auto")
         batch_size = None
         if raw_batch_size != "auto":
@@ -779,13 +798,13 @@ def _request(cls, payload: dict[str, Any]):
             if batch_size is not None and batch_size > 32:
                 raise ValueError("batch_size must be between 1 and 32")
         gpu = _string(payload, "gpu", required=False, default="L4")
-        from .cloud.estimate import GPU_RATES_PER_SECOND
-
-        if gpu not in GPU_RATES_PER_SECOND:
-            raise ValueError(f"Unsupported Modal GPU: {gpu}")
+        if execution != "local" and gpu not in _cloud_gpus(execution):
+            if execution == "modal":
+                raise ValueError(f"Unsupported Modal GPU: {gpu}")
+            raise ValueError(f"Unsupported GPU for {execution}: {gpu}")
         max_cost_usd = _number(payload, "max_cost_usd", 5.0, minimum=0.01)
-        if execution == "modal" and "max_cost_usd" not in payload:
-            raise ValueError("Set a spending limit before choosing Modal prediction")
+        if execution != "local" and "max_cost_usd" not in payload:
+            raise ValueError("Set a spending limit before choosing cloud prediction")
         if max_cost_usd is None or not math.isfinite(max_cost_usd):
             raise ValueError("max_cost_usd must be a positive finite number")
         return cls(
@@ -803,6 +822,9 @@ def _request(cls, payload: dict[str, Any]):
             uploads_dataset=_boolean(payload, "uploads_dataset", False),
             expected_image_count=_integer(payload, "expected_image_count", minimum=1),
             expected_total_bytes=_integer(payload, "expected_total_bytes", minimum=0),
+            expected_rate_usd_per_hour=_number(
+                payload, "expected_rate_usd_per_hour", minimum=0.000001
+            ),
             model_preset=_optional_string(payload, "model_preset"),
             hosted_model_id=_optional_string(payload, "hosted_model_id"),
             class_mapping=_mapping(payload, "class_mapping"),
@@ -836,9 +858,7 @@ def _request(cls, payload: dict[str, Any]):
         device = _optional_string(payload, "device")
         if device is not None and device not in {"auto", "cpu", "cuda", "mps"}:
             raise ValueError("device must be auto, cpu, cuda, or mps")
-        data_mode = _string(
-            payload, "data_mode", required=False, default="separate-snapshots"
-        )
+        data_mode = _string(payload, "data_mode", required=False, default="separate-snapshots")
         if data_mode not in {"auto-split", "training-monitor", "separate-snapshots"}:
             raise ValueError(
                 "data_mode must be auto-split, training-monitor, or separate-snapshots"
@@ -886,16 +906,21 @@ def _request(cls, payload: dict[str, Any]):
             token_id=_string(payload, "token_id"), token_secret=_string(payload, "token_secret")
         )
     if cls is CloudEstimateRequest:
-        data_mode = _string(
-            payload, "data_mode", required=False, default="separate-snapshots"
-        )
+        provider = _string(payload, "provider", required=False, default="modal")
+        if provider not in {"modal", "azure_ml", "vertex_ai"}:
+            raise ValueError("provider must be modal, azure_ml, or vertex_ai")
+        gpu = _string(payload, "gpu", required=False, default="L4")
+        if gpu not in _cloud_gpus(provider):
+            raise ValueError(f"Unsupported GPU for {provider}: {gpu}")
+        data_mode = _string(payload, "data_mode", required=False, default="separate-snapshots")
         if data_mode not in {"auto-split", "training-monitor", "separate-snapshots"}:
             raise ValueError(
                 "data_mode must be auto-split, training-monitor, or separate-snapshots"
             )
         return cls(
             snapshot_path=_string(payload, "snapshot_path"),
-            gpu=_string(payload, "gpu", required=False, default="L4"),
+            provider=provider,
+            gpu=gpu,
             epochs=_integer(payload, "epochs", minimum=1),
             max_cost_usd=_number(payload, "max_cost_usd", 5.0, minimum=0.001),
             image_size=_integer(payload, "image_size", 640, minimum=1),
@@ -918,6 +943,7 @@ def _request(cls, payload: dict[str, Any]):
             raise ValueError("estimated_usd is required")
         return cls(
             snapshot_path=base.snapshot_path,
+            provider=base.provider,
             gpu=base.gpu,
             epochs=base.epochs,
             max_cost_usd=base.max_cost_usd,
@@ -1147,11 +1173,12 @@ def prediction_preflight(
     request: PredictionsRequest,
     *,
     credentials_store=None,
+    provider_settings_store=None,
     check_connection: bool = False,
 ) -> dict[str, Any]:
     """Count local inputs and report available history before any cloud upload."""
-    if request.execution != "modal":
-        raise ValueError("Cloud prediction preflight is only available for Modal execution")
+    if request.execution == "local":
+        raise ValueError("Cloud prediction preflight requires a cloud provider")
     from .cloud.estimate import (
         CPU_CORES,
         GPU_RATES_PER_SECOND,
@@ -1192,25 +1219,52 @@ def prediction_preflight(
     else:
         model_id = request.model_preset or project.project_config.model_preset
 
-    timing_samples = _modal_prediction_timing_samples(store, model_id, request.gpu)
-    estimated_cost = None
-    if timing_samples:
-        rate = (
+    provider = request.execution
+    if provider == "modal":
+        rate_per_second = (
             GPU_RATES_PER_SECOND[request.gpu]
             + MODAL_CPU_RATE_PER_CORE_SECOND * CPU_CORES
             + MODAL_MEMORY_RATE_PER_GIB_SECOND * MEMORY_GIB
         )
-        estimated_cost = round(sum(timing_samples) / len(timing_samples) * len(paths) * rate, 4)
+        rate_per_hour = rate_per_second * 3600
+        price_source = "Modal GPU price table"
+        region = ""
+    else:
+        from .cloud.provider_settings import AzureMLSettings, VertexAISettings
+        from .cloud.providers import create_cloud_transport
+
+        if provider_settings_store is None:
+            raise ValueError("Cloud provider settings are unavailable")
+        values = provider_settings_store.load().get(provider, {})
+        settings_type = {"azure_ml": AzureMLSettings, "vertex_ai": VertexAISettings}[provider]
+        transport = create_cloud_transport(provider, settings_type.from_mapping(values))
+        provider_rate = transport.price_rate(request.gpu)
+        rate_per_hour = provider_rate.usd_per_hour
+        rate_per_second = rate_per_hour / 3600
+        price_source = provider_rate.price_source
+        region = provider_rate.region
+        if check_connection:
+            transport.probe()
+    timing_samples = _modal_prediction_timing_samples(store, model_id, request.gpu, provider)
+    estimated_cost = None
+    if timing_samples:
+        estimated_cost = round(
+            sum(timing_samples) / len(timing_samples) * len(paths) * rate_per_second, 4
+        )
 
     if check_connection:
-        if credentials_store is None:
+        if provider != "modal":
+            # The managed provider probe above validates identity, workspace/project, and storage.
+            pass
+        elif credentials_store is None:
             raise ValueError("Modal credentials are not configured")
-        credentials = credentials_store.resolve()
-        if credentials is None:
-            raise ValueError("Modal credentials are not configured; save them in System health")
-        from .cloud.modal_transport import ModalTransport
+        else:
+            credentials = credentials_store.resolve()
+            if credentials is None:
+                raise ValueError("Modal credentials are not configured; save them in System health")
+            from .cloud.modal_transport import ModalTransport
 
-        ModalTransport(credentials).probe()
+            ModalTransport(credentials).probe()
     return {
         "image_count": len(paths),
         "total_bytes": total_bytes,
@@ -1218,23 +1272,29 @@ def prediction_preflight(
         "model_id": model_id,
         "timing_history_count": len(timing_samples),
         "estimated_cost_usd": estimated_cost,
+        "rate_usd_per_hour": round(rate_per_hour, 6),
+        "price_source": price_source,
+        "region": region,
         "max_cost_usd": request.max_cost_usd,
         "estimate_note": (
-            "Estimate based on prior Modal timing for this model and GPU; actual billing can vary."
+            f"Estimate based on prior {provider} timing for this model and GPU; "
+            "actual billing can vary."
             if estimated_cost is not None
-            else "No timing history is available for this model and GPU."
+            else f"No timing history is available for {provider} on this model and GPU."
         ),
     }
 
 
-def _modal_prediction_timing_samples(store: ProjectStore, model_id: str, gpu: str) -> list[float]:
-    """Return per-image Modal runtimes for the same model and GPU only."""
+def _modal_prediction_timing_samples(
+    store: ProjectStore, model_id: str, gpu: str, provider: str = "modal"
+) -> list[float]:
+    """Return per-image runtimes for the same model, GPU, and cloud provider."""
     timing_samples = []
     for path in (store.root / "runs").glob("*/cloud-cost.json"):
         try:
             sample = json.loads(path.read_text(encoding="utf-8"))
             if (
-                sample.get("provider") == "modal"
+                sample.get("provider", "modal") == provider
                 and sample.get("gpu") == gpu
                 and sample.get("model_id") == model_id
                 and int(sample.get("completed_images", 0)) > 0
@@ -1288,11 +1348,11 @@ def run_prediction_job(
                 "remaining": len(image_paths),
             }
         )
-    if request.execution == "modal":
+    if request.execution != "local":
         if not request.acknowledged or not request.uploads_dataset:
-            raise ValueError("Explicit image upload and Modal spending-limit consent is required")
+            raise ValueError("Explicit image upload and cloud spending-limit consent is required")
         if cloud_transport is None:
-            raise ValueError("Modal credentials are not configured for cloud prediction")
+            raise ValueError("Cloud provider is not configured for prediction")
         total_bytes = sum(path.stat().st_size for path in image_paths)
         if (
             request.expected_image_count != len(image_paths)
@@ -1311,7 +1371,7 @@ def run_prediction_job(
     overrides: dict[str, Any] = {}
     if request.confidence is not None:
         overrides["confidence"] = request.confidence
-    if request.execution == "modal":
+    if request.execution != "local":
         actual_device = "cuda"
         requested_batch_size = request.batch_size or 8
     else:
@@ -1388,7 +1448,7 @@ def run_prediction_job(
         "effective_configuration": effective.to_dict(),
         "class_mapping": class_mapping,
         "execution": request.execution,
-        "gpu": request.gpu if request.execution == "modal" else None,
+        "gpu": request.gpu if request.execution != "local" else None,
         "requested_batch_size": request.batch_size or "auto",
     }
     import hashlib
@@ -1399,9 +1459,13 @@ def run_prediction_job(
     ).hexdigest()[:12]
     run_id = f"predict-{effective.model_id}-{run_signature}"
     output_dir = request.output_dir or str(store.root / "runs" / run_id)
-    if request.execution == "modal":
+    provider_rate = None
+    rate_per_second = None
+    price_source = ""
+    region = ""
+    if request.execution != "local":
         from .cloud.estimate import MAX_FUNCTION_TIMEOUT_SECONDS
-        from .cloud.prediction import ModalPredictionDetector
+        from .cloud.prediction import CloudPredictionDetector, ModalPredictionDetector
 
         cancel_check = getattr(progress_callback, "cancel_requested", None)
         if callable(cancel_check) and cancel_check():
@@ -1409,6 +1473,32 @@ def run_prediction_job(
 
             raise InferenceInterruption("Prediction canceled before starting cloud work.")
 
+        if request.execution == "modal":
+            from .cloud.estimate import (
+                CPU_CORES,
+                GPU_RATES_PER_SECOND,
+                MEMORY_GIB,
+                MODAL_CPU_RATE_PER_CORE_SECOND,
+                MODAL_MEMORY_RATE_PER_GIB_SECOND,
+            )
+
+            rate_per_second = (
+                GPU_RATES_PER_SECOND[request.gpu]
+                + MODAL_CPU_RATE_PER_CORE_SECOND * CPU_CORES
+                + MODAL_MEMORY_RATE_PER_GIB_SECOND * MEMORY_GIB
+            )
+            price_source = "Modal GPU price table"
+        else:
+            provider_rate = cloud_transport.price_rate(request.gpu)
+            rate_per_second = provider_rate.usd_per_hour / 3600
+            price_source = provider_rate.price_source
+            region = provider_rate.region
+        if request.expected_rate_usd_per_hour is not None and abs(
+            rate_per_second * 3600 - request.expected_rate_usd_per_hour
+        ) > max(0.01, request.expected_rate_usd_per_hour * 0.01):
+            raise ValueError("Cloud GPU pricing changed after review; request a fresh preflight")
+
+        prediction_job_key = f"pred-{uuid.uuid4().hex}"
         if hosted_model is not None:
             model_spec = {
                 "source": "hosted",
@@ -1428,7 +1518,7 @@ def run_prediction_job(
                     digest.update(chunk)
             checkpoint_sha256 = digest.hexdigest()
             checkpoint_remote_path = cloud_transport.upload_model_checkpoint(
-                checkpoint_path, checkpoint_sha256
+                checkpoint_path, checkpoint_sha256, job_key=prediction_job_key
             )
             model_spec = {
                 "source": "checkpoint",
@@ -1447,11 +1537,14 @@ def run_prediction_job(
                 "preprocessing": effective.preprocessing.to_dict(),
             }
         timing_samples = _modal_prediction_timing_samples(
-            store, str(model_spec["model_id"]), request.gpu
+            store, str(model_spec["model_id"]), request.gpu, request.execution
         )
-        detector = ModalPredictionDetector(
+        detector_type = (
+            ModalPredictionDetector if request.execution == "modal" else CloudPredictionDetector
+        )
+        detector = detector_type(
             cloud_transport,
-            job_key=f"pred-{uuid.uuid4().hex}",
+            job_key=prediction_job_key,
             gpu=request.gpu,
             model_spec=model_spec,
             timeout_seconds=MAX_FUNCTION_TIMEOUT_SECONDS,
@@ -1463,6 +1556,10 @@ def run_prediction_job(
             progress_callback=progress_callback,
             image_count=len(image_paths),
             cancellation_requested=cancel_check if callable(cancel_check) else None,
+            provider=request.execution,
+            rate_per_second=rate_per_second,
+            region=region,
+            price_source=price_source,
         )
     try:
         summary = run_resumable_inference(
@@ -1518,10 +1615,17 @@ def run_prediction_job(
             f"Prediction paused after {summary.completed_images} of {summary.image_count} images. "
             f"{summary.interruption_reason}"
         )
-    elif request.execution == "modal":
+    elif request.execution != "local":
+        provider_label = getattr(
+            detector,
+            "provider_label",
+            {"modal": "Modal", "azure_ml": "Azure ML", "vertex_ai": "Vertex AI"}.get(
+                request.execution, request.execution
+            ),
+        )
         message = (
             f"Processed {summary.completed_images} images on {detector.device_name}; "
-            f"found {summary.detection_count} detections. Estimated Modal spend: "
+            f"found {summary.detection_count} detections. Estimated {provider_label} spend: "
             f"${detector.estimated_cost_usd:.2f} of ${request.max_cost_usd:.2f}."
         )
     else:
@@ -1541,12 +1645,12 @@ def run_prediction_job(
             "effective_batch_size": json.loads(summary.summary_json.read_text()).get(
                 "effective_batch_size", 0
             ),
-            "estimated_modal_cost_usd": (
-                round(detector.estimated_cost_usd, 4) if request.execution == "modal" else None
+            "estimated_cloud_cost_usd": (
+                round(detector.estimated_cost_usd, 4) if request.execution != "local" else None
             ),
             "device": (
                 detector.device_name
-                if request.execution == "modal"
+                if request.execution != "local"
                 else describe_device_name(effective.device)
             ),
             "paths": {
@@ -1869,26 +1973,48 @@ def run_cvat_cycle_job(store: ProjectStore, request: CvatCycleRequest) -> dict[s
     }
 
 
-def _cloud_service(store: ProjectStore, credentials_store):
-    from .cloud.modal_transport import ModalTransport
+def _cloud_service(
+    store: ProjectStore,
+    credentials_store,
+    provider_settings_store=None,
+    provider: str = "modal",
+):
     from .cloud.service import CloudTrainingService
 
-    credentials = credentials_store.resolve()
-    return CloudTrainingService(store, ModalTransport(credentials)), credentials
+    if provider == "modal":
+        from .cloud.modal_transport import ModalTransport
+
+        credentials = credentials_store.resolve()
+        return CloudTrainingService(store, ModalTransport(credentials)), credentials
+    if provider_settings_store is None:
+        raise ValueError("Cloud provider settings are unavailable")
+    from .cloud.provider_settings import AzureMLSettings, VertexAISettings
+    from .cloud.providers import create_cloud_transport
+
+    values = provider_settings_store.load().get(provider, {})
+    settings_type = {"azure_ml": AzureMLSettings, "vertex_ai": VertexAISettings}.get(provider)
+    if settings_type is None:
+        raise ValueError(f"Unsupported cloud provider: {provider}")
+    settings = settings_type.from_mapping(values)
+    transport = create_cloud_transport(provider, settings)
+    return CloudTrainingService(store, transport), None
 
 
 def run_cloud_training_job(
     store: ProjectStore,
     request: CloudTrainingRequest,
     credentials_store,
+    provider_settings_store=None,
     *,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     from .cloud.models import CloudConsent
     from .configuration import resolve_effective_configuration
 
-    service, credentials = _cloud_service(store, credentials_store)
-    if credentials is None:
+    service, credentials = _cloud_service(
+        store, credentials_store, provider_settings_store, request.provider
+    )
+    if request.provider == "modal" and credentials is None:
         raise ValueError(
             "Modal credentials are not configured. Save credentials or set both "
             "Modal environment variables."
@@ -1898,7 +2024,7 @@ def run_cloud_training_job(
         progress_callback(
             {
                 "phase": "model_setup",
-                "message": "Preparing the model and dataset for Modal",
+                "message": f"Preparing the model and dataset for {request.provider}",
             }
         )
     source, hosted_model, checkpoint, checkpoint_manifest = _training_checkpoint(
@@ -1938,9 +2064,7 @@ def run_cloud_training_job(
         "seed": effective.seed,
         "device": "cuda",
         "evaluation": (
-            "test set"
-            if test_snapshot or request.data_mode == "auto-split"
-            else "not evaluated"
+            "test set" if test_snapshot or request.data_mode == "auto-split" else "not evaluated"
         ),
         "data_mode": request.data_mode,
         "validation_strategy": (
@@ -1963,15 +2087,13 @@ def run_cloud_training_job(
         progress_callback(
             {
                 "phase": "uploading_dataset",
-                "message": "Uploading the approved training snapshot to Modal",
+                "message": f"Uploading the approved training snapshot to {request.provider}",
                 "gpu": request.gpu,
             }
         )
     job = service.submit(
         snapshot_path=request.snapshot_path,
-        validation_snapshot_path=(
-            str(validation_snapshot.root) if validation_snapshot else None
-        ),
+        validation_snapshot_path=(str(validation_snapshot.root) if validation_snapshot else None),
         test_snapshot_path=str(test_snapshot.root) if test_snapshot else None,
         data_mode=request.data_mode,
         allow_image_level_fallback=request.allow_image_level_split,
@@ -1991,7 +2113,9 @@ def run_cloud_training_job(
         progress_callback(
             {
                 "phase": "submitted",
-                "message": "Modal accepted the training job; waiting for its first update",
+                "message": (
+                    f"{request.provider} accepted the training job; waiting for its first update"
+                ),
                 "gpu": request.gpu,
                 "progress": 0.0,
             }
@@ -2052,11 +2176,23 @@ def _cloud_job_dict(job) -> dict[str, Any]:
     return payload
 
 
-def _create_cloud_action(store: ProjectStore, credentials_store, run_id: str, action: str):
-    from .core import ValidationError
+def _create_cloud_action(
+    store: ProjectStore, credentials_store, run_id: str, action: str, provider_settings_store=None
+):
+    from .cloud.models import CloudJobRecord
+    from .core import ValidationError, read_json
 
-    service, credentials = _cloud_service(store, credentials_store)
-    if credentials is None:
+    record_path = store.root / "runs" / run_id / "cloud-job.json"
+    if not record_path.is_file():
+        raise ValidationError(f"Cloud training run not found: {run_id}")
+    record = CloudJobRecord.from_dict(read_json(record_path))
+    service, credentials = _cloud_service(
+        store,
+        credentials_store,
+        provider_settings_store,
+        provider=record.provider,
+    )
+    if record.provider == "modal" and credentials is None:
         raise ValueError(
             "Modal credentials are not configured. Save credentials or set both "
             "Modal environment variables."
@@ -2119,6 +2255,7 @@ def create_app(
     *,
     user_state_store: UserStateStore | None = None,
     cloud_credentials_store=None,
+    cloud_provider_settings_store=None,
     jobs: JobManager | None = None,
     source_checkout: str | Path | None = None,
 ) -> Starlette:
@@ -2148,6 +2285,11 @@ def create_app(
         from .cloud.credentials import CloudCredentialsStore
 
         app.state.cloud_credentials_store = CloudCredentialsStore()
+    app.state.cloud_provider_settings_store = cloud_provider_settings_store
+    if app.state.cloud_provider_settings_store is None:
+        from .cloud.provider_settings import CloudProviderSettingsStore
+
+        app.state.cloud_provider_settings_store = CloudProviderSettingsStore()
     app.state.source_checkout = (
         Path(source_checkout).expanduser().resolve()
         if source_checkout is not None
@@ -2246,6 +2388,7 @@ def create_app(
                     {"name": name, "usd_per_hour": round(rate * 3600, 3)}
                     for name, rate in GPU_RATES_PER_SECOND.items()
                 ],
+                "cloud_provider_settings": app.state.cloud_provider_settings_store.load(),
             }
             if app.state.restore_warning:
                 payload["restore_warning"] = app.state.restore_warning
@@ -2319,32 +2462,48 @@ def create_app(
             body = _request(PredictionsRequest, await _read_body(request))
             store = active_store()
             # Snapshot availability is deliberately not checked: prediction-only works alone.
-            if body.execution == "modal":
+            if body.execution != "local":
                 if not body.acknowledged or not body.uploads_dataset:
                     raise ValueError(
-                        "Explicit consent is required. Review and approve the Modal image "
+                        "Explicit consent is required. Review and approve the cloud image "
                         "transfer and spending limit first"
                     )
-                if body.expected_image_count is None or body.expected_total_bytes is None:
+                if (
+                    body.expected_image_count is None
+                    or body.expected_total_bytes is None
+                    or body.expected_rate_usd_per_hour is None
+                ):
                     raise ValueError(
-                        "Review the image count and transfer size before cloud prediction"
+                        "Review the image count, transfer size, and GPU price "
+                        "before cloud prediction"
                     )
-                preview = prediction_preflight(store, body)
+                preview = prediction_preflight(
+                    store,
+                    body,
+                    credentials_store=app.state.cloud_credentials_store,
+                    provider_settings_store=app.state.cloud_provider_settings_store,
+                    check_connection=True,
+                )
                 if (
                     preview["image_count"] != body.expected_image_count
                     or preview["total_bytes"] != body.expected_total_bytes
+                    or abs(preview["rate_usd_per_hour"] - body.expected_rate_usd_per_hour)
+                    > max(0.01, body.expected_rate_usd_per_hour * 0.01)
                 ):
                     raise ValueError(
-                        "The selected images changed; review the updated transfer total"
+                        "The image selection or GPU price changed; review the updated preflight"
                     )
-                credentials = app.state.cloud_credentials_store.resolve()
-                if credentials is None:
+                service, credentials = _cloud_service(
+                    store,
+                    app.state.cloud_credentials_store,
+                    app.state.cloud_provider_settings_store,
+                    provider=body.execution,
+                )
+                if body.execution == "modal" and credentials is None:
                     raise ValueError(
                         "Modal credentials are not configured; save them in System health"
                     )
-                from .cloud.modal_transport import ModalTransport
-
-                transport = ModalTransport(credentials)
+                transport = service.transport
                 return _json(
                     submit(
                         lambda report: run_prediction_job(
@@ -2377,6 +2536,7 @@ def create_app(
                 store,
                 body,
                 credentials_store=app.state.cloud_credentials_store,
+                provider_settings_store=app.state.cloud_provider_settings_store,
                 check_connection=True,
             )
             return _json(result)
@@ -2654,12 +2814,56 @@ def create_app(
         except Exception as exc:
             return _failure(exc)
 
+    async def cloud_provider_settings(request: Request) -> Response:
+        settings_store = app.state.cloud_provider_settings_store
+        try:
+            if request.method == "GET":
+                return _json({"providers": settings_store.load()})
+            payload = await _read_body(request)
+            provider = _string(payload, "provider")
+            settings = payload.get("settings")
+            if not isinstance(settings, dict):
+                raise ValueError("settings must be an object")
+            from .cloud.provider_settings import AzureMLSettings, VertexAISettings
+
+            settings_type = {"azure_ml": AzureMLSettings, "vertex_ai": VertexAISettings}.get(
+                provider
+            )
+            if settings_type is None:
+                raise ValueError("provider must be azure_ml or vertex_ai")
+            normalized = settings_type.from_mapping(settings).to_mapping()
+            settings_store.update(provider, normalized)
+            return _json({"provider": provider, "settings": normalized})
+        except Exception as exc:
+            return _failure(exc)
+
+    async def cloud_provider_check(request: Request) -> Response:
+        try:
+            payload = await _read_body(request)
+            provider = _string(payload, "provider")
+            service, _ = _cloud_service(
+                active_store(),
+                app.state.cloud_credentials_store,
+                app.state.cloud_provider_settings_store,
+                provider=provider,
+            )
+            transport = service.transport
+            status = transport.probe()
+            return _json({"connection": status})
+        except Exception as exc:
+            return _failure(exc)
+
     async def cloud_estimate(request: Request) -> Response:
         try:
             body = _request(CloudEstimateRequest, await _read_body(request))
             store = active_store()
             snapshot, validation_snapshot, test_snapshot = _training_snapshots(store, body)
-            service, _ = _cloud_service(store, app.state.cloud_credentials_store)
+            service, _ = _cloud_service(
+                store,
+                app.state.cloud_credentials_store,
+                app.state.cloud_provider_settings_store,
+                provider=body.provider,
+            )
             project_config = store.load_manifest().project_config
             estimate = service.estimate(
                 snapshot.root,
@@ -2693,6 +2897,7 @@ def create_app(
                         store,
                         body,
                         app.state.cloud_credentials_store,
+                        app.state.cloud_provider_settings_store,
                         progress_callback=report,
                     ),
                     with_progress=True,
@@ -2705,7 +2910,11 @@ def create_app(
         del request
         try:
             store = active_store()
-            service, _ = _cloud_service(store, app.state.cloud_credentials_store)
+            service, _ = _cloud_service(
+                store,
+                app.state.cloud_credentials_store,
+                app.state.cloud_provider_settings_store,
+            )
             return _json({"jobs": [_cloud_job_dict(job) for job in service.list_jobs()]})
         except Exception as exc:
             return _failure(exc)
@@ -2717,7 +2926,13 @@ def create_app(
             if action not in {"refresh", "cancel", "collect", "cleanup"}:
                 return _json({"detail": "Unsupported cloud job action"}, 404)
             store = active_store()
-            payload = _create_cloud_action(store, app.state.cloud_credentials_store, run_id, action)
+            payload = _create_cloud_action(
+                store,
+                app.state.cloud_credentials_store,
+                run_id,
+                action,
+                app.state.cloud_provider_settings_store,
+            )
             response: dict[str, Any] = {"job": payload}
             if action == "collect":
                 checkpoint_dir = store.root / "checkpoints" / run_id
@@ -2769,6 +2984,12 @@ def create_app(
     )
     app.add_route("/api/environment/check-cloud", environment_check_cloud, methods=["POST"])
     app.add_route("/api/cloud/credentials", cloud_credentials, methods=["POST"])
+    app.add_route(
+        "/api/cloud/providers/settings",
+        cloud_provider_settings,
+        methods=["GET", "POST"],
+    )
+    app.add_route("/api/cloud/providers/check", cloud_provider_check, methods=["POST"])
     app.add_route("/api/cloud/estimate", cloud_estimate, methods=["POST"])
     app.add_route("/api/cloud/training", cloud_training, methods=["POST"])
     app.add_route("/api/cloud/jobs", cloud_jobs, methods=["GET"])
