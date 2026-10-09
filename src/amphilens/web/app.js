@@ -178,7 +178,7 @@
     if (count) { count.textContent = running ? String(running) : ""; count.hidden = !running; }
     const toggle = document.querySelector("[data-activity-toggle]");
     if (toggle) toggle.classList.toggle("has-running", running > 0);
-    panel.innerHTML = `<div class="activity-heading"><div><p class="eyebrow">Run monitor</p><h2>Activity</h2><p>${running ? `${running} run${running === 1 ? " is" : "s are"} active. Updates appear here while you work.` : "Recent prediction and training runs appear here."}</p></div><button class="icon-button" type="button" data-activity-close aria-label="Close activity panel">×</button></div>${local.length || cloud.length ? `<div class="activity-list">${local.join("")}${cloud.join("")}</div>` : `<p class="activity-empty">No runs yet. Start a prediction or training run to follow its progress here.</p>`}`;
+    panel.innerHTML = `<div class="activity-heading"><div><h2>Activity</h2><p>${running ? `${running} run${running === 1 ? " is" : "s are"} active. Updates appear here while you work.` : "Recent prediction and training runs appear here."}</p></div><button class="icon-button" type="button" data-activity-close aria-label="Close activity panel">×</button></div>${local.length || cloud.length ? `<div class="activity-list">${local.join("")}${cloud.join("")}</div>` : `<p class="activity-empty">No runs yet. Start a prediction or training run to follow its progress here.</p>`}`;
     for (const details of panel.querySelectorAll(".activity-details")) {
       if (openRuns.has(details.closest("[data-activity-id]")?.dataset.activityId)) details.open = true;
     }
@@ -235,8 +235,8 @@
     select.value = saved || app.defaultModelId || list[0]?.model_id || "";
   }
 
-  function pageHead(eyebrow, title, description, action = "") {
-    return `<header class="view-head"><div class="view-head-copy"><p class="eyebrow">${escapeHtml(eyebrow)}</p><h1>${escapeHtml(title)}</h1><p class="lead">${escapeHtml(description)}</p></div>${action}</header>`;
+  function pageHead(title, description, action = "") {
+    return `<header class="view-head"><div class="view-head-copy"><h1>${escapeHtml(title)}</h1><p class="lead">${escapeHtml(description)}</p></div>${action}</header>`;
   }
 
   function pathPickerControl(id, name, kind, placeholder, options = {}) {
@@ -246,14 +246,14 @@
 
   function projectRequired() {
     if (app.project) return false;
-    root.innerHTML = `${pageHead("Project needed", "Start with a project", "A project keeps your image folders, datasets and model runs together.")}
+    root.innerHTML = `${pageHead("Start with a project", "A project keeps your image folders, datasets and model runs together.")}
       <section class="surface empty-state" style="margin-top:0"><div class="empty-illustration" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><path d="M4 9.5h9l2.3 2.7H28v12.3H4V9.5Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M4 13.5h24" stroke="currentColor" stroke-width="1.8"/></svg></div><h2>Open or create a project</h2><p>Once a project is open, you can scan images with a pretrained model right away. Labels and CVAT are only needed when you choose to improve a model.</p><div class="project-actions"><button class="button primary" type="button" data-open-project data-project-tab="create">Create project</button><button class="button" type="button" data-open-project>Open existing project</button></div></section>`;
     return true;
   }
 
   function renderHome() {
     if (!app.project) {
-      root.innerHTML = `${pageHead("Field workspace", "Your wildlife field desk", "Scan camera-trap images with a pretrained model, or build a labeled dataset when you are ready.")}
+      root.innerHTML = `${pageHead("Your wildlife field desk", "Scan camera-trap images with a pretrained model, or build a labeled dataset when you are ready.")}
       <section class="surface empty-state"><div class="empty-illustration" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="12" stroke="currentColor" stroke-width="1.7"/><circle cx="16" cy="16" r="7" stroke="currentColor" stroke-width="1.7"/><circle cx="16" cy="16" r="2.3" fill="currentColor"/></svg></div><h2>Set up your first project</h2><p>Choose a project folder and the image folder you want to scan. You can make predictions before collecting any annotations.</p><div class="project-actions"><button class="button primary" type="button" data-open-project data-project-tab="create">Create project</button><button class="button" type="button" data-open-project>Open existing project</button></div></section>`;
       return;
     }
@@ -262,9 +262,9 @@
     const checkpoints = project.checkpoints || [];
     const images = project.counts?.images ?? project.image_count;
     const imageRoot = project.image_roots?.[0] || "";
-    root.innerHTML = `${pageHead("Field workspace", "Good to have you back", `${project.name || basename(project.path)} is ready. Start with a scan, or continue improving the project with labeled examples.`, `<button class="button" type="button" data-open-project>Switch project</button>`)}
+    root.innerHTML = `${pageHead("Good to have you back", `${project.name || basename(project.path)} is ready. Start with a scan, or continue improving the project with labeled examples.`, `<button class="button" type="button" data-open-project>Switch project</button>`)}
       <section class="surface hero-panel">
-        <div class="hero-copy"><p class="eyebrow">Prediction-only workflow</p><h2>Find wildlife in your images</h2><p>Use a pretrained model or one of your saved checkpoints. No labels or CVAT setup needed.</p><div class="hero-actions"><button class="button primary" type="button" data-view="predict">Run detection</button><button class="button subtle" type="button" data-view="import">Import labeled images</button></div></div>
+        <div class="hero-copy"><h2>Find wildlife in your images</h2><p>Use a pretrained model or one of your saved checkpoints. No labels or CVAT setup needed.</p><div class="hero-actions"><button class="button primary" type="button" data-view="predict">Run detection</button><button class="button subtle" type="button" data-view="import">Import labeled images</button></div></div>
         <div class="hero-art" aria-hidden="true"><span class="hero-sun"></span><svg class="marsh-lines" viewBox="0 0 380 260" fill="none"><path d="M2 211c62-45 118-49 179-20 67 32 119 31 197-5M12 230c66-41 117-43 174-17 72 32 130 27 187-3M39 250c51-29 93-32 143-11 65 27 125 24 184-1M54 194c51-36 93-42 145-18 65 30 112 31 172 6M84 174c37-25 77-28 119-10 55 24 106 24 157 5" stroke="currentColor" stroke-width="1.2"/><path d="M226 260V114m0 76c-26-25-43-30-59-29m59 3c17-32 35-43 53-45m-99 71c-15-10-28-14-43-13m134-33c13-15 26-21 42-23" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M167 161c16-5 31 4 35 15-14 3-29-1-35-15Zm59-20c6-17 19-24 34-23-3 15-15 25-34 23Zm-99 36c10-9 23-9 33-2-8 9-20 11-33 2Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg><span class="hero-reed r1"></span><span class="hero-reed r2"></span><span class="hero-reed r3"></span></div>
       </section>
       <div class="content-grid">
@@ -348,8 +348,8 @@
     if (projectRequired()) return;
     const roots = app.project.image_roots || [];
     const currentRoot = roots[0] || "";
-    root.innerHTML = `${pageHead("Find wildlife", "Run detection", "Scan an image folder and create a predictions file with reports. This workflow works without annotations or CVAT.")}
-      <div class="form-layout"><section class="surface form-panel"><div class="panel-heading"><div><h2>Choose images and model</h2><p>Original image files are never changed.</p></div></div>
+    root.innerHTML = `${pageHead("Run detection", "Scan an image folder and create a predictions file with reports. This workflow works without annotations or CVAT.")}
+      <div class="form-layout form-layout-single"><section class="surface form-panel"><div class="panel-heading"><div><h2>Choose images and model</h2><p>Original image files are never changed.</p></div></div>
         <form class="form-stack" data-form="predict">
           <div class="field"><label for="prediction-run-name">Prediction run name</label><input id="prediction-run-name" name="run_name" type="text" maxlength="120" placeholder="e.g. Spring survey" required><span class="field-help">This name is saved with the results. The exact model ID is recorded separately.</span></div>
           <div class="field"><label for="prediction-root">Image folder</label>${pathPickerControl("prediction-root", "image_root", "directory", "/path/to/camera-trap-images", { value: currentRoot, required: true, label: "an image folder" })}<span class="field-help">Choose a folder visible to the computer running AmphiLens.</span></div>
@@ -366,7 +366,7 @@
           </div></details>
           <div class="form-actions"><button class="button primary" type="submit">Run detection</button><span class="muted" style="font-size:.75rem">You can leave this page while it runs.</span></div>
         </form><div id="job-slot" aria-live="polite"></div>
-      </section><aside class="surface side-note"><h3>What you will get</h3><p>Predictions include image names, detected classes, confidence scores and bounding boxes. AmphiLens can also save a run summary and visual evidence when available.</p><div class="note-rule"></div><h3>Choosing a model</h3><p>Use general pretrained weights to begin, an AmphiLens fine-tuned model for its trained classes, or a project checkpoint you have already trained.</p></aside></div>`;
+      </section></div>`;
     const form = root.querySelector('form[data-form="predict"]');
     restoreWorkflowViewState("predict");
     renderPredictionModelSelection();
@@ -380,7 +380,20 @@
 
   function renderImport() {
     if (projectRequired()) return;
-    root.innerHTML = `${pageHead("Label & improve", "Import labeled images", "Bring in your first reviewed examples from a local archive or an existing CVAT project.")}
+    const datasets = app.project.datasets || [];
+    const snapshotRows = datasets.map((item) => {
+      const name = item.name || basename(item.path);
+      const sourceType = typeof item.source_type === "string"
+        ? item.source_type.replace(/[-_]/g, " ")
+        : "";
+      const source = item.task_name
+        ? `CVAT task · ${item.task_name}`
+        : sourceType
+          ? `Source · ${sourceType}`
+          : "Imported dataset";
+      return `<div class="snapshot-row"><div class="snapshot-copy"><strong>${escapeHtml(name)}</strong><span>${formatNumber(item.image_count)} images · ${escapeHtml(source)}</span></div><div class="snapshot-actions"><button class="button small" type="button" data-rename-snapshot data-path="${escapeHtml(item.path)}" data-name="${escapeHtml(name)}">Rename</button><button class="button small danger-text" type="button" data-delete-snapshot data-path="${escapeHtml(item.path)}" data-name="${escapeHtml(name)}">Delete</button></div></div>`;
+    }).join("");
+    root.innerHTML = `${pageHead("Import labeled images", "Bring in your first reviewed examples from a local archive or an existing CVAT project.")}
       <div class="content-grid">
         <section class="surface form-panel"><div class="panel-heading"><div><h2>Local annotation archive</h2><p>Use an export that includes both annotations and image files.</p></div></div>
           <form class="form-stack" data-form="import">
@@ -392,7 +405,8 @@
           </form><div id="job-slot" aria-live="polite"></div>
         </section>
         <aside class="surface panel"><div class="panel-heading"><div><h2>Already using CVAT?</h2><p>Import a complete project, including its tasks and images.</p></div></div><p class="empty-inline">Connect to your CVAT server to select the initial annotated project and review its labels before importing.</p><div class="field" style="margin-top:13px"><label for="initial-cvat-server">Server URL <span class="optional">optional</span></label><input id="initial-cvat-server" name="server_url" inputmode="url" value="${escapeHtml(app.cvatServerUrl)}" placeholder="https://cvat.example.org"></div><button class="button panel-action" type="button" data-connect-cvat>Connect to CVAT</button><div id="cvat-projects-slot" aria-live="polite">${renderCvatProjects()}</div></aside>
-      </div>`;
+      </div>
+      <section class="surface panel imported-snapshots"><div class="panel-heading"><div><h2>Imported snapshots</h2><p>View and manage labeled snapshots saved in this project.</p></div><span class="muted">${formatNumber(datasets.length)} snapshot${datasets.length === 1 ? "" : "s"}</span></div><div class="snapshot-list">${snapshotRows || `<p class="empty-inline">No imported snapshots yet.</p>`}</div></section>`;
     restoreWorkflowViewState("import");
     app.cvatServerUrl = root.querySelector("#initial-cvat-server")?.value || "";
     const initialCvatForm = root.querySelector("#initial-cvat-form");
@@ -505,15 +519,13 @@
     const datasets = app.project.datasets || [];
     const checkpoints = app.project.checkpoints || [];
     const snapshotOptions = datasets.map((item) => `<option value="${escapeHtml(item.path)}">${escapeHtml(item.name || basename(item.path))}${item.task_name ? " · CVAT task" : ""} · ${formatNumber(item.image_count)} images</option>`).join("");
-    const renameControls = datasets.map((item) => `<div class="field-row snapshot-name-row"><span>${escapeHtml(item.name || basename(item.path))}</span><button class="button small" type="button" data-rename-snapshot data-path="${escapeHtml(item.path)}" data-name="${escapeHtml(item.name || basename(item.path))}">Rename</button></div>`).join("");
-    const workflow = datasets.length ? `<div class="form-layout"><section class="surface form-panel"><div class="panel-heading"><div><h2>Training setup</h2><p>Each run saves its configuration and checkpoint lineage in this project.</p></div></div>
+    const workflow = datasets.length ? `<div class="form-layout form-layout-single"><section class="surface form-panel"><div class="panel-heading"><div><h2>Training setup</h2><p>Each run saves its configuration and checkpoint lineage in this project.</p></div></div>
       <form class="form-stack" data-form="training">
         <div class="field"><label for="training-data-mode">Dataset setup</label><select id="training-data-mode" name="data_mode"><option value="separate-snapshots" selected>Choose separate snapshots</option><option value="auto-split">Split one snapshot automatically</option><option value="training-monitor">Use training data for validation</option></select><span class="field-help" data-training-mode-help>Select training, validation, and test snapshots. Validation and test are optional.</span></div>
         <div class="field"><label for="training-snapshot" data-training-snapshot-label>Training snapshot</label><select id="training-snapshot" name="snapshot_path" required><option value="">Choose a dataset</option>${snapshotOptions}</select></div>
         <div class="field" data-training-validation hidden><label for="training-validation-snapshot">Validation snapshot <span class="optional">optional</span></label><select id="training-validation-snapshot" name="validation_snapshot_path"><option value="">Use training snapshot for validation</option>${snapshotOptions}</select></div>
         <div class="field" data-training-test hidden><label for="training-test-snapshot">Test snapshot <span class="optional">optional</span></label><select id="training-test-snapshot" name="test_snapshot_path"><option value="">Skip final evaluation</option>${snapshotOptions}</select></div>
         <label class="consent-row" data-training-image-split hidden><input type="checkbox" name="allow_image_level_split"><span>Allow an image-level split if source groups cannot be kept together.</span></label>
-        <details class="advanced-settings"><summary>Dataset snapshot names</summary><div class="advanced-body">${renameControls}</div></details>
         <div class="field"><label for="training-source">Training source</label><select id="training-source" name="training_source"><option value="general-pretrained" selected>General pretrained weights</option><option value="amphilens-pretrained">AmphiLens pretrained model</option><option value="project-checkpoint"${checkpoints.length ? "" : " disabled"}>Existing project checkpoint</option></select><span class="field-help">General pretrained weights are the default and use this project’s selected architecture.</span></div>
         <div class="field" data-training-hosted hidden><label for="training-hosted-model">AmphiLens model</label><select id="training-hosted-model" name="hosted_model_id"><option value="">Choose a model</option>${(app.hostedModels || []).map((item) => `<option value="${escapeHtml(item.model_id)}">${escapeHtml(item.name || item.model_id)}</option>`).join("")}</select><span class="field-help">The model supplies the architecture, size, and input preprocessing for this run.</span></div>
         <div class="hosted-model-panel" data-training-hosted-details hidden></div>
@@ -529,9 +541,9 @@
         </div>
         <div class="form-actions"><button class="button primary" type="submit">Train model</button></div>
       </form><div id="job-slot" aria-live="polite"></div>
-    </section><aside class="surface side-note"><h3>Training</h3><p>The model first trains with its backbone frozen, then fine-tunes all layers.</p><div class="note-rule"></div><p>Validation controls early stopping. Test data is used only for final evaluation.</p></aside></div>
+    </section></div>
       <section class="surface panel cloud-jobs-panel"><div class="panel-heading"><div><h2>Cloud jobs</h2><p>Active Modal training progress refreshes automatically while AmphiLens is open.</p></div><button class="button small" type="button" data-refresh-cloud-jobs>Refresh jobs</button></div><div id="cloud-jobs-slot" aria-live="polite"><p class="empty-inline">Loading saved cloud jobs…</p></div></section>` : `<section class="surface empty-state" style="margin-top:0"><div class="empty-illustration" aria-hidden="true">↗</div><h2>No labeled dataset yet</h2><p>Import a reviewed archive or CVAT project first. You can still use Find wildlife with a pretrained model while you gather annotations.</p><div class="project-actions"><button class="button primary" type="button" data-view="import">Import labeled images</button><button class="button" type="button" data-view="predict">Find wildlife</button></div></section>`;
-    root.innerHTML = `${pageHead("Label & improve", "Train a model", "Fine-tune a model using a validated labeled dataset snapshot. Prediction-only projects do not need to train.")}${workflow}`;
+    root.innerHTML = `${pageHead("Train a model", "Fine-tune a model using a validated labeled dataset snapshot.")}${workflow}`;
     const form = root.querySelector('form[data-form="training"]');
     restoreWorkflowViewState("training");
     syncTrainingDataControls(form);
@@ -732,7 +744,7 @@
 
   function renderReview() {
     if (projectRequired()) return;
-    root.innerHTML = `${pageHead("Label & improve", "Choose images to review", "Select a smaller, informative queue for human annotation. This workflow is separate from prediction-only scans.")}
+    root.innerHTML = `${pageHead("Choose images to review", "Select a smaller, informative queue for human annotation.")}
       <div class="form-layout"><section class="surface form-panel"><div class="panel-heading"><div><h2>Queue selection inputs</h2><p>Use artifacts produced by your analysis run. AmphiLens will not create missing evidence for you.</p></div></div>
         <div class="notice warning"><span class="notice-mark" aria-hidden="true">!</span><p><strong>Three inputs are required.</strong> Add the predictions CSV, calibration JSON, and feature JSON. If calibration or features are missing, create them with the analysis workflow before selecting a queue.</p></div>
         <form class="form-stack" data-form="review" style="margin-top:17px">
@@ -749,8 +761,8 @@
 
   function renderCvat() {
     if (projectRequired()) return;
-    root.innerHTML = `${pageHead("Label & improve", "Annotation cycle", "Create a CVAT task from a selected image queue, review annotation progress, then merge completed work into a new dataset snapshot.")}
-      <div class="form-layout"><section class="surface form-panel"><div class="panel-heading"><div><h2>Managed cycle</h2><p>Repeating the same start action for a cycle is safe; changed selections are rejected.</p></div></div>
+    root.innerHTML = `${pageHead("Annotation cycle", "Create a CVAT task from a selected image queue, review annotation progress, then merge completed work into a new dataset snapshot.")}
+      <div class="form-layout form-layout-single"><section class="surface form-panel"><div class="panel-heading"><div><h2>Managed cycle</h2><p>Repeating the same start action for a cycle is safe; changed selections are rejected.</p></div></div>
         <form class="form-stack" data-form="cvat">
           <div class="field"><label for="cvat-action">What would you like to do?</label><select id="cvat-action" name="action"><option value="start">Send a queue to CVAT</option><option value="refresh">Refresh annotation status</option><option value="continue">Continue a completed cycle</option></select></div>
           <div class="field"><label for="cvat-cycle">Cycle name</label><input id="cvat-cycle" name="cycle" placeholder="cycle-01" required><span class="field-help">Use the same name to refresh status or continue this cycle.</span></div>
@@ -759,7 +771,7 @@
           <div class="notice"><span class="notice-mark" aria-hidden="true">i</span><p>Every image in a CVAT task must be reviewed before continuing. Empty annotations are valid for a reviewed image with no target wildlife.</p></div>
           <div class="form-actions"><button class="button primary" type="submit">Start cycle</button><a class="button" href="#review" data-view="review">Choose images first</a></div>
         </form><div id="job-slot" aria-live="polite"></div>
-      </section><aside class="surface side-note"><h3>Cycle steps</h3><p>Send the queue, annotate and save every image in CVAT, refresh job status, then continue the cycle to validate the export and create a new immutable snapshot.</p><div class="note-rule"></div><p>A cycle cannot continue until all CVAT jobs are complete.</p></aside></div>`;
+      </section></div>`;
     const form = root.querySelector('form[data-form="cvat"]');
     restoreWorkflowViewState("cvat");
     app.cvatServerUrl = form?.elements.server_url?.value || "";
@@ -821,7 +833,7 @@
 
   function renderHealth() {
     const checks = doctorChecks(app.doctor);
-    root.innerHTML = `${pageHead("System health", "Check your setup", "Review local tools and optional services used by AmphiLens. Prediction-only work does not require CVAT or cloud credentials.", `<button class="button" type="button" data-health-refresh>Refresh check</button>`)}
+    root.innerHTML = `${pageHead("Check your setup", "Review local tools and optional services used by AmphiLens.", `<button class="button" type="button" data-health-refresh>Refresh check</button>`)}
       <div class="content-grid"><section class="surface panel"><div class="panel-heading"><div><h2>Local environment</h2><p>Tools AmphiLens can use on this computer.</p></div></div>${checks.length ? `<div class="health-list">${checks.map((check) => { const status = check.status || "info"; const name = check.name || "System check"; const message = check.message || ""; return `<div class="health-row"><span class="health-indicator ${statusTone(status)}" aria-hidden="true"></span><div class="health-copy"><strong>${escapeHtml(String(name).replace(/[_-]+/g, " "))}</strong><span>${escapeHtml(message)}</span></div><span class="health-status">${escapeHtml(status)}</span></div>`; }).join("")}</div>` : `<div class="notice warning"><span class="notice-mark" aria-hidden="true">!</span><p>Health details are not available yet. Refresh the check to ask the local service for the latest status.</p></div>`}</section>
       <aside class="surface panel"><div class="panel-heading"><div><h2>Optional connections</h2><p>Only needed for the workflows you choose.</p></div></div><div class="health-list"><div class="health-row"><span class="health-indicator" aria-hidden="true"></span><div class="health-copy"><strong>CVAT</strong><span>Needed to send annotation queues or import a CVAT project. Local archive import remains available.</span></div><span class="health-status">Optional</span></div><div class="health-row"><span class="health-indicator" aria-hidden="true"></span><div class="health-copy"><strong>Cloud GPU</strong><span>Needed for Modal training or prediction. Each cloud prediction asks before transferring images and requires a spending limit.</span></div><span class="health-status">Optional</span></div></div><details class="advanced-settings credential-settings"><summary>Configure Modal credentials</summary><form class="form-stack" data-form="cloud-credentials" style="margin-top:13px"><div class="field"><label for="modal-token-id">Token ID</label><input id="modal-token-id" name="token_id" type="password" autocomplete="new-password" required></div><div class="field"><label for="modal-token-secret">Token secret</label><input id="modal-token-secret" name="token_secret" type="password" autocomplete="new-password" required></div><button class="button" type="submit">Save credentials</button></form></details><button class="button panel-action" type="button" data-check-cloud>Check cloud connection</button><div id="cloud-status" aria-live="polite"></div></aside></div>`;
   }
@@ -1351,6 +1363,22 @@
         });
         await refreshBootstrap();
         toast("Snapshot renamed.");
+      } catch (error) {
+        toast(error.message, true);
+      }
+      return;
+    }
+    const deleteSnapshotButton = event.target.closest("[data-delete-snapshot]");
+    if (deleteSnapshotButton) {
+      const name = deleteSnapshotButton.dataset.name || "this snapshot";
+      if (!window.confirm(`Delete “${name}” from this project? This permanently removes the imported snapshot. The original archive and source images outside the snapshot are left untouched.`)) return;
+      try {
+        await api("/api/datasets/delete", {
+          method: "POST",
+          body: JSON.stringify({ snapshot_path: deleteSnapshotButton.dataset.path }),
+        });
+        await refreshBootstrap();
+        toast("Snapshot deleted from this project.");
       } catch (error) {
         toast(error.message, true);
       }

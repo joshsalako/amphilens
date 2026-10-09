@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import platform
+import shutil
 import sys
 import tempfile
 import uuid
@@ -740,6 +741,42 @@ class ProjectStore:
             {"schema_version": 1, "display_names": names},
         )
         return selected
+
+    def delete_dataset_snapshot(self, snapshot_path: str | Path) -> dict[str, str]:
+        """Remove one snapshot stored directly in this project's datasets directory."""
+        dataset_root_path = self.root / "datasets"
+        if dataset_root_path.is_symlink():
+            raise ValidationError("Choose a dataset snapshot saved in the active project")
+        dataset_root = dataset_root_path.resolve()
+        requested = Path(snapshot_path).expanduser()
+        if requested.is_symlink():
+            raise ValidationError("Choose a dataset snapshot saved in the active project")
+        try:
+            path = requested.resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
+            raise ValidationError("Dataset snapshot was not found in the active project") from exc
+        if path == dataset_root or path.parent != dataset_root or not path.is_dir():
+            raise ValidationError("Choose a dataset snapshot saved in the active project")
+
+        snapshot = self._project_dataset_snapshot(path)
+        display_name = self.dataset_display_name(path)
+        catalog_path = dataset_root / "catalog.json"
+        catalog = read_json(catalog_path) if catalog_path.is_file() else None
+        display_names = (
+            catalog.get("display_names", {}) if isinstance(catalog, dict) else {}
+        )
+        if not isinstance(display_names, dict):
+            display_names = {}
+
+        shutil.rmtree(path)
+        if catalog is not None and snapshot.manifest.snapshot_id in display_names:
+            updated_names = dict(display_names)
+            updated_names.pop(snapshot.manifest.snapshot_id, None)
+            atomic_write_json(
+                catalog_path,
+                {**catalog, "display_names": updated_names},
+            )
+        return {"snapshot_id": snapshot.manifest.snapshot_id, "display_name": display_name}
 
     def _project_dataset_snapshot(self, snapshot_path: str | Path):
         from .dataset import DatasetSnapshot

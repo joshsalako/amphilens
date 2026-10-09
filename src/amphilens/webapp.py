@@ -557,6 +557,11 @@ class DatasetRenameRequest:
 
 
 @dataclass(slots=True)
+class DatasetDeleteRequest:
+    snapshot_path: str
+
+
+@dataclass(slots=True)
 class TrainingRequest:
     snapshot_path: str
     checkpoint: str | None = None
@@ -814,6 +819,8 @@ def _request(cls, payload: dict[str, Any]):
             snapshot_path=_string(payload, "snapshot_path"),
             display_name=_string(payload, "display_name"),
         )
+    if cls is DatasetDeleteRequest:
+        return cls(snapshot_path=_string(payload, "snapshot_path"))
     if cls is TrainingRequest:
         epochs = _integer(payload, "epochs", minimum=1)
         batch_size = _integer(payload, "batch_size", minimum=1)
@@ -2394,6 +2401,14 @@ def create_app(
         except Exception as exc:
             return _failure(exc)
 
+    async def dataset_delete(request: Request) -> Response:
+        try:
+            body = _request(DatasetDeleteRequest, await _read_body(request))
+            result = active_store().delete_dataset_snapshot(body.snapshot_path)
+            return _json(result)
+        except Exception as exc:
+            return _failure(exc)
+
     async def cvat_projects(request: Request) -> Response:
         try:
             body = _request(CvatProjectListRequest, await _read_body(request))
@@ -2732,6 +2747,7 @@ def create_app(
     app.add_route("/api/datasets/import", dataset_import, methods=["POST"])
     app.add_route("/api/datasets/import-cvat", dataset_import_cvat, methods=["POST"])
     app.add_route("/api/datasets/rename", dataset_rename, methods=["POST"])
+    app.add_route("/api/datasets/delete", dataset_delete, methods=["POST"])
     app.add_route("/api/cvat/projects", cvat_projects, methods=["POST"])
     app.add_route("/api/training", training, methods=["POST"])
     app.add_route("/api/active-learning/select", active_learning, methods=["POST"])

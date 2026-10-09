@@ -22,7 +22,7 @@
   --radius: 10px;
   --font-sans: "Avenir Next", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
   font-family: var(--font-sans);
-  font-size: 1.125rem;
+  font-size: 1.25rem;
   line-height: 1.5;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -74,7 +74,6 @@ a { color: inherit; }
 .activity-panel { position: absolute; z-index: 12; top: calc(100% + 10px); right: -130px; width: min(470px, calc(100vw - 28px)); max-height: min(78vh, 720px); overflow: hidden; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); box-shadow: var(--shadow); }
 .activity-panel[hidden] { display: none; }
 .activity-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 15px; padding: 17px 19px 13px; border-bottom: 1px solid var(--line); background: #fbfcf8; }
-.activity-heading .eyebrow { margin: 0 0 3px; }
 .activity-heading h2 { font-size: 1.0625rem; }
 .activity-heading p:last-child { margin: 4px 0 0; color: var(--muted); font-size: 0.6875rem; line-height: 1.45; }
 .activity-list { max-height: calc(min(78vh, 720px) - 82px); overflow: auto; padding: 0 17px 12px; }
@@ -109,13 +108,11 @@ a { color: inherit; }
 .content { max-width: 1320px; margin: 0 auto; padding: 46px clamp(26px, 4.2vw, 58px) 76px; }
 .view-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 28px; margin-bottom: 28px; }
 .view-head-copy { max-width: 690px; }
-.eyebrow { margin: 0 0 9px; color: var(--marsh); font-size: 0.75rem; font-weight: 650; letter-spacing: .035em; }
 h1, h2, h3, p { overflow-wrap: anywhere; }
 h1 { margin: 0; font-size: clamp(1.75rem, 3.5vw, 2.5rem); line-height: 1.13; letter-spacing: -.045em; font-weight: 675; }
 .lead { max-width: 650px; margin: 12px 0 0; color: var(--muted); font-size: 0.9375rem; line-height: 1.65; }
 h2 { margin: 0; font-size: 1.25rem; line-height: 1.28; letter-spacing: -.025em; font-weight: 660; }
 h3 { margin: 0; font-size: 0.9375rem; line-height: 1.4; font-weight: 650; }
-.eyebrow + h1 { margin-top: 0; }
 .surface { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
 .panel { padding: 25px 27px; }
 .panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 20px; }
@@ -165,6 +162,7 @@ h3 { margin: 0; font-size: 0.9375rem; line-height: 1.4; font-weight: 650; }
 .panel-action { width: 100%; justify-content: flex-start; margin-top: 5px; }
 
 .form-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; align-items: start; gap: 18px; }
+.form-layout-single { grid-template-columns: minmax(0, 1fr); }
 .form-panel { padding: 24px; }
 .form-stack { display: grid; gap: 18px; }
 .field { display: grid; gap: 8px; }
@@ -213,6 +211,14 @@ h3 { margin: 0; font-size: 0.9375rem; line-height: 1.4; font-weight: 650; }
 .field textarea { min-height: 78px; resize: vertical; }
 .field input::placeholder, .dialog-form input::placeholder { color: #9aa49d; }
 .field-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; }
+.imported-snapshots { margin-top: 18px; }
+.snapshot-list { display: grid; }
+.snapshot-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 14px 0; border-top: 1px solid #e9ede7; }
+.snapshot-row:first-child { padding-top: 0; border-top: 0; }
+.snapshot-copy { display: grid; min-width: 0; gap: 4px; }
+.snapshot-copy strong { font-size: 0.875rem; font-weight: 650; }
+.snapshot-copy span { color: var(--muted); font-size: 0.75rem; line-height: 1.45; }
+.snapshot-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .range-field { display: grid; grid-template-columns: minmax(0, 1fr) 52px; align-items: center; gap: 12px; }
 .range-field input[type="range"] { accent-color: var(--marsh); min-height: 20px; padding: 0; }
 .range-value { color: var(--muted); text-align: right; font-size: 0.75rem; font-variant-numeric: tabular-nums; }
@@ -307,6 +313,8 @@ h3 { margin: 0; font-size: 0.9375rem; line-height: 1.4; font-weight: 650; }
   .content { padding-left: 27px; padding-right: 27px; }
   .form-layout, .content-grid { grid-template-columns: minmax(0, 1fr); }
   .hero-art { opacity: .72; }
+  .snapshot-row { grid-template-columns: minmax(0, 1fr); }
+  .snapshot-actions { justify-content: flex-start; }
 }
 @media (max-width: 760px) {
   .app-shell { display: block; }
