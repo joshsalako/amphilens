@@ -48,6 +48,19 @@ flowchart TD
    uv manages Python 3.11 and installs the app's packages in a local `.venv` folder, so you do not
    need to install pip separately. See [uv's Python installation guide](https://docs.astral.sh/uv/guides/install-python/).
 
+`uv sync` creates `.venv`. For CVAT or Modal, copy the example:
+
+```bash
+cp .env.example .env
+```
+
+Set the variables for the integrations you use:
+
+- CVAT: Set `CVAT_URL` to your CVAT app URL. Create an API token in CVAT user settings and set it as `CVAT_TOKEN`.
+- Modal: Create a token in the Modal dashboard. Set its ID as `MODAL_TOKEN_ID` and its secret as `MODAL_TOKEN_SECRET`.
+
+`.env` is ignored by Git; do not commit credentials.
+
 4. Start the app:
 
    ```bash
