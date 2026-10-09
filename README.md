@@ -56,7 +56,7 @@ cp .env.example .env
 
 Set the variables for the integrations you use:
 
-- CVAT: Set `CVAT_URL` to your CVAT app URL. Create an API token in CVAT user settings and set it as `CVAT_TOKEN`.
+- CVAT: Set `CVAT_URL` to your CVAT app URL (for a local server, `http://localhost:8080`). Create an API token in CVAT user settings and set it as `CVAT_TOKEN`.
 - Modal: Create a token in the Modal dashboard. Set its ID as `MODAL_TOKEN_ID` and its secret as `MODAL_TOKEN_SECRET`.
 
 `.env` is ignored by Git; do not commit credentials.
@@ -80,8 +80,14 @@ Your images stay on your computer unless you choose to send a review queue to CV
 data for cloud training. A CPU can run predictions; a CUDA GPU is recommended for training and large
 collections.
 
-For CVAT support, add `--extra cvat` to the `uv sync` command above. For cloud training, add
-`--extra cloud` and see the [cloud training guide](docs/cloud-training.md).
+### Optional integrations
+
+Add `--extra cvat` and/or `--extra cloud` to the `uv sync` command above for the integrations you use.
+
+- **CVAT** is for annotating and reviewing images. The `cvat` extra installs AmphiLens's Python client, not the CVAT server. To run CVAT locally, follow [CVAT's Docker installation guide](https://docs.cvat.ai/docs/administration/community/basics/installation/), then start it from the CVAT directory with `docker compose up -d`. Open `http://localhost:8080` to create your account and API token.
+- **Modal** runs training and prediction on cloud GPUs when you do not have suitable local hardware. Add `--extra cloud` and see the [cloud training guide](docs/cloud-training.md).
+
+In AmphiLens, send an image queue to CVAT, annotate and save the images there, then return to AmphiLens to continue the cycle. Choose Modal cloud GPU to train or run predictions remotely. AmphiLens coordinates the handoff and tracks the cloud job; annotation is done in CVAT.
 
 ## License
 
