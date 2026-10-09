@@ -1,5 +1,9 @@
 # AmphiLens
 
+<p align="center">
+  <img src="src/amphilens/web/wlt.JPG" alt="Hand-painted western leopard toad" width="220">
+</p>
+
 AmphiLens is a local browser app for finding wildlife in camera-trap images and managing image review,
 model training, and results.
 

@@ -43,7 +43,7 @@ a { color: inherit; }
 .sidebar { background: #e8ede6; border-right: 1px solid var(--line); padding: 23px 15px 16px; display: flex; flex-direction: column; min-height: 100vh; }
 .brand { display: flex; align-items: center; gap: 10px; padding: 0 10px 25px; text-decoration: none; color: var(--marsh-deep); }
 .brand-mark { display: grid; place-items: center; width: 38px; height: 38px; flex: none; color: var(--marsh); }
-.brand-mark svg { width: 100%; height: 100%; }
+.brand-mark img { width: 100%; height: 100%; object-fit: cover; border-radius: 7px; }
 .brand-name, .mobile-brand { font-size: 1.1875rem; font-weight: 690; letter-spacing: -.055em; }
 .nav-group { margin-bottom: 22px; }
 .nav-heading { margin: 0 0 8px; padding: 0 11px; color: #78847a; font-size: 0.75rem; line-height: 1.5; font-weight: 620; letter-spacing: .01em; }
