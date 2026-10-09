@@ -21,6 +21,7 @@
     cvatServerUrl: "",
     cloudEstimate: null,
     cloudJobs: [],
+    cloudJobsExpanded: false,
     cloudRefreshTimer: null,
     cloudRefreshRunning: false,
     bootstrapped: false,
@@ -652,7 +653,12 @@
   function renderCloudJobs() {
     const slot = document.getElementById("cloud-jobs-slot");
     if (!slot) return;
-    const rows = app.cloudJobs.map((job) => {
+    const previewCount = 3;
+    const visibleJobs = app.cloudJobsExpanded
+      ? app.cloudJobs
+      : app.cloudJobs.filter((job, index) => index < previewCount || activeCloudJob(job));
+    const hiddenCount = app.cloudJobs.length - visibleJobs.length;
+    const rows = visibleJobs.map((job) => {
       const runId = job.run_id || job.id || job.job_id;
       const state = cloudJobStatus(job);
       const status = humanize(state);
@@ -667,7 +673,10 @@
       const deadline = job.deadline_at ? new Date(job.deadline_at).toLocaleString() : "";
       return `<div class="cloud-job"><div class="cloud-job-copy"><strong>${escapeHtml(cloudJobTitle(job))}</strong><span>${escapeHtml(status)}${phase ? ` · ${escapeHtml(phase)}` : ""}${detail ? ` · ${escapeHtml(detail)}` : ""}${deadline ? ` · Deadline ${escapeHtml(deadline)}` : ""}</span>${job.progress != null ? `<span>Progress: ${escapeHtml(typeof job.progress === "object" ? job.progress.message || job.progress.percent || "In progress" : job.progress)}</span>` : ""}${consent ? `<span>${escapeHtml(consent)}</span>` : ""}${error}</div><div class="cloud-job-actions"><button class="button small" type="button" data-cloud-action="refresh" data-run-id="${escapeHtml(runId)}">Refresh</button>${dashboard}${busy ? `<button class="button small" type="button" data-cloud-action="cancel" data-run-id="${escapeHtml(runId)}">Cancel</button>` : ""}${terminal && !verified ? `<button class="button small" type="button" data-cloud-action="collect" data-run-id="${escapeHtml(runId)}">Collect checkpoint</button>` : ""}${job.cleanup_error || (terminal && job.cleanup_succeeded === false) ? `<button class="button small" type="button" data-cloud-action="cleanup" data-run-id="${escapeHtml(runId)}">Retry cleanup</button>` : ""}</div></div>`;
     }).join("");
-    slot.innerHTML = `${rows || `<p class="empty-inline">No saved cloud jobs for this project yet.</p>`}${renderCloudActionResult()}`;
+    const toggle = app.cloudJobs.length > previewCount
+      ? `<button class="button small cloud-jobs-toggle" type="button" data-toggle-cloud-jobs aria-expanded="${app.cloudJobsExpanded}" aria-controls="cloud-jobs-list">${app.cloudJobsExpanded ? "Show fewer" : `Show all ${app.cloudJobs.length} jobs`}</button>`
+      : "";
+    slot.innerHTML = `<div id="cloud-jobs-list">${rows || `<p class="empty-inline">No saved cloud jobs for this project yet.</p>`}</div>${hiddenCount > 0 || app.cloudJobsExpanded ? toggle : ""}${renderCloudActionResult()}`;
   }
 
   function renderCloudActionResult() {
@@ -1413,6 +1422,11 @@
     }
     if (event.target.closest("[data-cloud-estimate]")) { requestCloudEstimate(event.target.closest("[data-cloud-estimate]")); return; }
     if (event.target.closest("[data-refresh-cloud-jobs]")) { loadCloudJobs(); return; }
+    if (event.target.closest("[data-toggle-cloud-jobs]")) {
+      app.cloudJobsExpanded = !app.cloudJobsExpanded;
+      renderCloudJobs();
+      return;
+    }
     if (event.target.closest("[data-cloud-action]")) { cloudJobAction(event.target.closest("[data-cloud-action]")); return; }
     if (event.target.closest("[data-cancel-job]")) {
       const button = event.target.closest("[data-cancel-job]");

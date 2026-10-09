@@ -41,10 +41,11 @@ a { color: inherit; }
 
 .app-shell { min-height: 100vh; display: grid; grid-template-columns: 248px minmax(0, 1fr); }
 .sidebar { background: #e8ede6; border-right: 1px solid var(--line); padding: 23px 15px 16px; display: flex; flex-direction: column; min-height: 100vh; }
-.brand { display: flex; align-items: center; gap: 10px; padding: 0 10px 25px; text-decoration: none; color: var(--marsh-deep); }
-.brand-mark { display: grid; place-items: center; width: 38px; height: 38px; flex: none; color: var(--marsh); }
+.brand { display: flex; align-items: center; gap: 12px; padding: 0 10px 25px; text-decoration: none; color: var(--marsh-deep); }
+.brand-mark { display: grid; place-items: center; width: 48px; height: 48px; flex: none; color: var(--marsh); }
 .brand-mark img { width: 100%; height: 100%; object-fit: cover; border-radius: 7px; }
-.brand-name, .mobile-brand { font-size: 1.1875rem; font-weight: 690; letter-spacing: -.055em; }
+.brand-name { font-size: 1.5rem; font-weight: 690; letter-spacing: -.055em; }
+.mobile-brand { font-size: 1.1875rem; font-weight: 690; letter-spacing: -.055em; }
 .nav-group { margin-bottom: 22px; }
 .nav-heading { margin: 0 0 8px; padding: 0 11px; color: #78847a; font-size: 0.75rem; line-height: 1.5; font-weight: 620; letter-spacing: .01em; }
 .nav-link { position: relative; display: flex; align-items: center; width: 100%; gap: 10px; padding: 10px 11px; border: 0; border-radius: 6px; background: transparent; color: #48564c; text-align: left; white-space: nowrap; font-size: 0.875rem; font-weight: 520; cursor: pointer; transition: color .15s ease, background .15s ease; }
@@ -184,6 +185,7 @@ h3 { margin: 0; font-size: 0.9375rem; line-height: 1.4; font-weight: 650; }
 .estimate-value span { color: var(--muted); font-size: 0.625rem; }
 .estimate-value strong { font-size: 0.875rem; }
 .cloud-jobs-panel { margin-top: 18px; }
+.cloud-jobs-toggle { margin-top: 10px; }
 .cloud-job { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 13px 0; border-top: 1px solid #e9ede7; }
 .cloud-job-copy strong { display: block; font-size: 0.8125rem; }
 .cloud-job-copy span { display: block; margin-top: 4px; color: var(--muted); font-size: 0.6875rem; line-height: 1.45; overflow-wrap: anywhere; }
