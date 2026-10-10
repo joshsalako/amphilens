@@ -1,10 +1,12 @@
 # AmphiLens
 
 <p align="center">
-  <img src="src/amphilens/web/wlt.JPG" alt="Hand-painted western leopard toad" width="220">
+  <img src="src/amphilens/web/wlt.JPG" alt="Hand-painted western leopard toad" width="320">
 </p>
 
-AmphiLens is a local browser app for finding wildlife in camera-trap images, reviewing detections, and training models.
+AmphiLens helps ecologists, conservationists, environmentalists, and others study under-studied small wildlife in camera-trap images, especially nighttime images of amphibians, toads, and small mammals. Use the pretrained model as-is, fine-tune it for your species, or improve it through repeated active-learning cycles.
+
+AmphiLens grew from ECCV research on detecting Western leopard toads in camera-trap images. [Read the paper](https://openreview.net/pdf?id=0YnE65NGna).
 
 ## Workflow
 
@@ -17,7 +19,7 @@ flowchart LR
     E --> B
 ```
 
-Guides: [training and annotation](docs/training.md) · [cloud jobs](docs/cloud-training.md) · [pretrained models](https://huggingface.co/josh-salako/amphilens) · [project paper](https://openreview.net/pdf?id=0YnE65NGna)
+Guides: [training and annotation](docs/training.md) · [cloud jobs](docs/cloud-training.md) · [pretrained models](https://huggingface.co/josh-salako/amphilens)
 
 ## Install
 
