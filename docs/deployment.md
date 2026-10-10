@@ -134,7 +134,7 @@ valid Modal payment method:
 
 ```bash
 uv sync --locked --python 3.11 \
-  --extra cli --extra web --extra inference --extra training --extra cloud
+  --extra cli --extra web --extra cloud
 amphilens cloud login
 amphilens cloud diagnose
 ```

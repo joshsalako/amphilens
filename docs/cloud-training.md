@@ -7,20 +7,19 @@ your computer. Cloud SDKs are optional dependencies.
 
 ## Setup and credentials
 
-Install the cloud extra in addition to the usual training and browser app dependencies:
+Install the browser app and the SDK for the cloud provider you use. Remote jobs do not need the local inference or training dependencies.
 
 ```bash
 uv sync --locked --python 3.11 \
-  --extra cli --extra web --extra inference --extra training --extra cloud
+  --extra cli --extra web --extra cloud
 ```
 
-The `cloud` extra installs Modal. Install `cloud-azure` or `cloud-gcp` instead
-when using those providers:
+The `cloud` extra installs Modal. For Azure or Google Cloud, use the matching extra instead:
 
 ```bash
 uv sync --locked --python 3.11 \
-  --extra cli --extra web --extra inference --extra training --extra cloud-azure
-# or use --extra cloud-gcp
+  --extra cli --extra web --extra cloud-azure
+# or: --extra cli --extra web --extra cloud-gcp
 ```
 
 ### Azure Machine Learning
