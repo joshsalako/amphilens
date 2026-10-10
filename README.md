@@ -37,7 +37,14 @@ flowchart TD
 1. Clone this repo or download and unzip it.
 2. Install [uv](https://docs.astral.sh/uv/getting-started/installation/). See the
    [uv GitHub repository](https://github.com/astral-sh/uv) for more information.
-3. Open a terminal in the unzipped `amphilens` folder and run:
+3. Linux only: install Zenity for the file picker. macOS and Windows need no extra install.
+
+   - Ubuntu, Debian, or Mint: `sudo apt install zenity`
+   - Fedora: `sudo dnf install zenity`
+   - Arch or Manjaro: `sudo pacman -S zenity`
+   - openSUSE: `sudo zypper install zenity`
+
+4. Open a terminal in the unzipped `amphilens` folder and run:
 
    ```bash
    uv python install 3.11
@@ -60,7 +67,7 @@ Set the variables for the integrations you use:
 
 `.env` is ignored by Git; do not commit credentials.
 
-4. Start the app:
+5. Start the app:
 
    ```bash
    uv run --locked amphilens app
