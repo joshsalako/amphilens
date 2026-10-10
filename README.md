@@ -28,15 +28,15 @@ flowchart TD
 
 ## Links
 
-- [Pretrained models on Hugging Face](https://huggingface.co/josh-salako/amphilens)
-- [Detection, fine-tuning, and active learning guide](docs/training.md)
-- [Project paper](https://openreview.net/pdf?id=0YnE65NGna)
+- <a href="https://huggingface.co/josh-salako/amphilens" target="_blank" rel="noopener noreferrer">Pretrained models on Hugging Face</a>
+- <a href="docs/training.md" target="_blank" rel="noopener noreferrer">Detection, fine-tuning, and active learning guide</a>
+- <a href="https://openreview.net/pdf?id=0YnE65NGna" target="_blank" rel="noopener noreferrer">Project paper</a>
 
 ## Install and run
 
 1. Clone this repo or download and unzip it.
-2. Install [uv](https://docs.astral.sh/uv/getting-started/installation/). See the
-   [uv GitHub repository](https://github.com/astral-sh/uv) for more information.
+2. Install <a href="https://docs.astral.sh/uv/getting-started/installation/" target="_blank" rel="noopener noreferrer">uv</a>. See the
+   <a href="https://github.com/astral-sh/uv" target="_blank" rel="noopener noreferrer">uv GitHub repository</a> for more information.
 3. Linux only: install Zenity for the file picker. macOS and Windows need no extra install.
 
    - Ubuntu, Debian, or Mint: `sudo apt install zenity`
@@ -52,7 +52,7 @@ flowchart TD
    ```
 
    uv manages Python 3.11 and installs the app's packages in a local `.venv` folder, so you do not
-   need to install pip separately. See [uv's Python installation guide](https://docs.astral.sh/uv/guides/install-python/).
+   need to install pip separately. See <a href="https://docs.astral.sh/uv/guides/install-python/" target="_blank" rel="noopener noreferrer">uv's Python installation guide</a>.
 
 `uv sync` creates `.venv`. For CVAT or Modal, copy the example:
 
@@ -73,7 +73,7 @@ Set the variables for the integrations you use:
    uv run --locked amphilens app
    ```
 
-5. Open [http://127.0.0.1:8501](http://127.0.0.1:8501) in your browser. Keep the terminal open
+6. Open <a href="http://127.0.0.1:8501" target="_blank" rel="noopener noreferrer">http://127.0.0.1:8501</a> in your browser. Keep the terminal open
    while you use the app.
 
 ## Use AmphiLens
@@ -90,11 +90,11 @@ collections.
 
 Add `--extra cvat` and/or `--extra cloud` to the `uv sync` command above for the integrations you use.
 
-- **CVAT** is for annotating and reviewing images. The `cvat` extra installs AmphiLens's Python client, not the CVAT server. To run CVAT locally, follow [CVAT's Docker installation guide](https://docs.cvat.ai/docs/administration/community/basics/installation/), then start it from the CVAT directory with `docker compose up -d`. Open `http://localhost:8080` to create your account and API token.
-- **Modal** runs training and prediction on cloud GPUs when you do not have suitable local hardware. Add `--extra cloud` and see the [cloud training guide](docs/cloud-training.md).
+- **CVAT** is for annotating and reviewing images. The `cvat` extra installs AmphiLens's Python client, not the CVAT server. To run CVAT locally, follow <a href="https://docs.cvat.ai/docs/administration/community/basics/installation/" target="_blank" rel="noopener noreferrer">CVAT's Docker installation guide</a>, then start it from the CVAT directory with `docker compose up -d`. Open `http://localhost:8080` to create your account and API token.
+- **Modal** runs training and prediction on cloud GPUs when you do not have suitable local hardware. Add `--extra cloud` and see the <a href="docs/cloud-training.md" target="_blank" rel="noopener noreferrer">cloud training guide</a>.
 
 In AmphiLens, send an image queue to CVAT, annotate and save the images there, then return to AmphiLens to continue the cycle. Choose Modal cloud GPU to train or run predictions remotely. AmphiLens coordinates the handoff and tracks the cloud job; annotation is done in CVAT.
 
 ## License
 
-The application code is released under [AGPL-3.0-only](LICENSE).
+The application code is released under <a href="LICENSE" target="_blank" rel="noopener noreferrer">AGPL-3.0-only</a>.
