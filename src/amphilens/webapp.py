@@ -546,6 +546,11 @@ class PredictionsRequest:
 
 
 @dataclass(slots=True)
+class TimestampOCRRequest:
+    acknowledged: bool = False
+
+
+@dataclass(slots=True)
 class DatasetImportRequest:
     archive: str
     class_mapping: dict[str, str] | None = None
@@ -829,6 +834,8 @@ def _request(cls, payload: dict[str, Any]):
             hosted_model_id=_optional_string(payload, "hosted_model_id"),
             class_mapping=_mapping(payload, "class_mapping"),
         )
+    if cls is TimestampOCRRequest:
+        return cls(acknowledged=_boolean(payload, "acknowledged", False))
     if cls is DatasetImportRequest:
         return cls(
             archive=_string(payload, "archive"),
@@ -1665,6 +1672,15 @@ def run_prediction_job(
                 "project_root": str(store.root),
                 "detection_count": summary.detection_count,
                 "run_name": run_name,
+                "execution": request.execution,
+                "gpu": request.gpu if request.execution != "local" else None,
+                "compute_device": (
+                    "cuda"
+                    if str(effective.device).startswith("cuda")
+                    else str(effective.device)
+                    if effective.device in {"cpu", "mps"}
+                    else "cpu"
+                ),
             },
         },
         downloads=[
@@ -2689,6 +2705,7 @@ def create_app(
 
     async def job_ocr_timestamps(request: Request) -> Response:
         try:
+            body = _request(TimestampOCRRequest, await _read_body(request))
             job = app.state.jobs.snapshot(request.path_params["job_id"])
             if job is None:
                 return _json({"detail": "Workflow job was not found"}, 404)
@@ -2707,6 +2724,13 @@ def create_app(
                 raise ValueError("Prediction detection count is invalid") from exc
             if detection_count <= 0:
                 raise ValueError("There are no detections to process")
+            execution = prediction.get("execution", "local")
+            if execution not in {"local", "modal", "azure_ml", "vertex_ai"}:
+                raise ValueError("Prediction cloud provider information is invalid")
+            if execution != "local" and not body.acknowledged:
+                raise ValueError(
+                    "Confirm cloud timestamp OCR before sending timestamp crops to the provider"
+                )
 
             from .core import RunManifest, _validate_run_id, read_json
 
@@ -2741,20 +2765,71 @@ def create_app(
             ):
                 raise ValueError("Prediction run is not complete or does not match this job")
 
-            def run_ocr(progress_callback):
-                from .timestamp_ocr import process_prediction_csv
+            provider_name = {
+                "modal": "Modal",
+                "azure_ml": "Azure ML",
+                "vertex_ai": "Vertex AI",
+            }.get(execution, "")
+            gpu = prediction.get("gpu")
+            if execution != "local" and (
+                not isinstance(gpu, str) or not gpu.strip()
+            ):
+                raise ValueError("Prediction GPU information is missing")
 
-                summary = process_prediction_csv(
-                    csv_path,
-                    image_root,
-                    progress_callback=progress_callback,
-                )
+            def run_ocr(progress_callback):
+                if execution == "local":
+                    from .timestamp_ocr import process_prediction_csv
+
+                    raw_device = str(prediction.get("compute_device", "cpu"))
+                    device = (
+                        "cuda"
+                        if raw_device.startswith("cuda")
+                        else raw_device
+                        if raw_device in {"cpu", "mps"}
+                        else "cpu"
+                    )
+                    summary = process_prediction_csv(
+                        csv_path,
+                        image_root,
+                        device=device,
+                        progress_callback=progress_callback,
+                    )
+                else:
+                    service, credentials = _cloud_service(
+                        store,
+                        app.state.cloud_credentials_store,
+                        app.state.cloud_provider_settings_store,
+                        execution,
+                    )
+                    if execution == "modal" and credentials is None:
+                        raise ValueError(
+                            "Modal credentials are not configured. Save credentials or set both "
+                            "Modal environment variables."
+                        )
+                    from .cloud.timestamp_ocr import run_cloud_timestamp_ocr
+
+                    summary = run_cloud_timestamp_ocr(
+                        csv_path,
+                        image_root,
+                        transport=service.transport,
+                        gpu=gpu,
+                        progress_callback=progress_callback,
+                        cancellation_requested=getattr(
+                            progress_callback, "cancel_requested", None
+                        ),
+                    )
                 return JobOutput(
                     result={
                         "message": (
                             f"Read timestamps for {summary.recognized_count} of "
                             f"{summary.image_count} unique detected images; "
                             f"{summary.unparsed_count} were unresolved."
+                            + (
+                                f" Only local bottom crops were sent to {provider_name} "
+                                f"({gpu}); additional provider charges may apply."
+                                if execution != "local"
+                                else ""
+                            )
                         ),
                         "prediction_csv": str(summary.csv_path),
                         "image_count": summary.image_count,

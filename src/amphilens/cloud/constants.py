@@ -12,6 +12,7 @@ IMAGE_PINS = {
     "numpy": "2.3.5",
     "opencv-python-headless": "5.0.0.93",
     "huggingface-hub": "0.35.3",
+    "rapidocr": "3.10.0",
 }
 
 IMAGE_APT_PACKAGES = ("libgl1", "libglib2.0-0")

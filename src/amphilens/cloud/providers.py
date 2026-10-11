@@ -211,6 +211,11 @@ class _ManagedTransport:
         self._delete_object(f"prediction-jobs/{job_key}/progress.json")
         self._delete_prefix(f"prediction-jobs/{job_key}/checkpoints")
 
+    def cleanup_timestamp_ocr(self, job_key: str) -> None:
+        if not re.fullmatch(r"ocr-[A-Za-z0-9_-]{1,80}", job_key):
+            raise ValueError("Invalid timestamp OCR job identity")
+        self._delete_prefix(f"prediction-jobs/{job_key}")
+
     @staticmethod
     def _validate_prediction_identity(job_key: str, batch_id: str) -> None:
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", job_key) or not re.fullmatch(
@@ -227,7 +232,7 @@ class _ManagedTransport:
     def submit(self, payload: dict[str, Any]) -> str:
         _assert_no_secret_values(payload)
         operation = str(payload.get("operation", "train"))
-        if operation not in {"train", "predict"}:
+        if operation not in {"train", "predict", "ocr"}:
             raise ValueError("Unsupported managed cloud job operation")
         gpu = str(payload.get("gpu", ""))
         if gpu not in _GPU_NAMES or gpu not in _PROVIDER_GPUS[self.provider]:
@@ -345,6 +350,81 @@ class _ManagedTransport:
             time.sleep(2)
         self.cancel(call_id)
         raise TimeoutError("Managed cloud prediction exceeded its local wait deadline")
+
+    def run_timestamp_ocr(
+        self,
+        *,
+        job_key: str,
+        gpu: str,
+        crops: dict[str, Path],
+        progress_callback=None,
+        cancellation_requested=None,
+        job_id_callback=None,
+        timeout_seconds: int = 3600,
+    ) -> dict[str, Any]:
+        """Stage only local timestamp crops, then run one managed GPU OCR job."""
+        from .prediction import PredictionCancelled
+
+        if not re.fullmatch(r"ocr-[A-Za-z0-9_-]{1,80}", job_key):
+            raise ValueError("Invalid timestamp OCR job identity")
+        if not crops:
+            raise ValueError("Timestamp OCR requires at least one image crop")
+        if not 1 <= int(timeout_seconds) <= 86400:
+            raise ValueError("Timestamp OCR timeout must be between 1 and 86400 seconds")
+        if cancellation_requested and cancellation_requested():
+            raise PredictionCancelled("Timestamp OCR canceled before cloud upload.")
+        prefix = f"prediction-jobs/{job_key}/timestamp-ocr"
+        images = []
+        for image_id, source in crops.items():
+            image_id = str(image_id)
+            path = Path(source).expanduser().resolve()
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", image_id):
+                raise ValueError("Timestamp OCR image identity is invalid")
+            if not path.is_file() or path.suffix.lower() != ".jpg":
+                raise ValueError("Timestamp OCR crop is missing or has an unsupported type")
+            digest = _sha256(path)
+            remote_path = f"{prefix}/images/{image_id}.jpg"
+            self.upload(path, remote_path, digest)
+            images.append({"image_id": image_id, "remote_path": remote_path, "sha256": digest})
+        manifest = json.dumps({"schema_version": 1, "images": images}, sort_keys=True)
+        manifest_bytes = manifest.encode("utf-8")
+        self._put_bytes(
+            manifest_bytes,
+            f"{prefix}/manifest.json",
+            hashlib.sha256(manifest_bytes).hexdigest(),
+        )
+        payload = {
+            "operation": "ocr",
+            "job_key": job_key,
+            "gpu": str(gpu),
+            "timeout_seconds": int(timeout_seconds),
+            "remote_prefix": prefix,
+            "request_remote_path": f"{prefix}/request.json",
+            "result_remote_path": f"{prefix}/result.json",
+            "images": images,
+        }
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        self._put_bytes(
+            encoded, payload["request_remote_path"], hashlib.sha256(encoded).hexdigest()
+        )
+        call_id = self.submit(payload)
+        if job_id_callback is not None:
+            job_id_callback(call_id)
+        deadline = time.monotonic() + int(timeout_seconds) + 120
+        while time.monotonic() < deadline:
+            if cancellation_requested and cancellation_requested():
+                self.cancel(call_id)
+                raise PredictionCancelled("Timestamp OCR canceled. The cloud job was stopped.")
+            result = self.poll(call_id, remote_prefix=prefix)
+            if result is not None and result.get("state") != "running":
+                if isinstance(result, dict):
+                    result.setdefault("remote_job_id", call_id)
+                return result
+            if result and progress_callback:
+                progress_callback(dict(result.get("progress_details", {})))
+            time.sleep(2)
+        self.cancel(call_id)
+        raise TimeoutError("Managed cloud timestamp OCR exceeded its local wait deadline")
 
 
 class AzureMLTransport(_ManagedTransport):
@@ -525,9 +605,23 @@ class AzureMLTransport(_ManagedTransport):
     @staticmethod
     def _worker_command(operation: str, request_path: str, result_path: str) -> str:
         # Provider credentials come from the job identity; no tokens are put in the payload.
+        from .constants import IMAGE_PINS
+
+        if operation == "ocr":
+            packages = (
+                f"'opencv-python-headless=={IMAGE_PINS['opencv-python-headless']}' "
+                f"'rapidocr=={IMAGE_PINS['rapidocr']}' "
+            )
+        else:
+            packages = (
+                f"'ultralytics=={IMAGE_PINS['ultralytics']}' "
+                f"'Pillow=={IMAGE_PINS['pillow']}' 'PyYAML=={IMAGE_PINS['pyyaml']}' "
+                f"'numpy=={IMAGE_PINS['numpy']}' "
+                f"'opencv-python-headless=={IMAGE_PINS['opencv-python-headless']}' "
+                f"'huggingface-hub=={IMAGE_PINS['huggingface-hub']}' "
+            )
         return (
-            "python -m pip install 'ultralytics==8.4.163' 'Pillow==12.3.0' 'PyYAML==6.0.3' "
-            "'numpy==2.3.5' 'opencv-python-headless==5.0.0.93' 'huggingface-hub==0.35.3' "
+            f"python -m pip install {packages}"
             "'azure-identity>=1.17' 'azure-storage-blob>=12.20' && "
             f"python -m amphilens.cloud.provider_worker {operation} "
             f"--request-key '{request_path}' --result-key '{result_path}'"
@@ -680,10 +774,23 @@ class VertexAITransport(_ManagedTransport):
             self._put(archive, source_key, _sha256(archive))
         gpu = str(payload["gpu"])
         image = "us-docker.pkg.dev/vertex-ai/training/pytorch-gpu.2-4.py310:latest"
+        from .constants import IMAGE_PINS
+
+        if operation == "ocr":
+            packages = (
+                f"'opencv-python-headless=={IMAGE_PINS['opencv-python-headless']}' "
+                f"'rapidocr=={IMAGE_PINS['rapidocr']}' "
+            )
+        else:
+            packages = (
+                f"'ultralytics=={IMAGE_PINS['ultralytics']}' "
+                f"'Pillow=={IMAGE_PINS['pillow']}' 'PyYAML=={IMAGE_PINS['pyyaml']}' "
+                f"'numpy=={IMAGE_PINS['numpy']}' "
+                f"'opencv-python-headless=={IMAGE_PINS['opencv-python-headless']}' "
+                f"'huggingface-hub=={IMAGE_PINS['huggingface-hub']}' "
+            )
         script = (
-            "set -e; python -m pip install 'ultralytics==8.4.163' 'Pillow==12.3.0' "
-            "'PyYAML==6.0.3' 'numpy==2.3.5' 'opencv-python-headless==5.0.0.93' "
-            "'huggingface-hub==0.35.3' 'google-cloud-storage>=2.18'; "
+            f"set -e; python -m pip install {packages} 'google-cloud-storage>=2.18'; "
             "mkdir -p /tmp/amphilens-source; "
             "python -c 'import os; from google.cloud import storage; "
             'storage.Client(project=os.environ["AMPHILENS_GCP_PROJECT"]).bucket('

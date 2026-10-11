@@ -280,6 +280,115 @@ class ModalTransport:
         except Exception as exc:
             raise RuntimeError(self._redact(str(exc))) from exc
 
+    def run_timestamp_ocr(
+        self,
+        *,
+        job_key: str,
+        gpu: str,
+        crops: dict[str, Path],
+        progress_callback=None,
+        cancellation_requested=None,
+        job_id_callback=None,
+        timeout_seconds: int = 3600,
+    ) -> dict[str, Any]:
+        """Upload local timestamp crops and OCR them on one selected Modal GPU."""
+        from .estimate import GPU_RATES_PER_SECOND
+        from .prediction import PredictionCancelled
+
+        if not re.fullmatch(r"ocr-[A-Za-z0-9_-]{1,80}", job_key):
+            raise ValueError("Invalid timestamp OCR job identity")
+        if gpu not in GPU_RATES_PER_SECOND:
+            raise ValueError(f"Unsupported Modal GPU selection: {gpu}")
+        if not crops:
+            raise ValueError("Timestamp OCR requires at least one image crop")
+        if not 1 <= int(timeout_seconds) <= 86400:
+            raise ValueError("Timestamp OCR timeout must be between 1 and 86400 seconds")
+        if cancellation_requested and cancellation_requested():
+            raise PredictionCancelled("Timestamp OCR canceled before cloud upload.")
+
+        prefix = f"prediction-jobs/{job_key}/timestamp-ocr"
+        images = []
+        for image_id, source in crops.items():
+            image_id = str(image_id)
+            path = Path(source).expanduser().resolve()
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", image_id):
+                raise ValueError("Timestamp OCR image identity is invalid")
+            if not path.is_file() or path.suffix.lower() != ".jpg":
+                raise ValueError("Timestamp OCR crop is missing or has an unsupported type")
+            digest = _sha256_file(path)
+            remote_path = f"{prefix}/images/{image_id}.jpg"
+            self.upload(path, remote_path, digest, volume_name=PREDICTION_VOLUME_NAME)
+            images.append(
+                {"image_id": image_id, "remote_path": remote_path, "sha256": digest}
+            )
+        payload = {
+            "job_key": job_key,
+            "gpu": gpu,
+            "images": images,
+        }
+        manifest = json.dumps({"schema_version": 1, "images": images}, sort_keys=True).encode(
+            "utf-8"
+        )
+        try:
+            volume = self._volume(
+                create_if_missing=True, volume_name=PREDICTION_VOLUME_NAME
+            )
+            with volume.batch_upload(force=True) as batch:
+                batch.put_file(io.BytesIO(manifest), f"{prefix}/manifest.json")
+            module = self._load_app_module()
+            timeout = int(timeout_seconds)
+            deadline = time.monotonic() + timeout + 120
+            with module.app.run(detach=True, client=self._get_client()):
+                function = module.timestamp_ocr.with_options(
+                    gpu=gpu,
+                    timeout=timeout,
+                    retries=0,
+                    max_containers=1,
+                )
+                call = function.spawn(payload)
+                call_id = getattr(call, "object_id", None)
+                if call_id and job_id_callback is not None:
+                    job_id_callback(str(call_id))
+                while True:
+                    try:
+                        result = call.get(timeout=1)
+                        break
+                    except TimeoutError:
+                        progress = self._prediction_progress(job_key)
+                        if progress and progress_callback is not None:
+                            progress_callback(progress)
+                        if cancellation_requested and cancellation_requested():
+                            call.cancel(terminate_containers=True)
+                            raise PredictionCancelled(
+                                "Timestamp OCR canceled. The active Modal call was stopped."
+                            )
+                        if time.monotonic() >= deadline:
+                            call.cancel(terminate_containers=True)
+                            raise TimeoutError(
+                                "Modal timestamp OCR exceeded its local wait deadline"
+                            )
+            if not isinstance(result, dict):
+                raise RuntimeError("Modal timestamp OCR returned an invalid response")
+            if isinstance(result.get("error"), str):
+                result["error"] = self._redact(result["error"])
+            return result
+        except Exception as exc:
+            raise RuntimeError(self._redact(str(exc))) from exc
+
+    def cleanup_timestamp_ocr(self, job_key: str) -> None:
+        if not re.fullmatch(r"ocr-[A-Za-z0-9_-]{1,80}", job_key):
+            raise ValueError("Invalid timestamp OCR job identity")
+        prefix = f"prediction-jobs/{job_key}"
+        try:
+            volume = self._volume(volume_name=PREDICTION_VOLUME_NAME)
+            volume.remove_file(prefix, recursive=True)
+        except FileNotFoundError:
+            return
+        except Exception as exc:
+            if self._is_not_found_error(exc):
+                return
+            raise RuntimeError(self._redact(str(exc))) from exc
+
     def cleanup_prediction_batch(self, job_key: str, batch_id: str) -> None:
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", job_key) or not re.fullmatch(
             r"[A-Za-z0-9_-]{1,80}", batch_id

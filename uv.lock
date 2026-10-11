@@ -239,6 +239,9 @@ cloud-gcp = [
     { name = "google-cloud-aiplatform" },
     { name = "google-cloud-storage" },
 ]
+cloud-ocr = [
+    { name = "opencv-python-headless" },
+]
 cvat = [
     { name = "cvat-cli" },
     { name = "cvat-sdk" },
@@ -339,7 +342,7 @@ web = [
 [package.metadata]
 requires-dist = [
     { name = "amphilens", extras = ["cli", "web", "inference"], marker = "extra == 'dev'" },
-    { name = "amphilens", extras = ["cli", "web", "inference", "training", "cvat", "cloud", "cloud-azure", "cloud-gcp", "ocr", "release"], marker = "extra == 'all'" },
+    { name = "amphilens", extras = ["cli", "web", "inference", "training", "cvat", "cloud", "cloud-azure", "cloud-gcp", "ocr", "cloud-ocr", "release"], marker = "extra == 'all'" },
     { name = "amphilens", extras = ["inference"], marker = "extra == 'local-cuda'" },
     { name = "amphilens", extras = ["inference"], marker = "extra == 'local-mps'" },
     { name = "amphilens", extras = ["inference"], marker = "extra == 'training'" },
@@ -351,6 +354,7 @@ requires-dist = [
     { name = "cvat-sdk", marker = "extra == 'cvat'", specifier = "==2.76.0" },
     { name = "google-cloud-aiplatform", marker = "extra == 'cloud-gcp'", specifier = ">=1.70,<2" },
     { name = "google-cloud-storage", marker = "extra == 'cloud-gcp'", specifier = ">=2.18,<4" },
+    { name = "opencv-python-headless", marker = "extra == 'cloud-ocr'", specifier = ">=4.10" },
     { name = "httpx2", marker = "extra == 'dev'" },
     { name = "huggingface-hub", marker = "extra == 'inference'", specifier = ">=0.30" },
     { name = "modal", marker = "extra == 'cloud'", specifier = ">=1.4.3,<2" },
@@ -367,7 +371,7 @@ requires-dist = [
     { name = "python-dotenv", marker = "extra == 'dev'", specifier = ">=1.0" },
     { name = "python-dotenv", marker = "extra == 'web'", specifier = ">=1.0" },
     { name = "pyyaml", marker = "extra == 'training'", specifier = ">=6.0" },
-    { name = "rapidocr", marker = "extra == 'ocr'", specifier = ">=3.6.0" },
+    { name = "rapidocr", marker = "extra == 'ocr'", specifier = ">=3.7.0" },
     { name = "rich", marker = "extra == 'cli'", specifier = ">=13.7" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
     { name = "starlette", marker = "extra == 'web'", specifier = ">=1.0" },
@@ -380,7 +384,7 @@ requires-dist = [
     { name = "ultralytics", marker = "extra == 'inference'", specifier = ">=8.2" },
     { name = "uvicorn", marker = "extra == 'web'", specifier = ">=0.30" },
 ]
-provides-extras = ["cli", "web", "inference", "local-cuda", "local-mps", "training", "cvat", "cloud", "cloud-azure", "cloud-gcp", "ocr", "dev", "release", "all"]
+provides-extras = ["cli", "web", "inference", "local-cuda", "local-mps", "training", "cvat", "cloud", "cloud-azure", "cloud-gcp", "ocr", "cloud-ocr", "dev", "release", "all"]
 
 [[package]]
 name = "annotated-doc"

@@ -91,6 +91,13 @@ prediction_image = _build_prediction_image(
     },
 )
 
+def _build_timestamp_ocr_image(image):
+    """Add OCR only to its optional cloud worker image."""
+    return image.uv_pip_install(f"rapidocr=={IMAGE_PINS['rapidocr']}")
+
+
+timestamp_ocr_image = _build_timestamp_ocr_image(prediction_image)
+
 
 @app.cls(
     image=prediction_image,
@@ -250,3 +257,59 @@ class PredictionEngine:
         result["gpu_name"] = self._gpu_name
         self._setup_seconds = 0.0
         return result
+
+
+@app.function(
+    image=timestamp_ocr_image,
+    gpu="L4",
+    timeout=MAX_FUNCTION_TIMEOUT_SECONDS,
+    retries=0,
+    max_containers=1,
+    volumes={PREDICTION_MOUNT: prediction_volume},
+)
+def timestamp_ocr(payload: dict) -> dict:
+    """Run optional OCR over client-created bottom crops on a selected cloud GPU."""
+    import re
+    from datetime import datetime, timezone
+
+    from ..core import atomic_write_json
+    from ..timestamp_ocr import create_rapidocr_engine
+    from .timestamp_ocr import run_remote_timestamp_ocr
+
+    root = Path(PREDICTION_MOUNT).resolve()
+    job_key = str(payload.get("job_key", ""))
+    if not re.fullmatch(r"ocr-[A-Za-z0-9_-]{1,80}", job_key):
+        return {"state": "failed", "error": "Timestamp OCR job identity is invalid"}
+    prediction_volume.reload()
+
+    def report_progress(values: dict) -> None:
+        progress_path = root / "prediction-jobs" / job_key / "progress.json"
+        progress_path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(
+            progress_path,
+            {
+                "state": "running",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "gpu": str(payload.get("gpu", "GPU")),
+                **values,
+            },
+        )
+        prediction_volume.commit()
+
+    try:
+        result = run_remote_timestamp_ocr(
+            payload,
+            volume_root=root,
+            ocr_engine=create_rapidocr_engine(device="cuda"),
+            volume_reload=prediction_volume.reload,
+            progress_callback=report_progress,
+        )
+        try:
+            import torch
+
+            result["gpu_name"] = torch.cuda.get_device_name(0)
+        except Exception:
+            result["gpu_name"] = "GPU"
+        return result
+    except Exception as exc:
+        return {"state": "failed", "error": f"{type(exc).__name__}: {str(exc)[:1500]}"}

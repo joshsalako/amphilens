@@ -37,6 +37,53 @@ def test_missing_optional_runtime_has_install_guidance(monkeypatch):
         create_rapidocr_engine()
 
 
+@pytest.mark.parametrize(
+    ("device", "expected_engine", "device_option"),
+    [("cuda", "TORCH", "use_cuda"), ("mps", "TORCH", "use_mps")],
+)
+def test_create_rapidocr_engine_uses_torch_for_local_accelerators(
+    monkeypatch, device, expected_engine, device_option
+):
+    import types
+
+    received = {}
+    rapidocr = types.ModuleType("rapidocr")
+    rapidocr.EngineType = types.SimpleNamespace(TORCH=expected_engine)
+
+    def constructor(*, params):
+        received.update(params)
+        return lambda image: ""
+
+    rapidocr.RapidOCR = constructor
+    monkeypatch.setitem(sys.modules, "rapidocr", rapidocr)
+
+    create_rapidocr_engine(device=device)
+
+    assert received["Det.engine_type"] == expected_engine
+    assert received["Cls.engine_type"] == expected_engine
+    assert received["Rec.engine_type"] == expected_engine
+    assert received[f"EngineConfig.torch.{device_option}"] is True
+
+
+def test_create_rapidocr_engine_limits_cpu_threads(monkeypatch):
+    import types
+
+    received = {}
+    rapidocr = types.ModuleType("rapidocr")
+    monkeypatch.setitem(sys.modules, "onnxruntime", types.ModuleType("onnxruntime"))
+
+    def constructor(*, params):
+        received.update(params)
+        return lambda image: ""
+
+    rapidocr.RapidOCR = constructor
+    monkeypatch.setitem(sys.modules, "rapidocr", rapidocr)
+
+    create_rapidocr_engine(device="cpu", cpu_threads=2)
+
+    assert received["EngineConfig.onnxruntime.intra_op_num_threads"] == 2
+
+
 def test_ocr_receives_only_bottom_crops_and_tries_fallback_crops(tmp_path):
     image_path = tmp_path / "frame.jpg"
     original = _image(image_path)
@@ -56,6 +103,64 @@ def test_ocr_receives_only_bottom_crops_and_tries_fallback_crops(tmp_path):
     assert all(height < original.shape[0] for height, _ in received)
     assert all(width > height for height, width in received)
     assert original.shape[:2] not in received
+
+
+def test_ocr_builds_fallback_crop_only_when_needed(tmp_path, monkeypatch):
+    image_path = tmp_path / "frame.jpg"
+    _image(image_path)
+    equalize = cv2.equalizeHist
+    processed_crops = []
+
+    def count_preprocessing(image):
+        processed_crops.append(image.shape)
+        return equalize(image)
+
+    monkeypatch.setattr(cv2, "equalizeHist", count_preprocessing)
+
+    result = read_timestamp_from_image(
+        image_path, ocr_engine=lambda _crop: "09/10/2026 18:42:07"
+    )
+
+    assert result == ("2026-10-09", "18:42:07")
+    assert len(processed_crops) == 1
+
+
+def test_timestamp_crop_export_contains_only_bottom_region(tmp_path):
+    from amphilens.timestamp_ocr import save_timestamp_crop
+
+    image_path = tmp_path / "frame.jpg"
+    destination = tmp_path / "crop.jpg"
+    _image(image_path, width=800, height=600)
+
+    save_timestamp_crop(image_path, destination)
+
+    crop = cv2.imread(str(destination), cv2.IMREAD_COLOR)
+    assert crop.shape[:2] == (168, 800)
+    assert destination.stat().st_size < image_path.stat().st_size
+
+
+def test_large_local_ocr_crop_is_capped_before_ocr():
+    from amphilens.timestamp_ocr import _bottom_crops
+
+    large_image = np.zeros((1200, 6000, 3), dtype=np.uint8)
+
+    crop = next(_bottom_crops(large_image))
+
+    assert max(crop.shape[:2]) <= 4096
+
+
+def test_cloud_timestamp_crop_caps_very_wide_images(tmp_path):
+    from amphilens.timestamp_ocr import save_timestamp_crop
+
+    image_path = tmp_path / "wide.jpg"
+    destination = tmp_path / "crop.jpg"
+    _image(image_path, width=6000, height=1200)
+
+    save_timestamp_crop(image_path, destination)
+
+    crop = cv2.imread(str(destination), cv2.IMREAD_COLOR)
+    assert crop.shape[1] == 4096
+    assert crop.shape[0] < int(1200 * 0.28)
 
 
 def test_prediction_csv_processes_unique_images_and_repeats_values(tmp_path):
@@ -121,6 +226,28 @@ def test_prediction_csv_processes_unique_images_and_repeats_values(tmp_path):
         ("2026-10-10", "01:02:03"),
         ("2026-10-10", "01:02:03"),
     ]
+
+
+def test_prediction_csv_passes_local_device_to_ocr_engine(tmp_path, monkeypatch):
+    import amphilens.timestamp_ocr as timestamp_ocr
+
+    image_root = tmp_path / "images"
+    image_path = image_root / "frame.jpg"
+    _image(image_path)
+    csv_path = tmp_path / "results.csv"
+    csv_path.write_text(f"image_path\n{image_path.name}\n", encoding="utf-8")
+    selected_devices = []
+    monkeypatch.setattr(
+        timestamp_ocr,
+        "create_rapidocr_engine",
+        lambda *, device="cpu", cpu_threads=2: (
+            selected_devices.append(device) or (lambda _crop: "09/10/2026 18:42:07")
+        ),
+    )
+
+    process_prediction_csv(csv_path, image_root, device="mps")
+
+    assert selected_devices == ["mps"]
 
 
 def test_failed_ocr_leaves_original_csv_untouched(tmp_path):

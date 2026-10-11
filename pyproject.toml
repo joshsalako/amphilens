@@ -65,7 +65,10 @@ cloud-gcp = [
 ocr = [
   "onnxruntime>=1.18",
   "opencv-python-headless>=4.10",
-  "rapidocr>=3.6.0",
+  "rapidocr>=3.7.0",
+]
+cloud-ocr = [
+  "opencv-python-headless>=4.10",
 ]
 dev = [
   "amphilens[cli,web,inference]",
@@ -80,7 +83,7 @@ release = [
   "twine>=5.1",
 ]
 all = [
-  "amphilens[cli,web,inference,training,cvat,cloud,cloud-azure,cloud-gcp,ocr,release]",
+  "amphilens[cli,web,inference,training,cvat,cloud,cloud-azure,cloud-gcp,ocr,cloud-ocr,release]",
 ]
 
 [project.scripts]

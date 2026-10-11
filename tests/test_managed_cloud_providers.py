@@ -32,6 +32,24 @@ def test_provider_transport_factory_is_lazy_and_provider_neutral():
     assert "google.cloud.aiplatform" not in sys.modules
 
 
+def test_managed_ocr_worker_skips_detection_only_packages():
+    from amphilens.cloud.providers import AzureMLTransport
+
+    ocr_command = AzureMLTransport._worker_command(
+        "ocr", "prediction-jobs/ocr-123/request.json", "prediction-jobs/ocr-123/result.json"
+    )
+    prediction_command = AzureMLTransport._worker_command(
+        "predict", "prediction-jobs/job-123/request.json", "prediction-jobs/job-123/result.json"
+    )
+
+    assert "rapidocr==3.10.0" in ocr_command
+    assert "opencv-python-headless==" in ocr_command
+    assert "ultralytics==" not in ocr_command
+    assert "huggingface-hub==" not in ocr_command
+    assert "ultralytics==" in prediction_command
+    assert "rapidocr==" not in prediction_command
+
+
 def test_azure_price_lookup_returns_full_vm_price_and_source():
     class Response:
         def __enter__(self):
@@ -202,7 +220,7 @@ def test_vertex_adapter_checks_bucket_and_job_api():
     assert calls[-1] == ("projects/project/locations/us-central1", 1)
 
 
-@pytest.mark.parametrize("operation", ["train", "predict"])
+@pytest.mark.parametrize("operation", ["train", "predict", "ocr"])
 def test_vertex_adapter_submits_custom_job_with_least_privilege_identity(operation):
     from amphilens.cloud.providers import VertexAITransport
 
@@ -241,10 +259,18 @@ def test_vertex_adapter_submits_custom_job_with_least_privilege_identity(operati
         "gpu": "T4",
         "timeout_seconds": 60,
     }
-    if operation == "predict":
+    if operation in {"predict", "ocr"}:
         payload.update(
-            request_remote_path="prediction-jobs/pred-1/batch-1/request.json",
-            result_remote_path="prediction-jobs/pred-1/batch-1/result.json",
+            request_remote_path=(
+                "prediction-jobs/ocr-test-job/timestamp-ocr/request.json"
+                if operation == "ocr"
+                else "prediction-jobs/pred-1/batch-1/request.json"
+            ),
+            result_remote_path=(
+                "prediction-jobs/ocr-test-job/timestamp-ocr/result.json"
+                if operation == "ocr"
+                else "prediction-jobs/pred-1/batch-1/result.json"
+            ),
         )
     remote_id = transport._submit_job(payload)
 
@@ -259,6 +285,13 @@ def test_vertex_adapter_submits_custom_job_with_least_privilege_identity(operati
     assert {item["name"]: item["value"] for item in env}["AMPHILENS_SOURCE_KEY"] == captured[
         "source_key"
     ]
+    command = captured["job"]["worker_pool_specs"][0]["container_spec"]["args"][0]
+    if operation == "ocr":
+        assert "rapidocr==3.10.0" in command
+        assert "ultralytics==" not in command
+        assert "provider_worker ocr" in command
+    else:
+        assert "rapidocr==" not in command
 
 
 def test_azure_adapter_submits_serverless_command_with_gpu_and_managed_identity():

@@ -40,3 +40,22 @@ def test_prediction_image_adds_local_python_source_after_build_steps():
     image = modal_app._build_prediction_image(FakeImage(), {"HF_HOME": "/models/hf"})
 
     assert image.steps == ["env", "local-source"]
+
+
+def test_modal_timestamp_ocr_adds_rapidocr_to_its_worker_image_only():
+    pytest.importorskip("modal")
+    from amphilens.cloud import modal_app
+
+    class FakeImage:
+        def __init__(self, steps=()):
+            self.steps = list(steps)
+
+        def uv_pip_install(self, *packages):
+            return FakeImage([*self.steps, *packages])
+
+    prediction_image = FakeImage(["torch", "ultralytics"])
+
+    ocr_image = modal_app._build_timestamp_ocr_image(prediction_image)
+
+    assert prediction_image.steps == ["torch", "ultralytics"]
+    assert ocr_image.steps == ["torch", "ultralytics", "rapidocr==3.10.0"]

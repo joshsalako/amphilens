@@ -6,7 +6,7 @@ import csv
 import os
 import re
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import date as calendar_date
 from datetime import time as clock_time
@@ -16,9 +16,11 @@ from typing import Any
 from .core import AmphiLensError
 
 OCR_INSTALL_MESSAGE = (
-    "Timestamp OCR is optional. Install it with `uv sync --extra web --extra inference "
-    "--extra ocr` or `pip install 'amphilens[ocr]'`, then restart AmphiLens."
+    "Timestamp OCR is optional. For local OCR, install `uv sync --extra web --extra inference "
+    "--extra ocr` or `pip install 'amphilens[ocr]'`. For cloud OCR, add `--extra cloud-ocr` "
+    "to your cloud setup command, then restart AmphiLens."
 )
+_MAX_OCR_SIDE = 4096
 
 
 class OCRDependencyError(AmphiLensError):
@@ -33,15 +35,40 @@ class TimestampOCRSummary:
     unparsed_count: int
 
 
-def create_rapidocr_engine() -> Callable[[Any], Any]:
-    """Load RapidOCR only when a user explicitly starts timestamp extraction."""
+def create_rapidocr_engine(
+    *, device: str = "cpu", cpu_threads: int = 2
+) -> Callable[[Any], Any]:
+    """Load RapidOCR with a bounded CPU or selected local accelerator backend."""
+    if device not in {"cpu", "cuda", "mps"}:
+        raise ValueError("OCR device must be cpu, cuda, or mps")
     try:
-        import onnxruntime  # noqa: F401 - provide a clear error if the selected backend is absent
         from rapidocr import RapidOCR
     except ImportError as exc:
         raise OCRDependencyError(OCR_INSTALL_MESSAGE) from exc
+    if device == "cpu":
+        if cpu_threads < 1:
+            raise ValueError("OCR CPU thread limit must be at least 1")
+        try:
+            import onnxruntime  # noqa: F401 - default CPU engine requires ONNX Runtime
+        except ImportError as exc:
+            raise OCRDependencyError(OCR_INSTALL_MESSAGE) from exc
+        params = {
+            "EngineConfig.onnxruntime.intra_op_num_threads": cpu_threads,
+            "EngineConfig.onnxruntime.inter_op_num_threads": 1,
+        }
+    else:
+        try:
+            from rapidocr import EngineType
+        except ImportError as exc:
+            raise OCRDependencyError(OCR_INSTALL_MESSAGE) from exc
+        params = {
+            "Det.engine_type": EngineType.TORCH,
+            "Cls.engine_type": EngineType.TORCH,
+            "Rec.engine_type": EngineType.TORCH,
+            f"EngineConfig.torch.use_{device}": True,
+        }
     try:
-        return RapidOCR()
+        return RapidOCR(params=params)
     except ImportError as exc:
         raise OCRDependencyError(OCR_INSTALL_MESSAGE) from exc
 
@@ -114,42 +141,61 @@ def _ocr_text(result: Any) -> str:
     return " ".join(output)
 
 
-def _bottom_crops(image: Any) -> list[Any]:
-    """Build progressively wider crops from the bottom overlay area only."""
+def _bottom_crops(image: Any, *, pre_cropped_region: bool = False) -> Iterator[Any]:
+    """Yield progressively wider, preprocessed bottom crops only as needed."""
     try:
         import cv2
     except ImportError as exc:
         raise OCRDependencyError(OCR_INSTALL_MESSAGE) from exc
 
     height, width = image.shape[:2]
-    bounds = (
-        (int(height * 0.84), 0),
-        (int(height * 0.78), int(width * 0.35)),
-        (int(height * 0.72), int(width * 0.20)),
-    )
-    crops = []
+    if pre_cropped_region:
+        # A local client uploads the union of the three regions: the bottom 28%.
+        # Recreate the original fallback bounds relative to that reduced image.
+        bounds = (
+            (int(height * (3 / 7)), 0),
+            (int(height * (3 / 14)), int(width * 0.35)),
+            (0, int(width * 0.20)),
+        )
+    else:
+        bounds = (
+            (int(height * 0.84), 0),
+            (int(height * 0.78), int(width * 0.35)),
+            (int(height * 0.72), int(width * 0.20)),
+        )
     for top, left in bounds:
-        grayscale = cv2.cvtColor(image[top:height, left:width], cv2.COLOR_BGR2GRAY)
+        crop = image[top:height, left:width]
+        scale = min(3.0, _MAX_OCR_SIDE / max(crop.shape[:2]))
+        if scale < 1.0:
+            crop = cv2.resize(
+                crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA
+            )
+            scale = 1.0
+        grayscale = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
         # Equalise contrast and binarise common white/dark date overlays.
         grayscale = cv2.equalizeHist(grayscale)
         _, processed = cv2.threshold(
             grayscale, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
         )
-        enlarged = cv2.resize(
-            processed,
-            None,
-            fx=3.0,
-            fy=3.0,
-            interpolation=cv2.INTER_CUBIC,
+        enlarged = (
+            cv2.resize(
+                processed,
+                None,
+                fx=scale,
+                fy=scale,
+                interpolation=cv2.INTER_CUBIC,
+            )
+            if scale > 1.0
+            else processed
         )
-        crops.append(enlarged)
-    return crops
+        yield enlarged
 
 
 def read_timestamp_from_image(
     image_path: str | Path,
     *,
     ocr_engine: Callable[[Any], Any] | None = None,
+    device: str = "cpu",
 ) -> tuple[str, str]:
     """Read a date and time overlay, giving RapidOCR only preprocessed bottom crops."""
     try:
@@ -161,12 +207,57 @@ def read_timestamp_from_image(
     image = cv2.imread(str(path), cv2.IMREAD_COLOR)
     if image is None:
         return "", ""
-    engine = ocr_engine or create_rapidocr_engine()
+    engine = ocr_engine or create_rapidocr_engine(device=device)
     for crop in _bottom_crops(image):
         date_value, time_value = parse_timestamp_text(_ocr_text(engine(crop)))
         if date_value and time_value:
             return date_value, time_value
     return "", ""
+
+
+def read_timestamp_from_cropped_region(
+    crop_path: str | Path,
+    *,
+    ocr_engine: Callable[[Any], Any],
+) -> tuple[str, str]:
+    """Read a timestamp from a client-uploaded bottom-28% crop."""
+    try:
+        import cv2
+    except ImportError as exc:
+        raise OCRDependencyError(OCR_INSTALL_MESSAGE) from exc
+    image = cv2.imread(str(crop_path), cv2.IMREAD_COLOR)
+    if image is None:
+        return "", ""
+    for crop in _bottom_crops(image, pre_cropped_region=True):
+        date_value, time_value = parse_timestamp_text(_ocr_text(ocr_engine(crop)))
+        if date_value and time_value:
+            return date_value, time_value
+    return "", ""
+
+
+def save_timestamp_crop(image_path: str | Path, destination: str | Path) -> bool:
+    """Save only the bottom 28% of an image for remote timestamp extraction."""
+    try:
+        import cv2
+    except ImportError as exc:
+        raise OCRDependencyError(OCR_INSTALL_MESSAGE) from exc
+    image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+    if image is None:
+        return False
+    height = image.shape[0]
+    region = image[int(height * 0.72) :, :]
+    scale = min(1.0, _MAX_OCR_SIDE / max(region.shape[:2]))
+    if scale < 1.0:
+        region = cv2.resize(
+            region, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA
+        )
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if not cv2.imwrite(
+        str(destination), region, [cv2.IMWRITE_JPEG_QUALITY, 95]
+    ):
+        raise OSError("Could not save the timestamp crop")
+    return True
 
 
 def _resolve_prediction_image(value: str | None, image_root: Path) -> Path:
@@ -181,11 +272,103 @@ def _resolve_prediction_image(value: str | None, image_root: Path) -> Path:
     return resolved
 
 
+def unique_prediction_images(
+    predictions_csv: str | Path, image_root: str | Path
+) -> list[Path]:
+    """Return validated, de-duplicated source images referenced by a predictions CSV."""
+    csv_path = Path(predictions_csv).expanduser().resolve()
+    source_root = Path(image_root).expanduser().resolve()
+    if not csv_path.is_file():
+        raise FileNotFoundError("Predictions CSV was not found")
+    if not source_root.is_dir():
+        raise FileNotFoundError("Prediction image folder was not found")
+    with csv_path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        if not reader.fieldnames or "image_path" not in reader.fieldnames:
+            raise ValueError("Predictions CSV must contain an image_path column")
+        unique_images: dict[Path, None] = {}
+        for row in reader:
+            unique_images.setdefault(
+                _resolve_prediction_image(row.get("image_path"), source_root), None
+            )
+    return list(unique_images)
+
+
+def apply_timestamp_results(
+    predictions_csv: str | Path,
+    image_root: str | Path,
+    timestamps: dict[Path, tuple[str, str]],
+) -> TimestampOCRSummary:
+    """Atomically update the predictions CSV with results returned by an OCR worker."""
+    csv_path = Path(predictions_csv).expanduser().resolve()
+    source_root = Path(image_root).expanduser().resolve()
+    if not csv_path.is_file():
+        raise FileNotFoundError("Predictions CSV was not found")
+    if not source_root.is_dir():
+        raise FileNotFoundError("Prediction image folder was not found")
+    with csv_path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        if not reader.fieldnames or "image_path" not in reader.fieldnames:
+            raise ValueError("Predictions CSV must contain an image_path column")
+        fieldnames = list(reader.fieldnames)
+        rows = list(reader)
+    for column in ("date", "time"):
+        if column not in fieldnames:
+            fieldnames.append(column)
+    row_images = [
+        _resolve_prediction_image(row.get("image_path"), source_root) for row in rows
+    ]
+    unique_images = dict.fromkeys(row_images)
+    complete_timestamps = {
+        image: timestamps.get(image, ("", "")) for image in unique_images
+    }
+    recognized_count = 0
+    for row, image in zip(rows, row_images, strict=True):
+        row["date"], row["time"] = complete_timestamps[image]
+    for date_value, time_value in complete_timestamps.values():
+        if date_value and time_value:
+            recognized_count += 1
+    _write_prediction_rows(csv_path, fieldnames, rows)
+    total = len(unique_images)
+    return TimestampOCRSummary(
+        csv_path=csv_path,
+        image_count=total,
+        recognized_count=recognized_count,
+        unparsed_count=total - recognized_count,
+    )
+
+
+def _write_prediction_rows(csv_path: Path, fieldnames: list[str], rows: list[dict]) -> None:
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            newline="",
+            encoding="utf-8",
+            dir=csv_path.parent,
+            prefix=f".{csv_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="raise")
+            writer.writeheader()
+            writer.writerows(rows)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, csv_path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
 def process_prediction_csv(
     predictions_csv: str | Path,
     image_root: str | Path,
     *,
     ocr_engine: Callable[[Any], Any] | None = None,
+    device: str = "cpu",
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> TimestampOCRSummary:
     """OCR each unique prediction image, then atomically append/update date and time columns."""
@@ -213,12 +396,12 @@ def process_prediction_csv(
         row_images.append(image)
         unique_images.setdefault(image, None)
 
-    engine = ocr_engine or create_rapidocr_engine()
+    engine = ocr_engine or create_rapidocr_engine(device=device)
     timestamps: dict[Path, tuple[str, str]] = {}
     recognized_count = 0
     total = len(unique_images)
     for completed, image_path in enumerate(unique_images, start=1):
-        timestamp = read_timestamp_from_image(image_path, ocr_engine=engine)
+        timestamp = read_timestamp_from_image(image_path, ocr_engine=engine, device=device)
         timestamps[image_path] = timestamp
         if timestamp[0] and timestamp[1]:
             recognized_count += 1
@@ -239,28 +422,7 @@ def process_prediction_csv(
     for row, image_path in zip(rows, row_images, strict=True):
         row["date"], row["time"] = timestamps[image_path]
 
-    temporary_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            newline="",
-            encoding="utf-8",
-            dir=csv_path.parent,
-            prefix=f".{csv_path.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as handle:
-            temporary_path = Path(handle.name)
-            writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="raise")
-            writer.writeheader()
-            writer.writerows(rows)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary_path, csv_path)
-        temporary_path = None
-    finally:
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
+    _write_prediction_rows(csv_path, fieldnames, rows)
 
     return TimestampOCRSummary(
         csv_path=csv_path,

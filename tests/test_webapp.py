@@ -445,7 +445,7 @@ def test_ocr_job_updates_prediction_csv_and_returns_fresh_download(
     monkeypatch.setattr(
         timestamp_ocr,
         "create_rapidocr_engine",
-        lambda: lambda crop: "09/10/2026 18:42:07",
+        lambda *, device="cpu": lambda crop: "09/10/2026 18:42:07",
     )
     prediction_job = jobs.submit(
         lambda: JobOutput(
@@ -495,6 +495,111 @@ def test_ocr_job_updates_prediction_csv_and_returns_fresh_download(
     assert dependency_job["state"] == "failed"
     assert "uv sync --extra web --extra inference --extra ocr" in dependency_job["error"]
     assert predictions_csv.read_bytes() == updated_csv
+
+
+def test_cloud_ocr_requires_confirmation_and_sends_only_local_crops(
+    client, jobs, tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+
+    import cv2
+    import numpy as np
+
+    image_root = tmp_path / "images"
+    image_root.mkdir()
+    image_path = image_root / "frame.jpg"
+    assert cv2.imwrite(str(image_path), np.zeros((200, 300, 3), dtype=np.uint8))
+    original_image = image_path.read_bytes()
+    project_root = tmp_path / "project"
+    project = ProjectStore(project_root)
+    project.create(ProjectManifest.create("Survey", [image_root], ["toad"]))
+    run_id = "run-cloud-ocr123"
+    output_dir = project_root / "runs" / run_id
+    output_dir.mkdir(parents=True)
+    run = RunManifest.create("inference", {"model_id": "test"})
+    run.run_id = run_id
+    run.status = "completed"
+    atomic_write_json(output_dir / "run.json", run.to_dict())
+    predictions_csv = output_dir / "predictions.csv"
+    with predictions_csv.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["image_path", "class_name"])
+        writer.writeheader()
+        writer.writerow({"image_path": str(image_path), "class_name": "toad"})
+
+    class FakeTransport:
+        submitted = None
+        cleaned = []
+
+        def run_timestamp_ocr(
+            self,
+            *,
+            job_key,
+            gpu,
+            crops,
+            progress_callback=None,
+            cancellation_requested=None,
+            job_id_callback=None,
+        ):
+            del progress_callback, cancellation_requested, job_id_callback
+            self.submitted = (job_key, gpu, dict(crops))
+            crop = cv2.imread(str(next(iter(crops.values()))))
+            assert crop.shape[:2] == (56, 300)
+            return {
+                "state": "finished",
+                "records": [
+                    {
+                        "image_id": image_id,
+                        "date": "2026-10-09",
+                        "time": "18:42:07",
+                    }
+                    for image_id in crops
+                ],
+            }
+
+        def cleanup_timestamp_ocr(self, job_key):
+            self.cleaned.append(job_key)
+
+    transport = FakeTransport()
+    monkeypatch.setattr(
+        webapp,
+        "_cloud_service",
+        lambda *_args, **_kwargs: (SimpleNamespace(transport=transport), None),
+    )
+    prediction_job = jobs.submit(
+        lambda: JobOutput(
+            result={
+                "prediction": {
+                    "run_id": run_id,
+                    "csv": str(predictions_csv),
+                    "image_root": str(image_root),
+                    "project_root": str(project_root),
+                    "detection_count": 1,
+                    "execution": "azure_ml",
+                    "gpu": "T4",
+                }
+            }
+        )
+    )
+    assert _wait_for_job(client, prediction_job)["state"] == "completed"
+
+    unconfirmed = client.post(
+        f"/api/jobs/{prediction_job}/ocr-timestamps", json={"acknowledged": False}
+    )
+    assert unconfirmed.status_code == 400
+    assert "confirm cloud timestamp ocr" in unconfirmed.json()["detail"].lower()
+    assert transport.submitted is None
+
+    started = client.post(
+        f"/api/jobs/{prediction_job}/ocr-timestamps", json={"acknowledged": True}
+    )
+    assert started.status_code == 200, started.text
+    ocr_job = _wait_for_job(client, started.json()["job_id"])
+    assert ocr_job["state"] == "completed"
+    assert transport.submitted[1] == "T4"
+    assert len(transport.submitted[2]) == 1
+    assert transport.cleaned == [transport.submitted[0]]
+    assert "Only local bottom crops were sent to Azure ML (T4)" in ocr_job["result"]["message"]
+    assert image_path.read_bytes() == original_image
 
 
 def test_ocr_action_requires_completed_prediction_with_detections(client, jobs):

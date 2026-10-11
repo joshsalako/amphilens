@@ -1391,12 +1391,22 @@
     if (ocrButton) {
       event.preventDefault();
       const predictionJobId = ocrButton.dataset.ocrTimestamps;
+      const sourceJob = app.jobs.get(predictionJobId);
+      const prediction = sourceJob?.result?.prediction;
+      const cloudOcr = prediction?.execution && prediction.execution !== "local";
+      if (cloudOcr) {
+        const provider = ({ modal: "Modal", azure_ml: "Azure ML", vertex_ai: "Vertex AI" })[prediction.execution] || prediction.execution;
+        const approved = window.confirm(
+          `Timestamp OCR will run as a separate ${provider} GPU job. Only locally cropped bottom timestamp regions will be sent. Additional provider charges may apply. Continue?`
+        );
+        if (!approved) return;
+      }
       ocrButton.disabled = true;
       ocrButton.textContent = "Starting timestamp OCR…";
       try {
         const result = await api(`/api/jobs/${encodeURIComponent(predictionJobId)}/ocr-timestamps`, {
           method: "POST",
-          body: JSON.stringify({}),
+          body: JSON.stringify({ acknowledged: Boolean(cloudOcr) }),
         });
         app.timestampJobs.set(predictionJobId, result.job_id);
         app.jobs.set(result.job_id, {

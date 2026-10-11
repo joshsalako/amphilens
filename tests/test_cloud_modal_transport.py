@@ -155,6 +155,35 @@ def test_modal_transport_uses_detached_spawn_and_nonblocking_poll(monkeypatch):
     assert call.canceled == [True]
 
 
+def test_modal_timestamp_ocr_uploads_only_crops_and_runs_selected_gpu(tmp_path, monkeypatch):
+    transport, call, _, app, volume = make_transport(monkeypatch)
+    crop = tmp_path / "img-one.jpg"
+    crop.write_bytes(b"bottom crop")
+    function = FakeFunction(call)
+    module = SimpleNamespace(app=app, timestamp_ocr=function)
+    monkeypatch.setattr(transport, "_load_app_module", lambda: module)
+    call.result = {
+        "state": "finished",
+        "records": [{"image_id": "img-one", "date": "", "time": ""}],
+    }
+
+    result = transport.run_timestamp_ocr(
+        job_key="ocr-test-job",
+        gpu="A10",
+        crops={"img-one": crop},
+    )
+
+    remote_crop = "prediction-jobs/ocr-test-job/timestamp-ocr/images/img-one.jpg"
+    assert result["state"] == "finished"
+    assert function.options["gpu"] == "A10"
+    assert function.options["timeout"] > 0
+    assert function.payload["images"][0]["remote_path"] == remote_crop
+    assert volume.files[remote_crop] == b"bottom crop"
+    assert "first.jpg" not in volume.files
+    transport.cleanup_timestamp_ocr("ocr-test-job")
+    assert ("prediction-jobs/ocr-test-job", True) in volume.removed
+
+
 def test_modal_upload_is_skipped_when_remote_payload_hash_matches(tmp_path, monkeypatch):
     transport, _, _, _, volume = make_transport(monkeypatch)
     source = tmp_path / "payload.zip"

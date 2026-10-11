@@ -306,15 +306,69 @@ def _run_prediction(storage: _JobStorage, request_key: str, result_key: str) -> 
         shutil.rmtree(root, ignore_errors=True)
 
 
+def _run_timestamp_ocr(
+    storage: _JobStorage, request_key: str, result_key: str
+) -> dict[str, Any]:
+    from .timestamp_ocr import run_remote_timestamp_ocr
+
+    root = Path(tempfile.mkdtemp(prefix="amphilens-managed-ocr-"))
+    try:
+        request_path = root / "request.json"
+        storage.download(request_key, request_path)
+        payload = json.loads(request_path.read_text(encoding="utf-8"))
+        job_key = str(payload["job_key"])
+        prefix = f"prediction-jobs/{job_key}/timestamp-ocr"
+        batch_root = root / prefix
+        batch_root.mkdir(parents=True, exist_ok=True)
+        storage.download(f"{prefix}/manifest.json", batch_root / "manifest.json")
+        for image in payload.get("images", []):
+            remote_path = str(image["remote_path"])
+            image_path = root / remote_path
+            storage.download(remote_path, image_path)
+            Path(f"{image_path}.sha256").write_text(
+                str(image["sha256"]), encoding="ascii"
+            )
+        progress_key = f"prediction-jobs/{job_key}/progress.json"
+
+        def report(values):
+            progress_path = root / "progress.json"
+            _write_json(storage, progress_path, progress_key, dict(values))
+
+        from ..timestamp_ocr import create_rapidocr_engine
+
+        result = run_remote_timestamp_ocr(
+            payload,
+            volume_root=root,
+            ocr_engine=create_rapidocr_engine(device="cuda"),
+            progress_callback=report,
+        )
+        try:
+            import torch
+
+            result["gpu_name"] = torch.cuda.get_device_name(0)
+        except Exception:
+            result["gpu_name"] = "GPU"
+        _write_json(storage, root / "result.json", result_key, result)
+        return result
+    except Exception as exc:
+        result = {"state": "failed", "error": f"{type(exc).__name__}: {str(exc)[:1500]}"}
+        _write_json(storage, root / "result.json", result_key, result)
+        return result
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("operation", choices={"train", "predict"})
+    parser.add_argument("operation", choices={"train", "predict", "ocr"})
     parser.add_argument("--request-key", required=True)
     parser.add_argument("--result-key", required=True)
     arguments = parser.parse_args(argv)
     storage = _JobStorage()
     if arguments.operation == "train":
         _run_training(storage, arguments.request_key, arguments.result_key)
+    elif arguments.operation == "ocr":
+        _run_timestamp_ocr(storage, arguments.request_key, arguments.result_key)
     else:
         _run_prediction(storage, arguments.request_key, arguments.result_key)
     return 0
