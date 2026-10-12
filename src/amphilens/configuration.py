@@ -83,8 +83,29 @@ def _checkpoint_input_size(manifest: CheckpointManifest) -> int | None:
     return size
 
 
-def _preprocessing_equal(left: PreprocessingConfig, right: PreprocessingConfig) -> bool:
-    return left.to_dict() == right.to_dict()
+def _metadata_preprocessing(value: Any = None) -> PreprocessingConfig:
+    """Normalize model metadata, using the web workflow's explicit fallback."""
+    fallback = PreprocessingConfig(clahe_enabled=True).to_dict(include_fingerprint=False)
+    if isinstance(value, PreprocessingConfig):
+        return value
+    if isinstance(value, dict):
+        if set(value) == {"name"}:
+            return PreprocessingConfig.from_any(value)
+        fallback.update(value)
+    elif value is not None:
+        return PreprocessingConfig.from_any(value)
+    return PreprocessingConfig.from_any(fallback)
+
+
+def _preprocessing_override(base: PreprocessingConfig, value: Any) -> PreprocessingConfig:
+    """Apply a partial run override while preserving unexposed model settings."""
+    if isinstance(value, dict):
+        if set(value) == {"name"}:
+            return PreprocessingConfig.from_any(value)
+        merged = base.to_dict(include_fingerprint=False)
+        merged.update(value)
+        return PreprocessingConfig.from_any(merged)
+    return PreprocessingConfig.from_any(value)
 
 
 def resolve_effective_configuration(
@@ -94,6 +115,8 @@ def resolve_effective_configuration(
     checkpoint_path: str | Path | None = None,
     hosted_model: HostedModel | None = None,
     use_source_classes: bool = False,
+    use_model_metadata_defaults: bool = False,
+    allow_checkpoint_preprocessing_override: bool = False,
     overrides: dict[str, Any] | None = None,
 ) -> EffectiveRunConfiguration:
     """Resolve project defaults, checkpoint authority, and explicit run overrides."""
@@ -112,9 +135,11 @@ def resolve_effective_configuration(
         architecture = checkpoint_manifest.architecture
         model_preset = model_id
         classes = tuple(project.classes)
-        preprocessing = PreprocessingConfig.from_any(checkpoint_manifest.preprocessing)
+        preprocessing = _metadata_preprocessing(checkpoint_manifest.preprocessing)
         checkpoint_size = _checkpoint_input_size(checkpoint_manifest)
-        image_size = checkpoint_size or project_config.image_size
+        image_size = checkpoint_size or (
+            640 if use_model_metadata_defaults else project_config.image_size
+        )
         source = "checkpoint"
 
         requested_model = values.pop("model_preset", None)
@@ -129,12 +154,18 @@ def resolve_effective_configuration(
         if requested_architecture is not None and requested_architecture != architecture:
             raise UnsupportedCheckpointError("Checkpoint architecture cannot be overridden")
         requested_preprocessing = values.pop("preprocessing", None)
-        if requested_preprocessing is not None and not _preprocessing_equal(
-            PreprocessingConfig.from_any(requested_preprocessing), preprocessing
-        ):
-            raise UnsupportedCheckpointError(
-                "Checkpoint preprocessing cannot be overridden for this run"
+        if requested_preprocessing is not None:
+            requested_preprocessing = _preprocessing_override(
+                preprocessing, requested_preprocessing
             )
+            if (
+                not allow_checkpoint_preprocessing_override
+                and requested_preprocessing.to_dict() != preprocessing.to_dict()
+            ):
+                raise UnsupportedCheckpointError(
+                    "Checkpoint preprocessing cannot be overridden for this run"
+                )
+            preprocessing = requested_preprocessing
         requested_size = values.pop("image_size", None)
         if requested_size is not None and checkpoint_size is not None:
             if int(requested_size) != checkpoint_size:
@@ -146,8 +177,8 @@ def resolve_effective_configuration(
         model_preset = hosted_model.model_id
         architecture = hosted_model.architecture
         classes = hosted_model.source_classes if use_source_classes else tuple(project.classes)
-        preprocessing = project_config.preprocessing
-        image_size = preprocessing.short_side_dimension
+        preprocessing = hosted_model.preprocessing
+        image_size = hosted_model.inference_image_size
         source = "huggingface"
         requested_model = values.pop("model_preset", None)
         if requested_model is not None and requested_model != hosted_model.model_id:
@@ -165,15 +196,10 @@ def resolve_effective_configuration(
                 "AmphiLens model input size cannot be overridden for this run"
             )
         requested_preprocessing = values.pop("preprocessing", None)
-        if (
-            requested_preprocessing is not None
-            and PreprocessingConfig.from_any(requested_preprocessing).to_dict()
-            != preprocessing.to_dict()
-        ):
-            raise UnsupportedCheckpointError(
-                "AmphiLens model preprocessing cannot be overridden for this run"
-            )
+        if requested_preprocessing is not None:
+            preprocessing = _preprocessing_override(preprocessing, requested_preprocessing)
     else:
+        selected_model = use_model_metadata_defaults and "model_preset" in values
         model_preset = str(values.pop("model_preset", project_config.model_preset))
         preset = ModelCatalog().get(model_preset)
         model_id = str(values.pop("model_id", preset.model_id))
@@ -181,10 +207,21 @@ def resolve_effective_configuration(
         classes = tuple(project.classes)
         if architecture not in {"yolo", "rtdetr", "faster_rcnn"}:
             raise ValidationError(f"Unsupported detector architecture: {architecture}")
-        preprocessing = PreprocessingConfig.from_any(
-            values.pop("preprocessing", project_config.preprocessing)
+        default_preprocessing = (
+            _metadata_preprocessing(preset.metadata.get("preprocessing"))
+            if selected_model
+            else project_config.preprocessing
         )
-        image_size = int(values.pop("image_size", project_config.image_size))
+        requested_preprocessing = values.pop("preprocessing", None)
+        preprocessing = (
+            _preprocessing_override(default_preprocessing, requested_preprocessing)
+            if requested_preprocessing is not None
+            else default_preprocessing
+        )
+        default_image_size = (
+            preset.inference_image_size if selected_model else project_config.image_size
+        )
+        image_size = int(values.pop("image_size", default_image_size))
         source = "project"
         if checkpoint_path is not None:
             warnings.append("Checkpoint metadata unavailable; project configuration was used.")

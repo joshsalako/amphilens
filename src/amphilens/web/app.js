@@ -207,7 +207,6 @@
       app.cloudProviderSettings = data.cloud_provider_settings || {};
       app.bootstrapped = true;
       updateProjectHeader();
-      populateModelPreset();
       render();
       if (app.project) loadCloudJobs();
     } catch (error) {
@@ -224,18 +223,6 @@
       window.clearInterval(app.cloudRefreshTimer);
       app.cloudRefreshTimer = null;
     }
-  }
-
-  function populateModelPreset() {
-    const select = document.getElementById("model-preset");
-    if (!select) return;
-    const list = app.models;
-    const saved = select.value;
-    select.innerHTML = list.length
-      ? list.map((model) => `<option value="${escapeHtml(model.model_id)}">${escapeHtml(model.name || model.architecture || model.model_id)}</option>`).join("")
-      : '<option value="">No model presets available</option>';
-    select.disabled = list.length === 0;
-    select.value = saved || app.defaultModelId || list[0]?.model_id || "";
   }
 
   function pageHead(title, description, action = "") {
@@ -285,7 +272,7 @@
     const saved = app.project?.checkpoints || [];
     const presets = app.models;
     const hosted = app.hostedModels || [];
-    const preferred = app.project?.model_preset || app.defaultModelId;
+    const preferred = app.defaultModelId || presets[0]?.model_id;
     const presetOptions = presets.map((item) => `<option value="preset:${escapeHtml(item.model_id)}"${item.model_id === preferred ? " selected" : ""}>${escapeHtml(item.name || item.model_id)}</option>`).join("");
     const hostedOptions = hosted.map((item) => `<option value="hosted:${escapeHtml(item.model_id)}">${escapeHtml(item.name || item.model_id)}</option>`).join("");
     return `${presetOptions ? `<optgroup label="General pretrained models">${presetOptions}</optgroup>` : ""}${hostedOptions ? `<optgroup label="AmphiLens hosted models">${hostedOptions}</optgroup>` : ""}${saved.length ? `<optgroup label="Project checkpoints">${saved.map((item) => `<option value="checkpoint:${escapeHtml(item.path)}">${escapeHtml(item.name || item.model_id || basename(item.path))}</option>`).join("")}</optgroup>` : ""}`;
@@ -295,10 +282,134 @@
     return (app.hostedModels || []).find((item) => item.model_id === modelId) || null;
   }
 
+  function modelMetadata(kind, selected) {
+    if (kind === "hosted") return hostedModelById(selected);
+    if (kind === "preset") return (app.models || []).find((item) => item.model_id === selected) || null;
+    if (kind === "checkpoint") return (app.project?.checkpoints || []).find((item) => item.path === selected) || null;
+    return null;
+  }
+
+  function modelSettingsIdentity(form, workflow) {
+    if (workflow === "predict") {
+      const [, kind, selected] = String(form?.elements.model_choice?.value || "").match(/^(preset|checkpoint|hosted):(.*)$/s) || [];
+      return kind && selected ? `${kind}:${selected}` : "";
+    }
+    const source = form?.elements.training_source?.value || "general-pretrained";
+    if (source === "amphilens-pretrained") {
+      return form.elements.hosted_model_id?.value ? `hosted:${form.elements.hosted_model_id.value}` : "";
+    }
+    if (source === "project-checkpoint") {
+      return form.elements.checkpoint?.value ? `checkpoint:${form.elements.checkpoint.value}` : "";
+    }
+    return form?.elements.model_preset?.value ? `preset:${form.elements.model_preset.value}` : "";
+  }
+
+  function modelSettingsDefaults(identity) {
+    const [kind, ...parts] = String(identity || "").split(":");
+    const metadata = modelMetadata(kind, parts.join(":"));
+    const raw = metadata?.preprocessing;
+    const recorded = typeof raw === "string"
+      ? { clahe_enabled: raw.trim().toLowerCase() === "clahe" }
+      : raw && typeof raw === "object" && Object.keys(raw).length
+        ? Object.keys(raw).length === 1 && "name" in raw
+          ? { clahe_enabled: String(raw.name).trim().toLowerCase() === "clahe" }
+          : raw
+        : null;
+    return {
+      short_side_dimension: Number(recorded?.short_side_dimension || 640),
+      grayscale_enabled: recorded?.grayscale_enabled ?? true,
+      clahe_enabled: recorded?.clahe_enabled ?? true,
+      metadataMissing: recorded === null,
+    };
+  }
+
+  function modelSettingsControls(form) {
+    if (!form) return null;
+    return {
+      shortSide: form.querySelector('[data-model-preference="short_side_dimension"]'),
+      grayscale: form.querySelector('[data-model-preference="grayscale_enabled"]'),
+      clahe: form.querySelector('[data-model-preference="clahe_enabled"]'),
+      help: form.querySelector("[data-model-settings-help]"),
+    };
+  }
+
+  function readModelSettings(form) {
+    const controls = modelSettingsControls(form);
+    if (!controls?.shortSide || !controls.grayscale || !controls.clahe) return null;
+    return {
+      short_side_dimension: Number(controls.shortSide.value || 640),
+      grayscale_enabled: controls.grayscale.checked,
+      clahe_enabled: controls.clahe.checked,
+    };
+  }
+
+  function applyModelSettings(form, settings, metadataMissing = false) {
+    const controls = modelSettingsControls(form);
+    if (!controls?.shortSide || !controls.grayscale || !controls.clahe) return;
+    controls.shortSide.value = String(settings.short_side_dimension || 640);
+    controls.grayscale.checked = Boolean(settings.grayscale_enabled);
+    controls.clahe.checked = Boolean(settings.clahe_enabled);
+    if (controls.help) {
+      controls.help.textContent = metadataMissing
+        ? "This model has no recorded image-preparation settings. Defaults are 640 px, grayscale on, and local contrast on."
+        : "Settings start from this model’s recorded configuration. The model’s input size is selected automatically.";
+    }
+  }
+
+  function syncModelSettings(form, workflow) {
+    if (!form) return;
+    const identity = modelSettingsIdentity(form, workflow);
+    const previous = form.dataset.activeSettingsModel || "";
+    const preferences = window.AmphiLensWorkflowState;
+    if (previous && previous !== identity) {
+      preferences?.saveModel(workflowPreferenceScope(), workflow, previous, readModelSettings(form));
+    }
+    if (!identity) {
+      delete form.dataset.activeSettingsModel;
+      const fallback = modelSettingsDefaults("");
+      applyModelSettings(form, fallback, true);
+      return;
+    }
+    const defaults = modelSettingsDefaults(identity);
+    const saved = preferences?.restoreModel(workflowPreferenceScope(), workflow, identity);
+    applyModelSettings(form, saved ? { ...defaults, ...saved } : defaults, defaults.metadataMissing);
+    form.dataset.activeSettingsModel = identity;
+  }
+
+  function resetModelSettings(button) {
+    const form = button.closest("form");
+    const workflow = form?.dataset.form === "predict" ? "predict" : "training";
+    const identity = modelSettingsIdentity(form, workflow);
+    if (!identity) return;
+    window.AmphiLensWorkflowState?.resetModel(workflowPreferenceScope(), workflow, identity);
+    const defaults = modelSettingsDefaults(identity);
+    applyModelSettings(form, defaults, defaults.metadataMissing);
+    if (workflow === "training") invalidateTrainingEstimate(form);
+    toast("Model image settings reset to their recorded defaults.");
+  }
+
+  function saveActiveModelSettings(form) {
+    if (!form?.dataset.activeSettingsModel) return;
+    const workflow = form.dataset.form === "predict" ? "predict" : "training";
+    window.AmphiLensWorkflowState?.saveModel(
+      workflowPreferenceScope(),
+      workflow,
+      form.dataset.activeSettingsModel,
+      readModelSettings(form),
+    );
+  }
+
+  function selectedPreprocessing(form) {
+    return readModelSettings(form);
+  }
+
+  function modelSettingsFields(prefix) {
+    return `<div class="field"><label for="${prefix}-short-side">Shortest-side dimension (pixels)</label><input id="${prefix}-short-side" name="short_side_dimension" data-model-preference="short_side_dimension" type="number" min="128" step="32" value="640" required><span class="field-help">Resize the shorter side while preserving image proportions.</span></div><label class="check-row"><input name="grayscale_enabled" data-model-preference="grayscale_enabled" type="checkbox"><span>Convert images to grayscale</span></label><label class="check-row"><input name="clahe_enabled" data-model-preference="clahe_enabled" type="checkbox"><span>Improve local contrast</span></label><p class="field-help" data-model-settings-help></p><button class="button small" type="button" data-reset-model-settings>Reset to model defaults</button>`;
+  }
+
   function hostedModelDetails(model) {
     if (!model) return "";
-    const shortSide = Number(app.project?.preprocessing?.short_side_dimension || 640);
-    return `<p class="hosted-model-facts"><strong>${escapeHtml(model.architecture)}</strong><span>${escapeHtml(model.size)}</span><span>${formatNumber(shortSide)} px short side</span></p>`;
+    return `<p class="hosted-model-facts"><strong>${escapeHtml(model.architecture)}</strong><span>${escapeHtml(model.size)}</span><span>${formatNumber(model.inference_image_size || 640)} px model input</span></p>`;
   }
 
   function renderPredictionModelSelection() {
@@ -379,6 +490,7 @@
           <div class="field"><label for="prediction-model">Model</label><select id="prediction-model" name="model_choice">${modelOptions()}</select></div>
           <div id="prediction-hosted-details" class="hosted-model-panel" hidden></div>
           <div id="prediction-class-mapping" class="hosted-class-mapping" hidden></div>
+          <details class="advanced-settings"><summary>Image preparation</summary><div class="advanced-body">${modelSettingsFields("prediction")}</div></details>
           <div class="field"><label for="prediction-execution">Where to run</label><select id="prediction-execution" name="execution"><option value="local">This computer</option><option value="modal">Modal cloud GPU</option><option value="azure_ml">Azure Machine Learning</option><option value="vertex_ai">Google Vertex AI</option></select><span class="field-help">Cloud prediction transfers images in small batches. Images remain in this project on your computer.</span></div>
           <details class="advanced-settings"><summary>Detection settings</summary><div class="advanced-body">
             <div class="field"><label for="confidence">Confidence threshold</label><div class="range-field"><input id="confidence" name="confidence" type="range" min="0.05" max="0.95" step="0.05" value="0.25"><output class="range-value" for="confidence">0.25</output></div><span class="field-help">Higher values keep only more confident detections.</span></div>
@@ -394,6 +506,8 @@
     restoreWorkflowViewState("predict");
     renderPredictionModelSelection();
     restoreWorkflowViewState("predict");
+    syncModelSettings(form, "predict");
+    renderPredictionModelSelection();
     const confidenceOutput = form?.querySelector('output[for="confidence"]');
     if (confidenceOutput && form.elements.confidence) {
       confidenceOutput.value = Number(form.elements.confidence.value).toFixed(2);
@@ -491,8 +605,11 @@
     if (submit) submit.disabled = Boolean(cvatProjectIssue(project));
   }
 
-  function trainingImageSize(form) {
-    return Number(app.project?.preprocessing?.short_side_dimension || 640);
+  function trainingModelInputSize(form) {
+    const identity = modelSettingsIdentity(form, "training");
+    const [kind, ...parts] = String(identity || "").split(":");
+    const metadata = modelMetadata(kind, parts.join(":"));
+    return Number(metadata?.inference_image_size || metadata?.image_size || 640);
   }
 
   function syncTrainingDataControls(form) {
@@ -526,8 +643,10 @@
     const hostedSelect = form.elements.hosted_model_id;
     const checkpointSelect = form.elements.checkpoint;
     const hostedDetails = form.querySelector("[data-training-hosted-details]");
+    const generalWrap = form.querySelector("[data-training-general]");
     if (hostedWrap) hostedWrap.hidden = source !== "amphilens-pretrained";
     if (checkpointWrap) checkpointWrap.hidden = source !== "project-checkpoint";
+    if (generalWrap) generalWrap.hidden = source !== "general-pretrained";
     if (hostedSelect) hostedSelect.required = source === "amphilens-pretrained";
     if (checkpointSelect) checkpointSelect.required = source === "project-checkpoint";
     const model = hostedSelect ? hostedModelById(hostedSelect.value) : null;
@@ -535,6 +654,7 @@
       hostedDetails.hidden = source !== "amphilens-pretrained" || !model;
       hostedDetails.innerHTML = source === "amphilens-pretrained" && model ? hostedModelDetails(model) : "";
     }
+    syncModelSettings(form, "training");
   }
 
   function renderTraining() {
@@ -549,12 +669,13 @@
         <div class="field" data-training-validation hidden><label for="training-validation-snapshot">Validation snapshot <span class="optional">optional</span></label><select id="training-validation-snapshot" name="validation_snapshot_path"><option value="">Use training snapshot for validation</option>${snapshotOptions}</select></div>
         <div class="field" data-training-test hidden><label for="training-test-snapshot">Test snapshot <span class="optional">optional</span></label><select id="training-test-snapshot" name="test_snapshot_path"><option value="">Skip final evaluation</option>${snapshotOptions}</select></div>
         <label class="consent-row" data-training-image-split hidden><input type="checkbox" name="allow_image_level_split"><span>Allow an image-level split if source groups cannot be kept together.</span></label>
-        <div class="field"><label for="training-source">Training source</label><select id="training-source" name="training_source"><option value="general-pretrained" selected>General pretrained weights</option><option value="amphilens-pretrained">AmphiLens pretrained model</option><option value="project-checkpoint"${checkpoints.length ? "" : " disabled"}>Existing project checkpoint</option></select><span class="field-help">General pretrained weights are the default and use this project’s selected architecture.</span></div>
-        <div class="field" data-training-hosted hidden><label for="training-hosted-model">AmphiLens model</label><select id="training-hosted-model" name="hosted_model_id"><option value="">Choose a model</option>${(app.hostedModels || []).map((item) => `<option value="${escapeHtml(item.model_id)}">${escapeHtml(item.name || item.model_id)}</option>`).join("")}</select><span class="field-help">The model supplies the architecture, size, and input preprocessing for this run.</span></div>
+        <div class="field"><label for="training-source">Training source</label><select id="training-source" name="training_source"><option value="general-pretrained" selected>General pretrained weights</option><option value="amphilens-pretrained">AmphiLens pretrained model</option><option value="project-checkpoint"${checkpoints.length ? "" : " disabled"}>Existing project checkpoint</option></select><span class="field-help">Choose the pretrained model or a saved project checkpoint to fine-tune.</span></div>
+        <div class="field" data-training-general><label for="training-model">Pretrained model</label><select id="training-model" name="model_preset">${(app.models || []).map((item) => `<option value="${escapeHtml(item.model_id)}"${item.model_id === (app.defaultModelId || app.models?.[0]?.model_id) ? " selected" : ""}>${escapeHtml(item.name || item.model_id)}</option>`).join("")}</select></div>
+        <div class="field" data-training-hosted hidden><label for="training-hosted-model">AmphiLens model</label><select id="training-hosted-model" name="hosted_model_id"><option value="">Choose a model</option>${(app.hostedModels || []).map((item) => `<option value="${escapeHtml(item.model_id)}">${escapeHtml(item.name || item.model_id)}</option>`).join("")}</select><span class="field-help">Architecture and model input size come from its metadata. Image preparation can be changed below.</span></div>
         <div class="hosted-model-panel" data-training-hosted-details hidden></div>
         <div class="field" data-training-checkpoint hidden><label for="training-checkpoint">Project checkpoint</label><select id="training-checkpoint" name="checkpoint"><option value="">Choose a saved checkpoint</option>${checkpoints.map((item) => `<option value="${escapeHtml(item.path)}">${escapeHtml(item.name || item.model_id || basename(item.path))}</option>`).join("")}</select></div>
         <div class="field"><label for="training-execution">Where should it run?</label><select id="training-execution" name="execution"><option value="local">On this computer</option><option value="cloud">Cloud GPU</option></select></div>
-        <details class="advanced-settings"><summary>Training settings</summary><div class="advanced-body"><div class="field-row"><div class="field"><label for="training-epochs">Maximum epochs per phase</label><input id="training-epochs" name="epochs" type="number" min="1" max="1000" value="100"></div><div class="field"><label for="training-patience">Patience</label><input id="training-patience" name="patience" type="number" min="0" max="1000" value="25"></div></div><div class="field-row"><div class="field"><label for="training-batch">Batch size</label><input id="training-batch" name="batch_size" type="number" min="1" max="256" value="16"></div><div class="field"><label for="training-output">Save run in <span class="optional">optional</span></label>${pathPickerControl("training-output", "output_dir", "directory", "Use the project runs folder", { label: "a run folder" })}</div></div><div class="field"><label for="training-device">Local device</label><select id="training-device" name="device"><option value="auto">Choose automatically</option><option value="cpu">CPU</option><option value="cuda">CUDA GPU</option>${app.doctor?.mps_available ? `<option value="mps">Apple MPS GPU</option>` : ""}</select></div></div></details>
+        <details class="advanced-settings"><summary>Training settings</summary><div class="advanced-body">${modelSettingsFields("training")}<div class="field-row"><div class="field"><label for="training-epochs">Maximum epochs per phase</label><input id="training-epochs" name="epochs" type="number" min="1" max="1000" value="100"></div><div class="field"><label for="training-patience">Patience</label><input id="training-patience" name="patience" type="number" min="0" max="1000" value="25"></div></div><div class="field-row"><div class="field"><label for="training-batch">Batch size</label><input id="training-batch" name="batch_size" type="number" min="1" max="256" value="16"></div><div class="field"><label for="training-output">Save run in <span class="optional">optional</span></label>${pathPickerControl("training-output", "output_dir", "directory", "Use the project runs folder", { label: "a run folder" })}</div></div><div class="field"><label for="training-device">Local device</label><select id="training-device" name="device"><option value="auto">Choose automatically</option><option value="cpu">CPU</option><option value="cuda">CUDA GPU</option>${app.doctor?.mps_available ? `<option value="mps">Apple MPS GPU</option>` : ""}</select></div></div></details>
         <div class="cloud-settings hidden" data-cloud-settings>
           <div class="notice warning"><span class="notice-mark" aria-hidden="true">!</span><p>Cloud training uploads a prepared copy of the selected dataset and checkpoint. Review the estimate and approve both the upload and cost before submitting.</p></div>
           <div class="field" style="margin-top:15px"><label for="training-provider">Cloud provider</label><select id="training-provider" name="provider"><option value="modal">Modal</option><option value="azure_ml">Azure Machine Learning</option><option value="vertex_ai">Google Vertex AI</option></select><span class="field-help">Configure cloud identity and an existing workspace or project in Check your setup.</span></div>
@@ -602,11 +723,28 @@
       epochs: numberOrUndefined(form.elements.epochs?.value),
       max_cost_usd: numberOrUndefined(form.elements.max_cost_usd?.value),
       training_source: form.elements.training_source?.value || "general-pretrained",
+      model_preset: form.elements.training_source?.value === "general-pretrained"
+        ? form.elements.model_preset?.value || ""
+        : "",
+      checkpoint: form.elements.training_source?.value === "project-checkpoint"
+        ? form.elements.checkpoint?.value || ""
+        : "",
       hosted_model_id: form.elements.training_source?.value === "amphilens-pretrained"
         ? form.elements.hosted_model_id?.value || ""
         : "",
-      image_size: trainingImageSize(form),
+      preprocessing: selectedPreprocessing(form),
+      image_size: trainingModelInputSize(form),
     });
+  }
+
+  function invalidateTrainingEstimate(form) {
+    if (!form) return;
+    form.elements.uploads_dataset.checked = false;
+    form.elements.acknowledged.checked = false;
+    app.cloudEstimate = null;
+    app.cloudEstimateSignature = null;
+    const slot = document.getElementById("cloud-estimate-slot");
+    if (slot) slot.innerHTML = renderCloudEstimate();
   }
 
   function renderCloudEstimate() {
@@ -648,10 +786,17 @@
       epochs: numberOrUndefined(form.elements.epochs.value),
       max_cost_usd: numberOrUndefined(form.elements.max_cost_usd.value),
       training_source: form.elements.training_source?.value || "general-pretrained",
+      model_preset: form.elements.training_source?.value === "general-pretrained"
+        ? form.elements.model_preset?.value || undefined
+        : undefined,
+      checkpoint: form.elements.training_source?.value === "project-checkpoint"
+        ? form.elements.checkpoint?.value || undefined
+        : undefined,
       hosted_model_id: form.elements.training_source?.value === "amphilens-pretrained"
         ? form.elements.hosted_model_id?.value || undefined
         : undefined,
-      image_size: trainingImageSize(form),
+      preprocessing: selectedPreprocessing(form),
+      image_size: trainingModelInputSize(form),
     };
     const requestedSignature = cloudEstimateSignature(form);
     if (!payload.max_cost_usd || payload.max_cost_usd <= 0) { toast("Enter a positive maximum budget.", true); return; }
@@ -995,7 +1140,6 @@
         app.project = result.project || null;
         app.models = app.project?.models || app.models;
         updateProjectHeader();
-        populateModelPreset();
         dialog.close();
         setPage("home");
         toast("Project opened.");
@@ -1005,11 +1149,7 @@
         const values = formData(form);
         values.classes = String(values.classes || "").split(",").map((item) => item.trim()).filter(Boolean);
         if (!values.classes.length) throw new Error("Add at least one wildlife class.");
-        values.short_side_dimension = numberOrUndefined(values.short_side_dimension);
-        values.grayscale = form.elements.grayscale.checked;
-        values.clahe = form.elements.clahe.checked;
         if (!values.image_root?.trim()) throw new Error("Choose an image folder for this project.");
-        values.model_preset = values.model_preset || undefined;
         const result = await api("/api/projects/create", { method: "POST", body: JSON.stringify(values) });
         app.project = result.project || null;
         updateProjectHeader();
@@ -1067,6 +1207,7 @@
           checkpoint: kind === "checkpoint" ? selection : undefined,
           model_preset: kind === "preset" ? selection : undefined,
           hosted_model_id: kind === "hosted" ? selection : undefined,
+          preprocessing: selectedPreprocessing(form),
           class_mapping: kind === "hosted" ? classMapping : undefined,
           output_dir: values.output_dir || undefined,
           confidence: numberOrUndefined(values.confidence),
@@ -1103,8 +1244,10 @@
           validation_snapshot_path: values.data_mode === "separate-snapshots" ? values.validation_snapshot_path || undefined : undefined,
           test_snapshot_path: values.data_mode === "separate-snapshots" ? values.test_snapshot_path || undefined : undefined,
           training_source: values.training_source || "general-pretrained",
+          model_preset: values.training_source === "general-pretrained" ? values.model_preset : undefined,
           hosted_model_id: values.training_source === "amphilens-pretrained" ? values.hosted_model_id || undefined : undefined,
           checkpoint: values.training_source === "project-checkpoint" ? values.checkpoint || undefined : undefined,
+          preprocessing: selectedPreprocessing(form),
           epochs: numberOrUndefined(values.epochs),
           batch_size: numberOrUndefined(values.batch_size),
           patience: numberOrUndefined(values.patience),
@@ -1116,7 +1259,7 @@
           const estimatedUsd = app.cloudEstimate.high_usd;
           if (estimatedUsd === undefined || estimatedUsd === null) throw new Error("The returned estimate has no numeric estimated_usd value for the training request.");
           endpoint = "/api/cloud/training";
-          payload = { ...common, provider: values.provider || "modal", image_size: trainingImageSize(form), gpu: values.gpu, max_cost_usd: numberOrUndefined(values.max_cost_usd), estimated_usd: Number(estimatedUsd), acknowledged: true, uploads_dataset: true };
+          payload = { ...common, provider: values.provider || "modal", image_size: trainingModelInputSize(form), gpu: values.gpu, max_cost_usd: numberOrUndefined(values.max_cost_usd), estimated_usd: Number(estimatedUsd), acknowledged: true, uploads_dataset: true };
         } else {
           endpoint = "/api/training";
           payload = { ...common, output_dir: values.output_dir || undefined, device: values.device || undefined };
@@ -1423,6 +1566,12 @@
       }
       return;
     }
+    const resetSettings = event.target.closest("[data-reset-model-settings]");
+    if (resetSettings) {
+      event.preventDefault();
+      resetModelSettings(resetSettings);
+      return;
+    }
     const viewButton = event.target.closest("[data-view]");
     if (viewButton) {
       event.preventDefault();
@@ -1557,6 +1706,13 @@
       const output = document.querySelector('output[for="confidence"]');
       if (output) output.value = Number(event.target.value).toFixed(2);
     }
+    if (event.target.matches?.("[data-model-preference]")) {
+      const form = event.target.closest('form[data-form="predict"], form[data-form="training"]');
+      saveActiveModelSettings(form);
+      if (form?.dataset.form === "training" && form.elements.execution?.value === "cloud") {
+        invalidateTrainingEstimate(form);
+      }
+    }
     saveWorkflowViewState(app.view);
   });
   document.addEventListener("toggle", (event) => {
@@ -1585,33 +1741,28 @@
       syncTrainingDataControls(event.target.form);
     }
     if (event.target.id === "prediction-model") {
+      syncModelSettings(event.target.form, "predict");
       renderPredictionModelSelection();
       restoreWorkflowViewState("predict", "hosted_mapping:");
     }
     if (event.target.id === "prediction-execution") {
       syncPredictionExecutionControls(event.target.form);
     }
-    if (event.target.id === "training-source" || event.target.id === "training-hosted-model") {
+    if (["training-source", "training-hosted-model", "training-model", "training-checkpoint"].includes(event.target.id)) {
       const form = event.target.closest('form[data-form="training"]');
       syncTrainingSourceControls(form);
-      if (form) {
-        form.elements.uploads_dataset.checked = false;
-        form.elements.acknowledged.checked = false;
-        app.cloudEstimate = null;
-        app.cloudEstimateSignature = null;
-        const slot = document.getElementById("cloud-estimate-slot");
-        if (slot) slot.innerHTML = renderCloudEstimate();
-      }
+      if (form) invalidateTrainingEstimate(form);
     }
     if (event.target.id === "initial-cvat-project") {
       syncInitialCvatProject(event.target.form);
       restoreWorkflowViewState("import", "cvat_mapping:");
     }
     const trainingForm = event.target.closest('form[data-form="training"]');
-    if (trainingForm && ["snapshot_path", "validation_snapshot_path", "test_snapshot_path", "data_mode", "allow_image_level_split", "gpu", "epochs", "patience", "batch_size", "max_cost_usd", "checkpoint", "training_source", "hosted_model_id"].includes(event.target.name)) {
+    if (event.target.matches?.("[data-model-preference]")) saveActiveModelSettings(trainingForm);
+    if (trainingForm && ["snapshot_path", "validation_snapshot_path", "test_snapshot_path", "data_mode", "allow_image_level_split", "gpu", "epochs", "patience", "batch_size", "max_cost_usd", "checkpoint", "training_source", "hosted_model_id", "model_preset", "short_side_dimension", "grayscale_enabled", "clahe_enabled"].includes(event.target.name)) {
       trainingForm.elements.uploads_dataset.checked = false;
       trainingForm.elements.acknowledged.checked = false;
-      if (["snapshot_path", "validation_snapshot_path", "test_snapshot_path", "data_mode", "allow_image_level_split", "gpu", "epochs", "patience", "batch_size", "max_cost_usd", "training_source", "hosted_model_id"].includes(event.target.name)) {
+      if (["snapshot_path", "validation_snapshot_path", "test_snapshot_path", "data_mode", "allow_image_level_split", "gpu", "epochs", "patience", "batch_size", "max_cost_usd", "training_source", "hosted_model_id", "model_preset", "checkpoint", "short_side_dimension", "grayscale_enabled", "clahe_enabled"].includes(event.target.name)) {
         app.cloudEstimate = null;
         app.cloudEstimateSignature = null;
         const slot = document.getElementById("cloud-estimate-slot");

@@ -362,6 +362,7 @@ def run_remote_training(
             base_manifest = CheckpointManifest.from_dict(read_json(base_manifest_path))
             if base_manifest.sha256 != base_digest:
                 raise ValidationError("Base checkpoint manifest hash does not match")
+        submitted_config = dict(payload.get("training_config", {}))
 
         _write_progress(
             root,
@@ -381,6 +382,9 @@ def run_remote_training(
                 model_id=str(effective["model_id"]),
                 checkpoint_manifest=base_manifest,
                 preprocessing=dict(effective["preprocessing"]),
+                allow_preprocessing_override=bool(
+                    submitted_config.get("allow_checkpoint_preprocessing_override", False)
+                ),
             )
         else:
 
@@ -419,7 +423,6 @@ def run_remote_training(
             gpu=str(payload.get("gpu", "")),
         )
 
-        submitted_config = dict(payload.get("training_config", {}))
         training = TrainingConfig(
             epochs=int(submitted_config.get("epochs", effective["epochs"])),
             image_size=int(submitted_config.get("image_size", effective["image_size"])),
@@ -434,6 +437,9 @@ def run_remote_training(
             metadata={
                 "effective_configuration": effective,
                 "dataset": dataset_metadata,
+                "allow_checkpoint_preprocessing_override": bool(
+                    submitted_config.get("allow_checkpoint_preprocessing_override", False)
+                ),
             },
         )
         if submitted_config.get("val", True) is not True:

@@ -372,6 +372,11 @@ class UltralyticsDetector:
                 architecture=self.architecture,
                 classes=self.classes,
                 preprocessing=config.get("preprocessing", {}),
+                allow_preprocessing_override=bool(
+                    (config.get("metadata") or {}).get(
+                        "allow_checkpoint_preprocessing_override", False
+                    )
+                ),
             )
         cloud_provenance = config.get("cloud")
         is_cloud_training = isinstance(cloud_provenance, dict)
@@ -632,6 +637,11 @@ class FasterRCNNDetector:
                 architecture=self.architecture,
                 classes=self.classes,
                 preprocessing=config.get("preprocessing", {}),
+                allow_preprocessing_override=bool(
+                    (config.get("metadata") or {}).get(
+                        "allow_checkpoint_preprocessing_override", False
+                    )
+                ),
             )
             resume_checkpoint = resume_from.checkpoint_path
         else:
@@ -657,6 +667,7 @@ def load_detector(
     model_id: str | None = None,
     checkpoint_manifest: CheckpointManifest | None = None,
     preprocessing: dict | None = None,
+    allow_preprocessing_override: bool = False,
 ):
     checkpoint_path = Path(checkpoint).expanduser().absolute()
     if not checkpoint_path.is_file():
@@ -668,6 +679,7 @@ def load_detector(
             architecture=architecture,
             classes=classes,
             preprocessing=preprocessing or {},
+            allow_preprocessing_override=allow_preprocessing_override,
         )
         if model_id is not None and checkpoint_manifest.model_id != model_id:
             raise UnsupportedCheckpointError(

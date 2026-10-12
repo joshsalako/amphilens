@@ -574,6 +574,7 @@ class CheckpointManifest:
         architecture: str,
         classes: Iterable[str],
         preprocessing: dict[str, Any],
+        allow_preprocessing_override: bool = False,
     ) -> None:
         self.validate()
         if self.architecture != architecture:
@@ -582,8 +583,10 @@ class CheckpointManifest:
             )
         if self.classes != list(classes):
             raise UnsupportedCheckpointError("Checkpoint classes do not match the project classes")
-        if PreprocessingConfig.from_any(self.preprocessing).to_dict() != (
-            PreprocessingConfig.from_any(preprocessing).to_dict()
+        if (
+            not allow_preprocessing_override
+            and PreprocessingConfig.from_any(self.preprocessing).to_dict()
+            != PreprocessingConfig.from_any(preprocessing).to_dict()
         ):
             raise UnsupportedCheckpointError("Checkpoint preprocessing does not match the run")
 

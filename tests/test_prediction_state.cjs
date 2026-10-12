@@ -87,3 +87,23 @@ test("stale select values do not replace current model options", () => {
 
   assert.equal(currentForm.elements[0].value, "preset:yolo26");
 });
+
+test("model settings are remembered by project, workflow, and selected model", () => {
+  const storage = createStorage();
+  const preferences = loadPreferences(storage);
+  const modelSettings = {
+    short_side_dimension: "384",
+    grayscale_enabled: false,
+    clahe_enabled: true,
+  };
+  preferences.saveModel("/projects/grass", "predict", "hosted:model-a", modelSettings);
+
+  assert.equal(
+    JSON.stringify(preferences.restoreModel("/projects/grass", "predict", "hosted:model-a")),
+    JSON.stringify(modelSettings),
+  );
+  assert.equal(preferences.restoreModel("/projects/grass", "predict", "preset:model-a"), null);
+  assert.equal(preferences.restoreModel("/projects/grass", "training", "hosted:model-a"), null);
+  preferences.resetModel("/projects/grass", "predict", "hosted:model-a");
+  assert.equal(preferences.restoreModel("/projects/grass", "predict", "hosted:model-a"), null);
+});

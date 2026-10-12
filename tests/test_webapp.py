@@ -61,6 +61,10 @@ def test_static_frontend_and_assets_are_served(client):
     assert "AmphiLens" in page.text
     assert 'data-path-picker="directory" data-path-target="open-path"' in page.text
     assert 'data-path-picker="directory" data-path-target="project-path-input"' in page.text
+    assert 'name="model_preset"' not in page.text
+    assert 'name="short_side_dimension"' not in page.text
+    assert 'name="grayscale"' not in page.text
+    assert 'name="clahe"' not in page.text
     assert 'src="/static/prediction_state.js"' in page.text
     assert 'src="/static/activity_view.js"' in page.text
     assert '<span class="nav-label">Choose images to review</span>' in page.text
@@ -82,6 +86,9 @@ def test_static_frontend_and_assets_are_served(client):
     assert "There are no detected images to collect." in script
     assert 'name="training_source"' in script
     assert 'name="hosted_model_id"' in script
+    assert 'name="model_preset"' in script
+    assert "preprocessing: selectedPreprocessing(form)" in script
+    assert "resetModelSettings" in script
     assert 'app.cvatServerUrl = data.cvat_server_url || app.cvatServerUrl || "";' in script
     assert 'value="${escapeHtml(app.cvatServerUrl)}"' in script
     assert "__ignore__" in script
@@ -268,6 +275,11 @@ def test_api_parses_hosted_inference_and_training_source_fields():
             "run_name": "Hosted inference",
             "hosted_model_id": "amphilens-yolo26-m",
             "class_mapping": {"Other_Amphibian": None},
+            "preprocessing": {
+                "short_side_dimension": 384,
+                "grayscale_enabled": False,
+                "clahe_enabled": True,
+            },
         },
     )
     training = webapp._request(
@@ -277,13 +289,22 @@ def test_api_parses_hosted_inference_and_training_source_fields():
             "device": "mps",
             "training_source": "amphilens-pretrained",
             "hosted_model_id": "amphilens-yolo26-m",
+            "model_preset": "rtdetr-l",
+            "preprocessing": {
+                "short_side_dimension": 512,
+                "grayscale_enabled": True,
+                "clahe_enabled": False,
+            },
         },
     )
 
     assert prediction.hosted_model_id == "amphilens-yolo26-m"
     assert prediction.class_mapping == {"Other_Amphibian": None}
+    assert prediction.preprocessing["short_side_dimension"] == 384
     assert training.training_source == "amphilens-pretrained"
     assert training.hosted_model_id == "amphilens-yolo26-m"
+    assert training.model_preset == "rtdetr-l"
+    assert training.preprocessing["short_side_dimension"] == 512
     assert training.device == "mps"
     assert webapp.select_training_source(None, None, None) == "general-pretrained"
 
@@ -706,7 +727,7 @@ def test_modal_prediction_api_requires_preflight_consent_before_job_submission(c
     assert "consent" in response.json()["detail"].lower()
 
 
-def test_cloud_estimate_uses_project_input_size_for_hosted_model():
+def test_cloud_estimate_uses_recorded_model_input_size_for_hosted_model():
     estimate = webapp._request(
         webapp.CloudEstimateRequest,
         {
@@ -717,7 +738,7 @@ def test_cloud_estimate_uses_project_input_size_for_hosted_model():
         },
     )
     assert estimate.hosted_model_id == "amphilens-yolo26-m"
-    assert webapp._cloud_estimate_image_size(estimate) == 640
+    assert webapp._cloud_estimate_image_size(estimate) == 1152
 
     estimate.hosted_model_id = "amphilens-rtdetr-l"
     assert webapp._cloud_estimate_image_size(estimate) == 640
@@ -733,6 +754,11 @@ def test_cloud_estimate_uses_project_input_size_for_hosted_model():
             "training_source": "amphilens-pretrained",
             "hosted_model_id": "amphilens-yolo26-m",
             "image_size": 1152,
+            "preprocessing": {
+                "short_side_dimension": 384,
+                "grayscale_enabled": False,
+                "clahe_enabled": False,
+            },
             "batch_size": 2,
             "estimated_usd": 1.0,
         },
@@ -740,6 +766,7 @@ def test_cloud_estimate_uses_project_input_size_for_hosted_model():
     assert cloud_training.training_source == "amphilens-pretrained"
     assert cloud_training.hosted_model_id == "amphilens-yolo26-m"
     assert cloud_training.image_size == 1152
+    assert cloud_training.preprocessing["short_side_dimension"] == 384
 
 
 def test_macos_picker_uses_the_native_folder_dialog(monkeypatch):
@@ -1014,6 +1041,11 @@ def test_hosted_prediction_maps_labels_and_records_revision(client, tmp_path, mo
             image_root=str(image_root),
             output_dir=str(tmp_path / "output"),
             hosted_model_id="amphilens-yolo26-m",
+            preprocessing={
+                "short_side_dimension": 384,
+                "grayscale_enabled": False,
+                "clahe_enabled": False,
+            },
             class_mapping={
                 "Other_Amphibian": None,
                 "Small_Mammal": "mammal",
@@ -1043,11 +1075,17 @@ def test_hosted_prediction_maps_labels_and_records_revision(client, tmp_path, mo
     run_manifest = json.loads((tmp_path / "output" / "run.json").read_text())
     predictions_path = tmp_path / "output" / "predictions.csv"
     predictions = predictions_path.read_text()
-    assert observed["image_size"] == 640
+    assert observed["image_size"] == 1152
     assert ",toad," in predictions
     assert run_manifest["config"]["metadata"]["run_name"] == "Hosted model traceability"
     assert run_manifest["config"]["metadata"]["class_mapping"]["Other_Amphibian"] is None
     assert run_manifest["config"]["metadata"]["effective_configuration"]["hosted_model"]["revision"]
+    effective_preprocessing = run_manifest["config"]["metadata"]["effective_configuration"][
+        "preprocessing"
+    ]
+    assert effective_preprocessing["short_side_dimension"] == 384
+    assert effective_preprocessing["grayscale_enabled"] is False
+    assert effective_preprocessing["clahe_enabled"] is False
     import csv
 
     with predictions_path.open(newline="", encoding="utf-8") as handle:
@@ -1128,6 +1166,11 @@ def test_hosted_training_uses_selected_architecture_checkpoint_and_target_classe
             snapshot_path=str(tmp_path / "snapshot"),
             training_source="amphilens-pretrained",
             hosted_model_id="amphilens-yolo26-m",
+            preprocessing={
+                "short_side_dimension": 384,
+                "grayscale_enabled": False,
+                "clahe_enabled": False,
+            },
             epochs=1,
         ),
     )
@@ -1136,7 +1179,10 @@ def test_hosted_training_uses_selected_architecture_checkpoint_and_target_classe
     assert observed["architecture"] == "yolo"
     assert observed["classes"] == ["toad", "mammal"]
     assert observed["model_id"] == "amphilens-yolo26-m"
-    assert observed["effective"]["image_size"] == 640
+    assert observed["effective"]["image_size"] == 1152
+    assert observed["effective"]["preprocessing"]["short_side_dimension"] == 384
+    assert observed["effective"]["preprocessing"]["grayscale_enabled"] is False
+    assert observed["effective"]["preprocessing"]["clahe_enabled"] is False
     assert observed["effective"]["hosted_model"]["revision"]
     assert output.result["message"].startswith("Training finished from amphilens-pretrained:")
 
@@ -1212,6 +1258,11 @@ def test_cloud_training_submits_hosted_model_without_local_checkpoint(tmp_path, 
             image_size=640,
             training_source="amphilens-pretrained",
             hosted_model_id=hosted.model_id,
+            preprocessing={
+                "short_side_dimension": 384,
+                "grayscale_enabled": False,
+                "clahe_enabled": False,
+            },
             validation_snapshot_path=str(tmp_path / "validation"),
             test_snapshot_path=str(tmp_path / "test"),
             patience=25,
@@ -1228,9 +1279,13 @@ def test_cloud_training_submits_hosted_model_without_local_checkpoint(tmp_path, 
     assert observed["base_checkpoint"] is None
     assert observed["base_manifest"] is None
     assert observed["effective_configuration"]["hosted_model"]["revision"]
+    assert observed["effective_configuration"]["image_size"] == 1152
+    assert observed["effective_configuration"]["preprocessing"]["short_side_dimension"] == 384
+    assert observed["effective_configuration"]["preprocessing"]["grayscale_enabled"] is False
+    assert observed["training_config"]["image_size"] == 1152
 
 
-def test_hosted_modal_prediction_sends_project_preprocessing(tmp_path, monkeypatch):
+def test_hosted_modal_prediction_sends_run_preprocessing(tmp_path, monkeypatch):
     from PIL import Image
 
     from amphilens.core import ProjectConfig, ProjectManifest, ProjectStore
@@ -1281,6 +1336,11 @@ def test_hosted_modal_prediction_sends_project_preprocessing(tmp_path, monkeypat
             output_dir=str(tmp_path / "output"),
             execution="modal",
             hosted_model_id=hosted.model_id,
+            preprocessing={
+                "short_side_dimension": 384,
+                "grayscale_enabled": False,
+                "clahe_enabled": False,
+            },
             max_cost_usd=1.0,
             acknowledged=True,
             uploads_dataset=True,
@@ -1290,8 +1350,9 @@ def test_hosted_modal_prediction_sends_project_preprocessing(tmp_path, monkeypat
         cloud_transport=object(),
     )
 
-    assert observed["model_spec"]["preprocessing"]["short_side_dimension"] == 512
-    assert observed["model_spec"]["preprocessing"]["clahe_enabled"] is True
+    assert observed["model_spec"]["preprocessing"]["short_side_dimension"] == 384
+    assert observed["model_spec"]["preprocessing"]["grayscale_enabled"] is False
+    assert observed["model_spec"]["preprocessing"]["clahe_enabled"] is False
 
 
 def test_managed_prediction_blocks_unknown_price_before_upload(tmp_path):

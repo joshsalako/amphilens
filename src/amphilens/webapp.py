@@ -541,6 +541,7 @@ class PredictionsRequest:
     expected_rate_usd_per_hour: float | None = None
     model_preset: str | None = None
     hosted_model_id: str | None = None
+    preprocessing: dict[str, Any] | None = None
     class_mapping: dict[str, str | None] | None = None
     run_name: str = ""
 
@@ -590,7 +591,9 @@ class TrainingRequest:
     batch_size: int | None = None
     device: Literal["auto", "cpu", "cuda", "mps"] | None = None
     training_source: str | None = None
+    model_preset: str | None = None
     hosted_model_id: str | None = None
+    preprocessing: dict[str, Any] | None = None
     data_mode: Literal["auto-split", "training-monitor", "separate-snapshots"] = (
         "separate-snapshots"
     )
@@ -634,7 +637,10 @@ class CloudEstimateRequest:
     max_cost_usd: float = 5.0
     image_size: int = 640
     training_source: str | None = None
+    model_preset: str | None = None
+    checkpoint: str | None = None
     hosted_model_id: str | None = None
+    preprocessing: dict[str, Any] | None = None
     data_mode: Literal["auto-split", "training-monitor", "separate-snapshots"] = (
         "separate-snapshots"
     )
@@ -646,7 +652,6 @@ class CloudEstimateRequest:
 
 @dataclass(slots=True)
 class CloudTrainingRequest(CloudEstimateRequest):
-    checkpoint: str | None = None
     batch_size: int | None = None
     device: Literal["auto", "cpu", "cuda"] | None = None
     estimated_usd: float = 0.0
@@ -752,6 +757,25 @@ def _mapping(data: dict[str, Any], key: str) -> dict[str, str | None] | None:
     return value
 
 
+def _preprocessing_override(data: dict[str, Any]) -> dict[str, Any] | None:
+    value = data.get("preprocessing")
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("preprocessing must be an object")
+    from .preprocessing import PreprocessingConfig
+
+    if set(value) == {"name"}:
+        PreprocessingConfig.from_any(value)
+        return dict(value)
+    fallback = PreprocessingConfig(clahe_enabled=True).to_dict(include_fingerprint=False)
+    try:
+        PreprocessingConfig.from_any({**fallback, **value})
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid preprocessing settings: {exc}") from exc
+    return dict(value)
+
+
 def _cloud_gpus(provider: str) -> set[str]:
     if provider == "modal":
         from .cloud.estimate import GPU_RATES_PER_SECOND
@@ -832,6 +856,7 @@ def _request(cls, payload: dict[str, Any]):
             ),
             model_preset=_optional_string(payload, "model_preset"),
             hosted_model_id=_optional_string(payload, "hosted_model_id"),
+            preprocessing=_preprocessing_override(payload),
             class_mapping=_mapping(payload, "class_mapping"),
         )
     if cls is TimestampOCRRequest:
@@ -878,7 +903,9 @@ def _request(cls, payload: dict[str, Any]):
             batch_size=batch_size,
             device=device,
             training_source=_optional_string(payload, "training_source"),
+            model_preset=_optional_string(payload, "model_preset"),
             hosted_model_id=_optional_string(payload, "hosted_model_id"),
+            preprocessing=_preprocessing_override(payload),
             data_mode=data_mode,
             validation_snapshot_path=_optional_string(payload, "validation_snapshot_path"),
             test_snapshot_path=_optional_string(payload, "test_snapshot_path"),
@@ -932,7 +959,10 @@ def _request(cls, payload: dict[str, Any]):
             max_cost_usd=_number(payload, "max_cost_usd", 5.0, minimum=0.001),
             image_size=_integer(payload, "image_size", 640, minimum=1),
             training_source=_optional_string(payload, "training_source"),
+            model_preset=_optional_string(payload, "model_preset"),
+            checkpoint=_optional_string(payload, "checkpoint"),
             hosted_model_id=_optional_string(payload, "hosted_model_id"),
+            preprocessing=_preprocessing_override(payload),
             data_mode=data_mode,
             validation_snapshot_path=_optional_string(payload, "validation_snapshot_path"),
             test_snapshot_path=_optional_string(payload, "test_snapshot_path"),
@@ -956,13 +986,15 @@ def _request(cls, payload: dict[str, Any]):
             max_cost_usd=base.max_cost_usd,
             image_size=base.image_size,
             training_source=base.training_source,
+            model_preset=base.model_preset,
+            checkpoint=base.checkpoint,
             hosted_model_id=base.hosted_model_id,
+            preprocessing=base.preprocessing,
             data_mode=base.data_mode,
             validation_snapshot_path=base.validation_snapshot_path,
             test_snapshot_path=base.test_snapshot_path,
             patience=base.patience,
             allow_image_level_split=base.allow_image_level_split,
-            checkpoint=_optional_string(payload, "checkpoint"),
             batch_size=batch_size,
             device=device,
             estimated_usd=estimated_usd,
@@ -972,12 +1004,14 @@ def _request(cls, payload: dict[str, Any]):
     raise TypeError(f"Unsupported request model: {cls.__name__}")
 
 
-def _model_summaries() -> list[dict[str, str]]:
+def _model_summaries() -> list[dict[str, Any]]:
     return [
         {
             "model_id": item.model_id,
             "name": str(item.metadata.get("family", item.model_id)),
             "architecture": item.architecture,
+            "inference_image_size": item.inference_image_size,
+            "preprocessing": item.metadata.get("preprocessing"),
         }
         for item in ModelCatalog().list()
     ]
@@ -1019,7 +1053,7 @@ def select_training_source(
 
 
 def _cloud_estimate_image_size(request: CloudEstimateRequest) -> int:
-    """Use the requested project short-side dimension for every model source."""
+    """Resolve the model's recorded input size for estimates and remote training."""
     source = request.training_source or (
         "amphilens-pretrained" if request.hosted_model_id else "general-pretrained"
     )
@@ -1030,10 +1064,20 @@ def _cloud_estimate_image_size(request: CloudEstimateRequest) -> int:
             raise ValueError("Choose an AmphiLens pretrained model before requesting an estimate")
         from .models.hosted_models import get_hosted_model
 
-        get_hosted_model(request.hosted_model_id)
+        return get_hosted_model(request.hosted_model_id).inference_image_size
+    if source == "project-checkpoint":
+        if not request.checkpoint:
+            raise ValueError("Choose a project checkpoint before requesting an estimate")
+        from .configuration import _checkpoint_input_size, discover_checkpoint_manifest
+
+        manifest = discover_checkpoint_manifest(request.checkpoint)
+        if manifest is not None:
+            return _checkpoint_input_size(manifest) or request.image_size
         return request.image_size
     if request.hosted_model_id:
         raise ValueError("Choose either General pretrained weights or an AmphiLens model")
+    if request.model_preset:
+        return ModelCatalog().get(request.model_preset).inference_image_size
     return request.image_size
 
 
@@ -1073,6 +1117,8 @@ def _project_summary(store: ProjectStore) -> dict[str, Any]:
                     "name": path.parent.name,
                     "model_id": checkpoint.model_id,
                     "architecture": checkpoint.architecture,
+                    "preprocessing": checkpoint.preprocessing,
+                    "image_size": checkpoint.training_config.get("image_size"),
                 }
             )
     image_count = sum(1 for _ in iter_images(manifest.image_roots))
@@ -1391,6 +1437,8 @@ def run_prediction_job(
     overrides["batch_size"] = effective_batch_size
     if request.model_preset is not None:
         overrides["model_preset"] = request.model_preset
+    if request.preprocessing is not None:
+        overrides["preprocessing"] = request.preprocessing
     class_mapping = None
     if hosted_model is not None:
         class_mapping = resolve_class_mapping(
@@ -1402,6 +1450,7 @@ def run_prediction_job(
             project,
             hosted_model=hosted_model,
             use_source_classes=True,
+            use_model_metadata_defaults=True,
             overrides=overrides,
         )
         if request.execution == "local":
@@ -1424,6 +1473,8 @@ def run_prediction_job(
             project,
             checkpoint_manifest=checkpoint_manifest,
             checkpoint_path=checkpoint or None,
+            use_model_metadata_defaults=True,
+            allow_checkpoint_preprocessing_override=True,
             overrides=overrides,
         )
         if request.execution == "local":
@@ -1443,6 +1494,7 @@ def run_prediction_job(
                     model_id=effective.model_id,
                     checkpoint_manifest=checkpoint_manifest,
                     preprocessing=effective.preprocessing.to_dict(),
+                    allow_preprocessing_override=True,
                 )
                 if checkpoint
                 else load_preset_detector(
@@ -1819,12 +1871,18 @@ def run_training_job(
         overrides["device"] = request.device
     if request.patience is not None:
         overrides["patience"] = request.patience
+    if request.model_preset is not None:
+        overrides["model_preset"] = request.model_preset
+    if request.preprocessing is not None:
+        overrides["preprocessing"] = request.preprocessing
     overrides["freeze_strategy"] = "paper-phased"
     effective = resolve_effective_configuration(
         project,
         checkpoint_manifest=checkpoint_manifest,
         checkpoint_path=checkpoint or None,
         hosted_model=hosted_model,
+        use_model_metadata_defaults=True,
+        allow_checkpoint_preprocessing_override=True,
         overrides=overrides,
     )
     detector = (
@@ -1835,6 +1893,7 @@ def run_training_job(
             model_id=effective.model_id,
             checkpoint_manifest=checkpoint_manifest,
             preprocessing=effective.preprocessing.to_dict(),
+            allow_preprocessing_override=True,
         )
         if checkpoint
         else load_preset_detector(
@@ -1871,7 +1930,10 @@ def run_training_job(
                 if test_snapshot or request.data_mode == "auto-split"
                 else "not evaluated"
             ),
-            metadata={"effective_configuration": effective.to_dict()},
+            metadata={
+                "effective_configuration": effective.to_dict(),
+                "allow_checkpoint_preprocessing_override": checkpoint_manifest is not None,
+            },
         ),
         preprocessing=effective.preprocessing,
         validation_snapshot=validation_snapshot,
@@ -2056,22 +2118,21 @@ def run_cloud_training_job(
         overrides["batch_size"] = request.batch_size
     if request.patience is not None:
         overrides["patience"] = request.patience
+    if request.model_preset is not None:
+        overrides["model_preset"] = request.model_preset
+    if request.preprocessing is not None:
+        overrides["preprocessing"] = request.preprocessing
     overrides["freeze_strategy"] = "paper-phased"
     effective = resolve_effective_configuration(
         project,
         checkpoint_manifest=checkpoint_manifest,
         checkpoint_path=checkpoint or None,
         hosted_model=hosted_model,
+        use_model_metadata_defaults=True,
+        allow_checkpoint_preprocessing_override=True,
         overrides=overrides,
     )
-    image_size = request.image_size
-    if hosted_model is not None:
-        if request.image_size != effective.image_size:
-            raise ValueError(
-                f"The selected AmphiLens model uses {effective.image_size}px input. "
-                "Request a fresh cloud estimate for that model before submitting."
-            )
-        image_size = effective.image_size
+    image_size = effective.image_size
     training_config = {
         "epochs": effective.epochs,
         "image_size": image_size,
@@ -2088,6 +2149,7 @@ def run_cloud_training_job(
             if request.data_mode == "training-monitor" or validation_snapshot is None
             else "separate-snapshot"
         ),
+        "allow_checkpoint_preprocessing_override": checkpoint_manifest is not None,
         "snapshot_ids": {
             "train": snapshot.manifest.snapshot_id,
             **(
@@ -2946,6 +3008,7 @@ def create_app(
                 epochs=(body.epochs or project_config.epochs) * 2,
                 max_cost_usd=body.max_cost_usd,
                 image_size=_cloud_estimate_image_size(body),
+                preprocessing=body.preprocessing,
                 validation_snapshot_path=(
                     validation_snapshot.root if validation_snapshot else None
                 ),

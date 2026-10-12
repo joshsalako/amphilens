@@ -93,6 +93,17 @@ def test_checkpoint_compatibility_requires_matching_classes_and_architecture(tmp
         architecture="yolo", classes=["toad"], preprocessing={"name": "clahe"}
     )
 
+    with pytest.raises(UnsupportedCheckpointError, match="preprocessing"):
+        manifest.validate_compatibility(
+            architecture="yolo", classes=["toad"], preprocessing={"name": "none"}
+        )
+    manifest.validate_compatibility(
+        architecture="yolo",
+        classes=["toad"],
+        preprocessing={"name": "none"},
+        allow_preprocessing_override=True,
+    )
+
     with pytest.raises(UnsupportedCheckpointError):
         manifest.validate_compatibility(
             architecture="rtdetr", classes=["toad"], preprocessing={"name": "clahe"}

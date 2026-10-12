@@ -37,6 +37,7 @@ class ModelPreset:
     license: str = "unknown"
     supports_inference: bool = True
     supports_training: bool = True
+    inference_image_size: int = 640
     supported_preprocessing: tuple[str, ...] = ("rgb", "grayscale", "clahe")
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -57,6 +58,8 @@ class ModelPreset:
             raise ValidationError("Model preset id, size, and checkpoint reference are required")
         if not self.supports_inference and not self.supports_training:
             raise ValidationError("Model preset must support inference or training")
+        if self.inference_image_size <= 0:
+            raise ValidationError("Model preset inference_image_size must be positive")
 
     @property
     def source(self) -> ModelSource:

@@ -331,6 +331,7 @@ def test_ultralytics_adapter_passes_resume_checkpoint_to_training(tmp_path: Path
     parent = tmp_path / "parent.pt"
     parent.write_bytes(b"parent")
     preprocessing = InferenceConfig(model_id="fixture").preprocessing_config.to_dict()
+    run_preprocessing = PreprocessingConfig(grayscale_enabled=True).to_dict()
     manifest = CheckpointManifest.create(
         parent,
         model_id="fixture",
@@ -345,7 +346,11 @@ def test_ultralytics_adapter_passes_resume_checkpoint_to_training(tmp_path: Path
     result = detector.train(
         dataset_yaml,
         tmp_path / "output",
-        {"preprocessing": preprocessing, "epochs": 1},
+        {
+            "preprocessing": run_preprocessing,
+            "epochs": 1,
+            "metadata": {"allow_checkpoint_preprocessing_override": True},
+        },
         resume_from=manifest,
     )
 

@@ -3,6 +3,7 @@
 
   const PREDICTION_PREFIX = "amphilens:prediction-preferences:v1:";
   const WORKFLOW_PREFIX = "amphilens:workflow-preferences:v1:";
+  const MODEL_PREFIX = "amphilens:model-preferences:v1:";
   const OMITTED_TYPES = new Set([
     "button",
     "checkbox",
@@ -21,6 +22,10 @@
 
   function workflowStorageKey(projectIdentity, view) {
     return `${WORKFLOW_PREFIX}${encodeURIComponent(String(projectIdentity || ""))}:${encodeURIComponent(String(view || ""))}`;
+  }
+
+  function modelStorageKey(projectIdentity, workflow, modelIdentity) {
+    return `${MODEL_PREFIX}${encodeURIComponent(String(projectIdentity || ""))}:${encodeURIComponent(String(workflow || ""))}:${encodeURIComponent(String(modelIdentity || ""))}`;
   }
 
   function isPreferenceControl(control) {
@@ -80,7 +85,38 @@
 
   function pageControls(container) {
     return Array.from(container?.querySelectorAll?.("input[name], select[name], textarea[name]") || [])
-      .filter(isPreferenceControl);
+      .filter((control) => isPreferenceControl(control) && !control.dataset?.modelPreference);
+  }
+
+  function saveModel(projectIdentity, workflow, modelIdentity, settings) {
+    if (!projectIdentity || !workflow || !modelIdentity || !settings) return;
+    try {
+      const values = {
+        short_side_dimension: String(settings.short_side_dimension ?? ""),
+        grayscale_enabled: Boolean(settings.grayscale_enabled),
+        clahe_enabled: Boolean(settings.clahe_enabled),
+      };
+      window.localStorage.setItem(
+        modelStorageKey(projectIdentity, workflow, modelIdentity),
+        JSON.stringify(values),
+      );
+    } catch {
+      // Preferences are optional; restricted or full browser storage should not block workflows.
+    }
+  }
+
+  function restoreModel(projectIdentity, workflow, modelIdentity) {
+    if (!projectIdentity || !workflow || !modelIdentity) return null;
+    return readObject(modelStorageKey(projectIdentity, workflow, modelIdentity));
+  }
+
+  function resetModel(projectIdentity, workflow, modelIdentity) {
+    if (!projectIdentity || !workflow || !modelIdentity) return;
+    try {
+      window.localStorage.removeItem(modelStorageKey(projectIdentity, workflow, modelIdentity));
+    } catch {
+      // A reset remains safe when browser storage is unavailable.
+    }
   }
 
   function detailsState(container) {
@@ -164,6 +200,6 @@
     applyViewState(container, state, keyPrefix);
   }
 
-  window.AmphiLensPredictionPreferences = { save, restore };
-  window.AmphiLensWorkflowState = { save: saveView, restore: restoreView };
+  window.AmphiLensPredictionPreferences = { save, restore, saveModel, restoreModel, resetModel };
+  window.AmphiLensWorkflowState = { save: saveView, restore: restoreView, saveModel, restoreModel, resetModel };
 })();

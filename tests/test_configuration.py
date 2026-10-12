@@ -83,6 +83,45 @@ def test_effective_configuration_accepts_explicit_cli_model_identity(tmp_path: P
     assert effective.architecture == "yolo"
 
 
+def test_selected_general_model_uses_metadata_or_requested_fallback_not_project_defaults(
+    tmp_path: Path,
+):
+    project = _project(
+        tmp_path,
+        ProjectConfig(
+            classes=["toad"],
+            model_preset="rtdetr-l",
+            preprocessing=PreprocessingConfig(
+                short_side_dimension=384,
+                grayscale_enabled=False,
+                clahe_enabled=False,
+            ),
+            image_size=320,
+        ),
+    )
+
+    effective = resolve_effective_configuration(
+        project,
+        use_model_metadata_defaults=True,
+        overrides={"model_preset": "yolo26-l"},
+    )
+
+    assert effective.model_preset == "yolo26-l"
+    assert effective.image_size == 640
+    assert effective.preprocessing.short_side_dimension == 640
+    assert effective.preprocessing.grayscale_enabled is True
+    assert effective.preprocessing.clahe_enabled is True
+
+    legacy_cli = resolve_effective_configuration(
+        project,
+        overrides={"model_preset": "yolo26-l"},
+    )
+    assert legacy_cli.image_size == 320
+    assert legacy_cli.preprocessing.short_side_dimension == 384
+    assert legacy_cli.preprocessing.grayscale_enabled is False
+    assert legacy_cli.preprocessing.clahe_enabled is False
+
+
 def test_checkpoint_configuration_is_authoritative(tmp_path: Path):
     project = _project(
         tmp_path,
@@ -115,19 +154,29 @@ def test_checkpoint_configuration_is_authoritative(tmp_path: Path):
     assert effective.source == "checkpoint"
 
 
-def test_checkpoint_rejects_incompatible_model_or_preprocessing_override(tmp_path: Path):
+def test_checkpoint_rejects_model_override_and_scopes_preprocessing_override(tmp_path: Path):
     project = _project(tmp_path)
     manifest = _checkpoint(
         tmp_path,
         preprocessing=PreprocessingConfig(clahe_enabled=True).to_dict(),
     )
 
+    requested_preprocessing = PreprocessingConfig(clahe_enabled=False)
     with pytest.raises(UnsupportedCheckpointError, match="preprocessing"):
         resolve_effective_configuration(
             project,
             checkpoint_manifest=manifest,
-            overrides={"preprocessing": PreprocessingConfig(clahe_enabled=False)},
+            overrides={"preprocessing": requested_preprocessing},
         )
+
+    effective = resolve_effective_configuration(
+        project,
+        checkpoint_manifest=manifest,
+        allow_checkpoint_preprocessing_override=True,
+        overrides={"preprocessing": requested_preprocessing},
+    )
+    assert effective.preprocessing.clahe_enabled is False
+    assert effective.image_size == 512
 
     with pytest.raises(UnsupportedCheckpointError, match="model"):
         resolve_effective_configuration(
@@ -135,6 +184,34 @@ def test_checkpoint_rejects_incompatible_model_or_preprocessing_override(tmp_pat
             checkpoint_manifest=manifest,
             overrides={"model_preset": "yolo26-l"},
         )
+
+
+def test_checkpoint_without_preprocessing_metadata_uses_web_fallback(tmp_path: Path):
+    project = _project(tmp_path, config=ProjectConfig(classes=["toad"], image_size=1024))
+    checkpoint = tmp_path / "best.pt"
+    checkpoint.write_bytes(b"weights")
+    manifest = CheckpointManifest.create(
+        checkpoint,
+        model_id="rtdetr-l",
+        architecture="rtdetr",
+        classes=["toad"],
+        preprocessing={},
+        training_config={},
+    )
+
+    effective = resolve_effective_configuration(
+        project,
+        checkpoint_manifest=manifest,
+        use_model_metadata_defaults=True,
+    )
+
+    assert effective.image_size == 640
+    assert effective.preprocessing.short_side_dimension == 640
+    assert effective.preprocessing.grayscale_enabled is True
+    assert effective.preprocessing.clahe_enabled is True
+
+    legacy_cli = resolve_effective_configuration(project, checkpoint_manifest=manifest)
+    assert legacy_cli.image_size == 1024
 
 
 def test_checkpoint_accepts_explicit_overrides_that_match_its_metadata(tmp_path: Path):
@@ -194,7 +271,7 @@ def test_unmanifested_checkpoint_is_explicitly_less_reproducible(tmp_path: Path)
     assert any("checkpoint metadata" in warning.lower() for warning in effective.warnings)
 
 
-def test_hosted_model_uses_project_preprocessing_for_inference_and_training(tmp_path: Path):
+def test_hosted_model_metadata_is_default_and_run_preprocessing_is_overridable(tmp_path: Path):
     from amphilens.core import ProjectManifest
     from amphilens.models.hosted_models import get_hosted_model
 
@@ -214,17 +291,29 @@ def test_hosted_model_uses_project_preprocessing_for_inference_and_training(tmp_
         hosted_model=hosted,
         use_source_classes=True,
     )
-    training = resolve_effective_configuration(project, hosted_model=hosted)
+    training = resolve_effective_configuration(
+        project,
+        hosted_model=hosted,
+        overrides={
+            "preprocessing": PreprocessingConfig(
+                short_side_dimension=384,
+                grayscale_enabled=False,
+                clahe_enabled=False,
+            )
+        },
+    )
 
     assert inference.model_preset == "amphilens-rtdetr-l"
     assert inference.architecture == "rtdetr"
-    assert inference.image_size == 512
+    assert inference.image_size == hosted.inference_image_size
     assert inference.classes == hosted.source_classes
-    assert inference.preprocessing.short_side_dimension == 512
-    assert inference.preprocessing.clahe_enabled is True
+    assert inference.preprocessing.to_dict() == hosted.preprocessing.to_dict()
+    assert training.preprocessing.short_side_dimension == 384
+    assert training.preprocessing.grayscale_enabled is False
+    assert training.preprocessing.clahe_enabled is False
+    assert training.image_size == hosted.inference_image_size
     assert inference.source == "huggingface"
     assert inference.hosted_model["revision"]
     assert training.architecture == "rtdetr"
     assert training.classes == tuple(project.classes)
-    assert training.preprocessing.to_dict() == inference.preprocessing.to_dict()
     assert training.hosted_model["source_class_order"] == list(hosted.source_classes)
