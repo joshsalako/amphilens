@@ -1323,6 +1323,10 @@ def test_hosted_training_uses_selected_architecture_checkpoint_and_target_classe
     assert observed["architecture"] == "yolo"
     assert observed["classes"] == ["toad", "mammal"]
     assert observed["model_id"] == "amphilens-yolo26-m"
+    assert observed["effective"]["classes"] == ["toad", "mammal"]
+    assert observed["effective"]["hosted_model"]["source_class_order"] == list(
+        hosted.get_hosted_model("amphilens-yolo26-m").source_classes
+    )
     assert observed["effective"]["image_size"] == 1152
     assert observed["effective"]["preprocessing"]["short_side_dimension"] == 384
     assert observed["effective"]["preprocessing"]["grayscale_enabled"] is False

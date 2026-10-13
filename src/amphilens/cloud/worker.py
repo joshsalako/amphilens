@@ -211,8 +211,6 @@ def _load_training_detector(
                 )
         if effective.get("architecture") != hosted.architecture:
             raise ValidationError("Hosted training architecture does not match the pinned model")
-        if list(effective.get("classes", [])) != list(hosted.source_classes):
-            raise ValidationError("Hosted training classes do not match the pinned model")
 
         if progress_callback is not None:
             progress_callback(
@@ -228,10 +226,12 @@ def _load_training_detector(
             cache_commit=model_cache_commit,
             progress_callback=progress_callback,
         )
+        # Preserve the source class order in hosted_model metadata for head adaptation, while
+        # exposing the target project classes to the trainer.
         return load_detector(
             checkpoint,
             architecture=hosted.architecture,
-            classes=list(hosted.source_classes),
+            classes=list(effective.get("classes", [])),
             model_id=hosted.model_id,
             preprocessing=dict(effective["preprocessing"]),
         )
@@ -385,6 +385,9 @@ def run_remote_training(
                 allow_preprocessing_override=bool(
                     submitted_config.get("allow_checkpoint_preprocessing_override", False)
                 ),
+                allow_class_override=bool(
+                    submitted_config.get("allow_checkpoint_class_override", False)
+                ),
             )
         else:
 
@@ -439,6 +442,9 @@ def run_remote_training(
                 "dataset": dataset_metadata,
                 "allow_checkpoint_preprocessing_override": bool(
                     submitted_config.get("allow_checkpoint_preprocessing_override", False)
+                ),
+                "allow_checkpoint_class_override": bool(
+                    submitted_config.get("allow_checkpoint_class_override", False)
                 ),
             },
         )

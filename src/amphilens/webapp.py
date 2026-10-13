@@ -1134,6 +1134,7 @@ def _project_summary(store: ProjectStore) -> dict[str, Any]:
                     "name": path.parent.name,
                     "model_id": checkpoint.model_id,
                     "architecture": checkpoint.architecture,
+                    "classes": list(checkpoint.classes),
                     "preprocessing": checkpoint.preprocessing,
                     "image_size": checkpoint.training_config.get("image_size"),
                 }
@@ -1944,6 +1945,7 @@ def run_training_job(
         checkpoint_manifest=checkpoint_manifest,
         checkpoint_path=checkpoint or None,
         hosted_model=hosted_model,
+        target_classes=tuple(project.classes),
         use_model_metadata_defaults=True,
         allow_checkpoint_preprocessing_override=True,
         overrides=overrides,
@@ -1957,6 +1959,7 @@ def run_training_job(
             checkpoint_manifest=checkpoint_manifest,
             preprocessing=effective.preprocessing.to_dict(),
             allow_preprocessing_override=True,
+            allow_class_override=checkpoint_manifest is not None,
         )
         if checkpoint
         else load_preset_detector(
@@ -1997,6 +2000,7 @@ def run_training_job(
             metadata={
                 "effective_configuration": effective.to_dict(),
                 "allow_checkpoint_preprocessing_override": checkpoint_manifest is not None,
+                "allow_checkpoint_class_override": checkpoint_manifest is not None,
             },
         ),
         preprocessing=effective.preprocessing,
@@ -2214,6 +2218,7 @@ def run_cloud_training_job(
         checkpoint_manifest=checkpoint_manifest,
         checkpoint_path=checkpoint or None,
         hosted_model=hosted_model,
+        target_classes=tuple(project.classes),
         use_model_metadata_defaults=True,
         allow_checkpoint_preprocessing_override=True,
         overrides=overrides,
@@ -2236,6 +2241,7 @@ def run_cloud_training_job(
             else "separate-snapshot"
         ),
         "allow_checkpoint_preprocessing_override": checkpoint_manifest is not None,
+        "allow_checkpoint_class_override": checkpoint_manifest is not None,
         "snapshot_ids": {
             "train": snapshot.manifest.snapshot_id,
             **(

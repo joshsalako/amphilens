@@ -40,6 +40,7 @@ class EffectiveRunConfiguration:
     source: str
     warnings: tuple[str, ...] = ()
     hosted_model: dict[str, Any] | None = None
+    base_classes: tuple[str, ...] | None = None
 
     @property
     def fingerprint(self) -> str:
@@ -64,6 +65,7 @@ class EffectiveRunConfiguration:
             "source": self.source,
             "warnings": list(self.warnings),
             "hosted_model": self.hosted_model,
+            "base_classes": list(self.base_classes) if self.base_classes is not None else None,
         }
         if include_fingerprint:
             payload["fingerprint"] = self.fingerprint
@@ -115,6 +117,7 @@ def resolve_effective_configuration(
     checkpoint_path: str | Path | None = None,
     hosted_model: HostedModel | None = None,
     use_source_classes: bool = False,
+    target_classes: tuple[str, ...] | list[str] | None = None,
     use_model_metadata_defaults: bool = False,
     allow_checkpoint_preprocessing_override: bool = False,
     overrides: dict[str, Any] | None = None,
@@ -124,17 +127,26 @@ def resolve_effective_configuration(
     values = dict(overrides or {})
     warnings: list[str] = []
     hosted_metadata = hosted_model.to_summary() if hosted_model else None
+    base_classes: tuple[str, ...] | None = None
+
+    def selected_target_classes(default: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+        values = default if target_classes is None else target_classes
+        selected = tuple(str(value).strip() for value in values)
+        if not selected or any(not value for value in selected):
+            raise ValidationError("At least one non-empty target class is required")
+        if len(selected) != len(set(selected)):
+            raise ValidationError("Target classes must be unique")
+        return selected
 
     if checkpoint_manifest is not None and hosted_model is not None:
         raise UnsupportedCheckpointError("Choose either a project checkpoint or an AmphiLens model")
     if checkpoint_manifest is not None:
         checkpoint_manifest.validate()
-        if checkpoint_manifest.classes != project.classes:
-            raise UnsupportedCheckpointError("Checkpoint classes do not match the project classes")
         model_id = checkpoint_manifest.model_id
         architecture = checkpoint_manifest.architecture
         model_preset = model_id
-        classes = tuple(project.classes)
+        base_classes = tuple(checkpoint_manifest.classes)
+        classes = selected_target_classes(tuple(checkpoint_manifest.classes))
         preprocessing = _metadata_preprocessing(checkpoint_manifest.preprocessing)
         checkpoint_size = _checkpoint_input_size(checkpoint_manifest)
         image_size = checkpoint_size or (
@@ -176,7 +188,9 @@ def resolve_effective_configuration(
         model_id = hosted_model.model_id
         model_preset = hosted_model.model_id
         architecture = hosted_model.architecture
-        classes = hosted_model.source_classes if use_source_classes else tuple(project.classes)
+        base_classes = tuple(hosted_model.source_classes)
+        default_classes = hosted_model.source_classes if use_source_classes else project.classes
+        classes = selected_target_classes(default_classes)
         preprocessing = hosted_model.preprocessing
         image_size = hosted_model.inference_image_size
         source = "huggingface"
@@ -204,7 +218,7 @@ def resolve_effective_configuration(
         preset = ModelCatalog().get(model_preset)
         model_id = str(values.pop("model_id", preset.model_id))
         architecture = str(values.pop("architecture", preset.architecture))
-        classes = tuple(project.classes)
+        classes = selected_target_classes(tuple(project.classes))
         if architecture not in {"yolo", "rtdetr", "faster_rcnn"}:
             raise ValidationError(f"Unsupported detector architecture: {architecture}")
         default_preprocessing = (
@@ -259,6 +273,7 @@ def resolve_effective_configuration(
         source=source,
         warnings=tuple(warnings),
         hosted_model=hosted_metadata,
+        base_classes=base_classes,
     )
 
 

@@ -212,6 +212,7 @@ if typer is not None:
             project,
             checkpoint_manifest=checkpoint_manifest,
             checkpoint_path=checkpoint,
+            target_classes=tuple(selected_snapshot.manifest.classes),
             overrides=overrides,
         )
         service, credentials = _cloud_service(project_dir)
@@ -245,6 +246,7 @@ if typer is not None:
                 "device": "cuda",
                 "evaluation": "not evaluated",
                 "freeze_strategy": "paper-phased",
+                "allow_checkpoint_class_override": checkpoint_manifest is not None,
             },
             consent=CloudConsent(
                 acknowledged=True,
@@ -459,6 +461,7 @@ if typer is not None:
             project,
             checkpoint_manifest=checkpoint_manifest,
             checkpoint_path=checkpoint,
+            target_classes=tuple(selected_snapshot.manifest.classes),
             overrides=overrides,
         )
         detector = (
@@ -469,6 +472,7 @@ if typer is not None:
                 model_id=effective.model_id,
                 checkpoint_manifest=checkpoint_manifest,
                 preprocessing=effective.preprocessing.to_dict(),
+                allow_class_override=checkpoint_manifest is not None,
             )
             if checkpoint is not None
             else load_preset_detector(
@@ -488,7 +492,10 @@ if typer is not None:
                 device=effective.device,
                 freeze_strategy=effective.freeze_strategy,
                 preprocessing=effective.preprocessing,
-                metadata={"effective_configuration": effective.to_dict()},
+                metadata={
+                    "effective_configuration": effective.to_dict(),
+                    "allow_checkpoint_class_override": checkpoint_manifest is not None,
+                },
             ),
             preprocessing=effective.preprocessing,
             resume_from=parent_manifest,
@@ -668,7 +675,7 @@ if typer is not None:
             checkpoint_manifest = ModelRegistry(registry_dir).resolve(
                 resolved_model_id,
                 architecture=effective.architecture,
-                classes=manifest.classes,
+                classes=list(effective.classes),
                 preprocessing=effective.preprocessing.to_dict(),
             )
             effective = resolve_effective_configuration(

@@ -274,6 +274,8 @@ class CloudTrainingService:
         base_hash = _file_hash(checkpoint_path) if checkpoint_path else ""
         if base_manifest is not None and base_hash != base_manifest.sha256:
             raise ValidationError("Base checkpoint hash does not match its manifest")
+        if base_manifest is not None:
+            normalized_training["allow_checkpoint_class_override"] = True
 
         estimate = self.estimate(
             snapshot.root,

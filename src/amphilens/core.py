@@ -571,13 +571,14 @@ class CheckpointManifest:
         classes: Iterable[str],
         preprocessing: dict[str, Any],
         allow_preprocessing_override: bool = False,
+        allow_class_override: bool = False,
     ) -> None:
         self.validate()
         if self.architecture != architecture:
             raise UnsupportedCheckpointError(
                 f"Checkpoint architecture {self.architecture!r} does not match {architecture!r}"
             )
-        if self.classes != list(classes):
+        if not allow_class_override and self.classes != list(classes):
             raise UnsupportedCheckpointError("Checkpoint classes do not match the project classes")
         if (
             not allow_preprocessing_override

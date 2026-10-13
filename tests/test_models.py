@@ -378,6 +378,98 @@ def test_ultralytics_adapter_passes_resume_checkpoint_to_training(
     assert model.train_calls["val"] is True
 
 
+def test_ultralytics_fine_tuning_with_new_classes_uses_adapted_model_not_strict_resume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    _stub_ultralytics_trainers(monkeypatch)
+    dataset_yaml = tmp_path / "dataset.yaml"
+    dataset_yaml.write_text('{"train":"images","val":"images"}\n', encoding="utf-8")
+    parent = tmp_path / "parent.pt"
+    parent.write_bytes(b"parent")
+    preprocessing = InferenceConfig(model_id="fixture").preprocessing_config.to_dict()
+    manifest = CheckpointManifest.create(
+        parent,
+        model_id="fixture",
+        architecture="yolo",
+        classes=["source_class"],
+        preprocessing=preprocessing,
+    )
+    detector = UltralyticsDetector(parent, "yolo", ["target_class"], model_id="fixture")
+    model = FakeUltralyticsModel(None)
+    detector._model = model
+    head_adaptation = {}
+
+    def record_head_adaptation(_model, **kwargs):
+        head_adaptation.update(kwargs)
+        return True
+
+    monkeypatch.setattr(
+        "amphilens.models.backends.reset_ultralytics_classification_head",
+        record_head_adaptation,
+    )
+
+    result = detector.train(
+        dataset_yaml,
+        tmp_path / "output",
+        {
+            "preprocessing": preprocessing,
+            "epochs": 1,
+            "metadata": {
+                "allow_checkpoint_class_override": True,
+                "effective_configuration": {"base_classes": ["source_class"]},
+            },
+        },
+        resume_from=manifest,
+    )
+
+    assert result.is_file()
+    assert "resume" not in model.train_calls
+    assert head_adaptation["source_classes"] == ["source_class"]
+    assert head_adaptation["target_classes"] == ["target_class"]
+
+
+def test_faster_rcnn_fine_tuning_with_new_classes_uses_adapted_state_dict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    parent = tmp_path / "parent.pt"
+    parent.write_bytes(b"parent")
+    preprocessing = InferenceConfig(model_id="fixture").preprocessing_config.to_dict()
+    manifest = CheckpointManifest.create(
+        parent,
+        model_id="fixture",
+        architecture="faster_rcnn",
+        classes=["source_class"],
+        preprocessing=preprocessing,
+    )
+    observed = {}
+
+    class FakeTrainer:
+        def __init__(self, classes):
+            observed["classes"] = classes
+
+        def train(self, _dataset_yaml, _output_dir, _config, **kwargs):
+            observed.update(kwargs)
+            return tmp_path / "adapted.pt"
+
+    monkeypatch.setattr("amphilens.models.faster_rcnn_training.FasterRCNNTrainer", FakeTrainer)
+    detector = FasterRCNNDetector(parent, ["target_class"], model_id="fixture")
+
+    result = detector.train(
+        tmp_path / "dataset.yaml",
+        tmp_path / "output",
+        {
+            "preprocessing": preprocessing,
+            "metadata": {"allow_checkpoint_class_override": True},
+        },
+        resume_from=manifest,
+    )
+
+    assert result == tmp_path / "adapted.pt"
+    assert observed["classes"] == ["target_class"]
+    assert observed["initial_checkpoint"] == parent
+    assert observed["resume_from"] is None
+
+
 def test_ultralytics_cloud_training_monitors_training_data_without_test_split(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

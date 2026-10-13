@@ -233,7 +233,9 @@ def test_checkpoint_accepts_explicit_overrides_that_match_its_metadata(tmp_path:
     assert effective.image_size == 512
 
 
-def test_checkpoint_class_mismatch_fails_before_a_run_can_start(tmp_path: Path):
+def test_checkpoint_training_uses_project_classes_and_prediction_uses_checkpoint_classes(
+    tmp_path: Path,
+):
     project = _project(tmp_path)
     checkpoint = tmp_path / "best.pt"
     checkpoint.write_bytes(b"weights")
@@ -245,8 +247,16 @@ def test_checkpoint_class_mismatch_fails_before_a_run_can_start(tmp_path: Path):
         preprocessing=PreprocessingConfig().to_dict(),
     )
 
-    with pytest.raises(UnsupportedCheckpointError, match="classes"):
-        resolve_effective_configuration(project, checkpoint_manifest=manifest)
+    prediction = resolve_effective_configuration(project, checkpoint_manifest=manifest)
+    training = resolve_effective_configuration(
+        project,
+        checkpoint_manifest=manifest,
+        target_classes=tuple(project.classes),
+    )
+
+    assert prediction.classes == ("frog",)
+    assert training.classes == tuple(project.classes)
+    assert training.base_classes == ("frog",)
 
 
 def test_discover_checkpoint_manifest_next_to_checkpoint(tmp_path: Path):

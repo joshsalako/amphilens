@@ -105,6 +105,12 @@ def test_checkpoint_compatibility_requires_matching_classes_and_architecture(tmp
     manifest.validate_compatibility(
         architecture="yolo", classes=["toad"], preprocessing={"name": "clahe"}
     )
+    manifest.validate_compatibility(
+        architecture="yolo",
+        classes=["frog"],
+        preprocessing={"name": "clahe"},
+        allow_class_override=True,
+    )
 
     with pytest.raises(UnsupportedCheckpointError, match="preprocessing"):
         manifest.validate_compatibility(

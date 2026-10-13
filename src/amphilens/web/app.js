@@ -438,8 +438,15 @@
     if (!select || !details || !mapping) return;
     const [, kind, selected] = String(select.value || "").match(/^(preset|checkpoint|hosted):(.*)$/s) || [];
     const model = kind === "hosted" ? hostedModelById(selected) : null;
-    details.hidden = !model;
-    details.innerHTML = model ? hostedModelDetails(model) : "";
+    const checkpoint = kind === "checkpoint"
+      ? (app.project?.checkpoints || []).find((item) => item.path === selected)
+      : null;
+    details.hidden = !model && !checkpoint;
+    details.innerHTML = model
+      ? hostedModelDetails(model)
+      : checkpoint
+        ? `<div><span class="field-title">Prediction classes</span><p class="field-help">This checkpoint was trained on: ${(checkpoint.classes || []).map(escapeHtml).join(", ") || "Class metadata unavailable"}. Predictions use these saved classes.</p></div>`
+        : "";
     mapping.hidden = !model;
     if (!model) {
       mapping.innerHTML = "";
@@ -718,6 +725,7 @@
       <form class="form-stack" data-form="training">
         <div class="field"><label for="training-data-mode">Dataset setup</label><select id="training-data-mode" name="data_mode"><option value="separate-snapshots" selected>Choose separate snapshots</option><option value="auto-split">Split one snapshot automatically</option><option value="training-monitor">Use training data for validation</option></select><span class="field-help" data-training-mode-help>Select training, validation, and test snapshots. Validation and test are optional.</span></div>
         <div class="field"><label for="training-snapshot" data-training-snapshot-label>Training snapshot</label><select id="training-snapshot" name="snapshot_path" required><option value="">Choose a dataset</option>${snapshotOptions}</select></div>
+        <p class="field-help" data-training-target-classes>Training uses this project’s selected classes: ${(app.project.classes || []).map(escapeHtml).join(", ")}. Fine-tuning can change the starting model’s labels; the saved checkpoint and its predictions use this target class list.</p>
         <div class="field" data-training-validation hidden><label for="training-validation-snapshot">Validation snapshot <span class="optional">optional</span></label><select id="training-validation-snapshot" name="validation_snapshot_path"><option value="">Use training snapshot for validation</option>${snapshotOptions}</select></div>
         <div class="field" data-training-test hidden><label for="training-test-snapshot">Test snapshot <span class="optional">optional</span></label><select id="training-test-snapshot" name="test_snapshot_path"><option value="">Skip final evaluation</option>${snapshotOptions}</select></div>
         <label class="consent-row" data-training-image-split hidden><input type="checkbox" name="allow_image_level_split"><span>Allow an image-level split if source groups cannot be kept together.</span></label>

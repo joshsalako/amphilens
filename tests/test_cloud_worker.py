@@ -67,7 +67,10 @@ def test_worker_rejects_payload_digest_mismatch(tmp_path):
         )
 
 
-def test_hosted_training_weights_are_fetched_and_verified_in_remote_cache(tmp_path, monkeypatch):
+@pytest.mark.parametrize("reordered_source_classes", [False, True])
+def test_hosted_training_weights_are_fetched_and_verified_in_remote_cache(
+    tmp_path, monkeypatch, reordered_source_classes
+):
     from amphilens.cloud import prediction
     from amphilens.cloud.worker import _load_training_detector
     from amphilens.models.hosted_models import get_hosted_model
@@ -100,11 +103,16 @@ def test_hosted_training_weights_are_fetched_and_verified_in_remote_cache(tmp_pa
     def progress(values):
         observed.setdefault("progress", []).append(values)
 
+    target_classes = (
+        list(reversed(hosted.source_classes))
+        if reordered_source_classes
+        else ["new_frog", "new_mammal"]
+    )
     detector = _load_training_detector(
         {
             "model_id": hosted.model_id,
             "architecture": hosted.architecture,
-            "classes": list(hosted.source_classes),
+            "classes": target_classes,
             "preprocessing": hosted.preprocessing.to_dict(),
             "hosted_model": metadata,
         },
@@ -121,7 +129,41 @@ def test_hosted_training_weights_are_fetched_and_verified_in_remote_cache(tmp_pa
     assert observed["checkpoint"] == checkpoint
     assert observed["load_kwargs"] == {
         "architecture": hosted.architecture,
-        "classes": list(hosted.source_classes),
+        "classes": target_classes,
         "model_id": hosted.model_id,
         "preprocessing": hosted.preprocessing.to_dict(),
     }
+
+
+@pytest.mark.parametrize(
+    ("changed_field", "message"),
+    [("architecture", "architecture"), ("sha256", "metadata.*sha256")],
+)
+def test_hosted_training_keeps_architecture_and_pinned_checkpoint_checks(
+    tmp_path, monkeypatch, changed_field, message
+):
+    from amphilens.core import ValidationError
+    from amphilens.models.hosted_models import get_hosted_model
+
+    hosted = get_hosted_model("amphilens-yolo26-m")
+    metadata = hosted.to_summary()
+    effective = {
+        "model_id": hosted.model_id,
+        "architecture": hosted.architecture,
+        "classes": ["new_frog"],
+        "preprocessing": hosted.preprocessing.to_dict(),
+        "hosted_model": metadata,
+    }
+    if changed_field == "architecture":
+        effective["architecture"] = "rtdetr"
+    else:
+        metadata[changed_field] = "0" * 64
+    monkeypatch.setattr(
+        "amphilens.cloud.prediction.download_verified_hosted_checkpoint",
+        lambda *_args, **_kwargs: pytest.fail("invalid pinned model must fail before download"),
+    )
+
+    with pytest.raises(ValidationError, match=message):
+        from amphilens.cloud.worker import _load_training_detector
+
+        _load_training_detector(effective, model_cache_root=tmp_path / "model-cache")

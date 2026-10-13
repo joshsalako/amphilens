@@ -353,9 +353,9 @@ class UltralyticsDetector:
             metadata.get("effective_configuration", {}) if isinstance(metadata, dict) else {}
         )
         hosted_model = effective_configuration.get("hosted_model", {})
-        source_classes = (
-            hosted_model.get("source_class_order") if isinstance(hosted_model, dict) else None
-        )
+        source_classes = effective_configuration.get("base_classes")
+        if source_classes is None and isinstance(hosted_model, dict):
+            source_classes = hosted_model.get("source_class_order")
         if source_classes is None:
             names = getattr(model, "names", None)
             if isinstance(names, dict):
@@ -381,6 +381,7 @@ class UltralyticsDetector:
         except (OSError, ValueError, TypeError):
             pass
         config["training_image_size"] = prepared_image_size
+        class_list_changed = resume_from is not None and list(resume_from.classes) != self.classes
         if resume_from:
             resume_from.validate_compatibility(
                 architecture=self.architecture,
@@ -389,6 +390,11 @@ class UltralyticsDetector:
                 allow_preprocessing_override=bool(
                     (config.get("metadata") or {}).get(
                         "allow_checkpoint_preprocessing_override", False
+                    )
+                ),
+                allow_class_override=bool(
+                    (config.get("metadata") or {}).get(
+                        "allow_checkpoint_class_override", False
                     )
                 ),
             )
@@ -437,7 +443,10 @@ class UltralyticsDetector:
             train_config = dict(base_train_config)
             train_config["name"] = f"phase-{phase_index}-{phase_name}"
             train_config["freeze"] = freeze_layers
-            if phase_index == 1 and resume_from is not None:
+            # A changed class list needs the adapted output head initialized from the
+            # loaded checkpoint weights. Ultralytics resume reloads the original model
+            # and optimizer state, which would discard or reject that adapted head.
+            if phase_index == 1 and resume_from is not None and not class_list_changed:
                 train_config["resume"] = str(resume_from.checkpoint_path)
             if progress_callback is not None:
 
@@ -668,8 +677,20 @@ class FasterRCNNDetector:
                         "allow_checkpoint_preprocessing_override", False
                     )
                 ),
+                allow_class_override=bool(
+                    (config.get("metadata") or {}).get(
+                        "allow_checkpoint_class_override", False
+                    )
+                ),
             )
-            resume_checkpoint = resume_from.checkpoint_path
+            # Load the source weights through the class-aware state-dict adapter when
+            # the output labels differ. A strict resume would try to restore the old
+            # classifier dimensions instead of fine-tuning the new head.
+            resume_checkpoint = (
+                None
+                if list(resume_from.classes) != self.classes
+                else resume_from.checkpoint_path
+            )
         else:
             resume_checkpoint = None
         if self.checkpoint is None and self.checkpoint_reference.startswith("torchvision://"):
@@ -694,6 +715,7 @@ def load_detector(
     checkpoint_manifest: CheckpointManifest | None = None,
     preprocessing: dict | None = None,
     allow_preprocessing_override: bool = False,
+    allow_class_override: bool = False,
 ):
     checkpoint_path = Path(checkpoint).expanduser().absolute()
     if not checkpoint_path.is_file():
@@ -706,6 +728,7 @@ def load_detector(
             classes=classes,
             preprocessing=preprocessing or {},
             allow_preprocessing_override=allow_preprocessing_override,
+            allow_class_override=allow_class_override,
         )
         if model_id is not None and checkpoint_manifest.model_id != model_id:
             raise UnsupportedCheckpointError(

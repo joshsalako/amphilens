@@ -491,9 +491,11 @@ class FasterRCNNTrainer:
                 else {}
             )
             hosted_model = effective.get("hosted_model", {})
-            if source_classes is None and isinstance(hosted_model, dict):
-                source_classes = hosted_model.get("source_class_order")
             source_state = checkpoint_metadata.get("model_state_dict", checkpoint_metadata)
+            if effective.get("base_classes") is not None:
+                source_classes = effective["base_classes"]
+            elif source_classes is None and isinstance(hosted_model, dict):
+                source_classes = hosted_model.get("source_class_order")
             compatible = adapt_faster_rcnn_state_dict(
                 source_state,
                 model.state_dict(),
