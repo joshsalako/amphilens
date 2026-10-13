@@ -19,6 +19,8 @@
     modalGpus: [],
     cloudProviderSettings: {},
     jobs: new Map(),
+    localJobOrder: new Map(),
+    nextLocalJobOrder: 0,
     jobMeta: new Map(),
     timestampJobs: new Map(),
     activeJob: null,
@@ -115,6 +117,18 @@
     return text ? text[0].toUpperCase() + text.slice(1) : "";
   }
 
+  function orderedLocalJobs() {
+    const entries = [...app.jobs.entries()];
+    for (const [id] of entries) {
+      if (!app.localJobOrder.has(id)) {
+        app.localJobOrder.set(id, app.nextLocalJobOrder++);
+      }
+    }
+    return entries.sort(([leftId], [rightId]) => (
+      app.localJobOrder.get(leftId) - app.localJobOrder.get(rightId)
+    ));
+  }
+
   function displayDevice(value) {
     const text = String(value || "").trim();
     if (/^modal\s+/i.test(text)) return text.replace(/^modal\s+/i, "");
@@ -190,7 +204,7 @@
     if (!panel) return;
     const openRuns = new Set([...panel.querySelectorAll(".activity-details[open]")].map((details) => details.closest("[data-activity-id]")?.dataset.activityId).filter(Boolean));
     const scrollTop = panel.querySelector(".activity-list")?.scrollTop || 0;
-    const local = [...app.jobs.entries()].slice(-12).reverse().map(([id, job]) => {
+    const local = orderedLocalJobs().slice(-12).reverse().map(([id, job]) => {
       const meta = app.jobMeta.get(id) || {};
       return activityCard(job, { id, title: meta.title || (meta.kind === "training" ? "Model training" : meta.kind === "predict" ? "Wildlife prediction" : "Workspace task"), kind: meta.kind || "" });
     });
@@ -883,6 +897,32 @@
     return job.name || job.run_id || job.id || job.job_id || "Cloud training job";
   }
 
+  function cloudJobRunId(job) {
+    return job.run_id || job.id || job.job_id || "";
+  }
+
+  function sortCloudJobs(jobs) {
+    return [...jobs].sort((left, right) => {
+      const leftCreated = String(left.created_at || "");
+      const rightCreated = String(right.created_at || "");
+      if (leftCreated !== rightCreated) return leftCreated > rightCreated ? -1 : 1;
+      const leftId = cloudJobRunId(left);
+      const rightId = cloudJobRunId(right);
+      return leftId === rightId ? 0 : leftId > rightId ? -1 : 1;
+    });
+  }
+
+  function upsertCloudJob(job) {
+    const runId = cloudJobRunId(job);
+    if (!runId) return;
+    const index = app.cloudJobs.findIndex((item) => cloudJobRunId(item) === runId);
+    if (index >= 0) {
+      app.cloudJobs[index] = job;
+      return;
+    }
+    app.cloudJobs = sortCloudJobs([...app.cloudJobs, job]);
+  }
+
   function cloudJobStatus(job) {
     return job.state || job.status || job.phase || "saved";
   }
@@ -934,7 +974,7 @@
   async function loadCloudJobs() {
     try {
       const result = await api("/api/cloud/jobs", { method: "GET", headers: {} });
-      app.cloudJobs = Array.isArray(result.jobs) ? result.jobs : [];
+      app.cloudJobs = sortCloudJobs(Array.isArray(result.jobs) ? result.jobs : []);
       renderCloudJobs();
       renderActivity();
       if (app.cloudJobs.some(activeCloudJob) && !app.cloudRefreshTimer) {
@@ -956,10 +996,10 @@
     try {
       const current = app.cloudJobs.filter(activeCloudJob);
       for (const job of current) {
-        const runId = job.run_id || job.id || job.job_id;
+        const runId = cloudJobRunId(job);
         if (!runId) continue;
         const result = await api(`/api/cloud/jobs/${encodeURIComponent(runId)}/refresh`, { method: "POST", body: "{}" });
-        if (result.job) app.cloudJobs = [result.job, ...app.cloudJobs.filter((item) => (item.run_id || item.id || item.job_id) !== runId)];
+        if (result.job) upsertCloudJob(result.job);
       }
       renderCloudJobs();
       renderActivity();
@@ -985,7 +1025,7 @@
       const job = result.job || {};
       const message = job.message || (action === "collect" ? "Checkpoint collection finished." : action === "cleanup" ? "Cleanup retry finished." : action === "cancel" ? "Cancellation requested." : "Cloud job refreshed.");
       app.cloudActionResult = result;
-      if (job.run_id) app.cloudJobs = [job, ...app.cloudJobs.filter((item) => item.run_id !== job.run_id)];
+      if (job.run_id) upsertCloudJob(job);
       toast(message);
       await loadCloudJobs();
     } catch (error) {
@@ -1349,7 +1389,7 @@
         form.elements.acknowledged.checked = false;
         const slot = document.getElementById("cloud-estimate-slot");
         if (slot) slot.innerHTML = renderCloudEstimate();
-        if (result.job && result.job.run_id) app.cloudJobs = [result.job, ...app.cloudJobs.filter((item) => (item.run_id || item.id) !== result.job.run_id)];
+        if (result.job && result.job.run_id) upsertCloudJob(result.job);
         await loadCloudJobs();
         renderActivity();
         toast(result.message || "Cloud training job submitted.");

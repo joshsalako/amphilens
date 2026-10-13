@@ -97,7 +97,11 @@ class CloudTrainingService:
         records = []
         for path in (self.store.root / "runs").glob("*/cloud-job.json"):
             records.append(CloudJobRecord.from_dict(read_json(path)))
-        return sorted(records, key=lambda item: item.updated_at, reverse=True)
+        return sorted(
+            records,
+            key=lambda item: (item.created_at, item.run_id),
+            reverse=True,
+        )
 
     def active_jobs(self) -> list[CloudJobRecord]:
         return [
