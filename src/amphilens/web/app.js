@@ -3,6 +3,8 @@
 
   const root = document.getElementById("view-root");
   const dialog = document.getElementById("project-dialog");
+  const pageToastRegion = document.getElementById("toast-region");
+  const dialogToastRegion = document.getElementById("dialog-toast-region");
   const app = {
     view: "home",
     project: null,
@@ -55,8 +57,14 @@
     return payload;
   }
 
+  function moveToasts(source, target) {
+    while (source?.firstChild && target) target.append(source.firstChild);
+  }
+
+  dialog.addEventListener("close", () => moveToasts(dialogToastRegion, pageToastRegion));
+
   function toast(message, isError = false) {
-    const region = document.getElementById("toast-region");
+    const region = dialog.open ? dialogToastRegion : pageToastRegion;
     const item = document.createElement("div");
     item.className = `toast${isError ? " error" : ""}`;
     item.setAttribute("role", isError ? "alert" : "status");
@@ -1060,6 +1068,7 @@
     if (!path.value && app.defaultProjectRoot) path.value = app.defaultProjectRoot;
     setProjectTab(defaultTab);
     if (!dialog.open) dialog.showModal();
+    moveToasts(pageToastRegion, dialogToastRegion);
     window.setTimeout(() => (defaultTab === "create" ? createForm.querySelector("input") : openForm.querySelector("input"))?.focus(), 0);
   }
 
