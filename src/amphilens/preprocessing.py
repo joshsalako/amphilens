@@ -12,6 +12,15 @@ class PreprocessingDependencyError(RuntimeError):
     """Raised when an enabled preprocessing operation needs an unavailable library."""
 
 
+class UnreadableImageError(ValueError):
+    """Raised when an image file cannot be fully decoded for preprocessing."""
+
+    def __init__(self, source: str | Path, reason: Exception):
+        self.source = str(source)
+        self.reason = f"{type(reason).__name__}: {reason}"
+        super().__init__(f"Cannot read image: {self.source} ({self.reason})")
+
+
 @dataclass(frozen=True, slots=True, init=False)
 class PreprocessingConfig:
     """Versioned preprocessing choices shared by every model backend."""
@@ -294,9 +303,11 @@ class PreprocessingService:
                 "Image preprocessing requires Pillow; install 'amphilens[inference]'"
             ) from exc
         try:
-            return Image.open(source).convert("RGB")
+            with Image.open(source) as image:
+                image.load()
+                return image.convert("RGB")
         except Exception as exc:  # noqa: BLE001 - normalize image decoder errors
-            raise ValueError(f"Cannot read image: {source}") from exc
+            raise UnreadableImageError(source, exc) from exc
 
     def _resize_scale(self, size: tuple[int, int]) -> float:
         if not self.config.resize_enabled:

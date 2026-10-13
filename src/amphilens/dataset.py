@@ -224,7 +224,11 @@ class DatasetSnapshot:
         preprocessing=None,
     ) -> Path:
         """Materialize a training directory without modifying the snapshot."""
-        from .preprocessing import PreprocessingConfig, PreprocessingService
+        from .preprocessing import (
+            PreprocessingConfig,
+            PreprocessingService,
+            UnreadableImageError,
+        )
 
         target = Path(destination).expanduser().resolve()
         if target.exists():
@@ -235,9 +239,15 @@ class DatasetSnapshot:
         label_dir.mkdir()
         service = PreprocessingService(PreprocessingConfig.from_any(preprocessing))
         training_image_size = self.training_canvas_size(service.config)
+        skipped_images: list[dict[str, str]] = []
+        prepared_count = 0
         for item in self.manifest.images:
             source = self.root / item.relative_path
-            transformed = service.transform(source)
+            try:
+                transformed = service.transform(source)
+            except UnreadableImageError as exc:
+                skipped_images.append({"path": item.relative_path, "reason": exc.reason})
+                continue
             if transformed.original_size != (item.width, item.height):
                 raise ValidationError(
                     f"Dataset image dimensions changed after import: {item.relative_path}"
@@ -260,6 +270,10 @@ class DatasetSnapshot:
             (label_dir / f"{Path(filename).stem}.txt").write_text(
                 "\n".join(lines) + ("\n" if lines else ""), encoding="utf-8"
             )
+            prepared_count += 1
+        if prepared_count == 0:
+            shutil.rmtree(target, ignore_errors=True)
+            raise ValidationError("No readable training images remain in this dataset snapshot")
         yaml_path = target / "dataset.yaml"
         yaml_path.write_text(
             json.dumps(
@@ -276,6 +290,12 @@ class DatasetSnapshot:
                     "preprocessing": service.config.to_dict(),
                     "short_side_dimension": service.config.short_side_dimension,
                     "training_image_size": training_image_size,
+                    "role_counts": {"train": prepared_count, "validation": prepared_count},
+                    "skipped_counts": {
+                        "train": len(skipped_images),
+                        "validation": len(skipped_images),
+                    },
+                    "skipped_images": {"train": skipped_images, "validation": skipped_images},
                 },
                 indent=2,
             )
@@ -375,7 +395,11 @@ def prepare_yolo_training_dataset(
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> Path:
     """Materialize role-specific, aspect-preserving images and labels for training."""
-    from .preprocessing import PreprocessingConfig, PreprocessingService
+    from .preprocessing import (
+        PreprocessingConfig,
+        PreprocessingService,
+        UnreadableImageError,
+    )
 
     if data_mode not in {"auto-split", "training-monitor", "separate-snapshots"}:
         raise ValidationError(f"Unsupported training data mode: {data_mode}")
@@ -429,20 +453,6 @@ def prepare_yolo_training_dataset(
         data_mode == "training-monitor"
         or (data_mode == "separate-snapshots" and validation_snapshot is None)
     )
-    hashes_by_role = {
-        role: {image.sha256 for image in role_images}
-        for role, (_, role_images) in partitions.items()
-    }
-    role_names = list(hashes_by_role)
-    for index, role in enumerate(role_names):
-        for other in role_names[index + 1 :]:
-            if same_snapshot_monitor and {role, other} == {"train", "validation"}:
-                continue
-            if hashes_by_role[role] & hashes_by_role[other]:
-                raise ValidationError(
-                    f"The {role} and {other} datasets contain duplicate images"
-                )
-
     config = PreprocessingConfig.from_any(preprocessing)
     service = PreprocessingService(config)
     canvas_size = max(snapshot.training_canvas_size(config) for snapshot in role_snapshots.values())
@@ -456,10 +466,13 @@ def prepare_yolo_training_dataset(
         label_roots[role].mkdir(parents=True)
 
     role_counts: dict[str, int] = {}
+    skipped_images: dict[str, list[dict[str, str]]] = {role: [] for role in partitions}
+    prepared_hashes_by_role: dict[str, set[str]] = {role: set() for role in partitions}
     total_images = sum(len(role_images) for _, role_images in partitions.values())
     completed_images = 0
     for role, (snapshot, role_images) in partitions.items():
         used_names: set[str] = set()
+        prepared_count = 0
         for item in role_images:
             try:
                 check_cancellation(
@@ -470,7 +483,31 @@ def prepare_yolo_training_dataset(
                 shutil.rmtree(target, ignore_errors=True)
                 raise
             source = snapshot.root / item.relative_path
-            transformed = service.transform(source)
+            try:
+                transformed = service.transform(source)
+            except UnreadableImageError as exc:
+                skipped_images[role].append(
+                    {"path": item.relative_path, "reason": exc.reason}
+                )
+                completed_images += 1
+                if progress_callback is not None:
+                    skipped_count = sum(len(items) for items in skipped_images.values())
+                    progress_callback(
+                        {
+                            "phase": "dataset_preparation",
+                            "message": (
+                                f"Skipped unreadable {role} image {item.relative_path}; "
+                                f"processed {completed_images} of {total_images} images "
+                                f"({skipped_count} skipped)"
+                            ),
+                            "role": role,
+                            "completed": completed_images,
+                            "skipped": skipped_count,
+                            "total": total_images,
+                            "progress": completed_images / total_images if total_images else 1.0,
+                        }
+                    )
+                continue
             if transformed.original_size != (item.width, item.height):
                 raise ValidationError(
                     f"Dataset image dimensions changed after import: {item.relative_path}"
@@ -481,6 +518,7 @@ def prepare_yolo_training_dataset(
                 filename = f"{Path(filename).stem}_{item.sha256[:10]}{Path(filename).suffix}"
             used_names.add(filename)
             transformed.image.save(image_roots[role] / filename)
+            prepared_hashes_by_role[role].add(item.sha256)
             width, height = transformed.processed_size
             lines = []
             for annotation in item.annotations:
@@ -495,39 +533,67 @@ def prepare_yolo_training_dataset(
             (label_roots[role] / f"{Path(filename).stem}.txt").write_text(
                 "\n".join(lines) + ("\n" if lines else ""), encoding="utf-8"
             )
+            prepared_count += 1
             completed_images += 1
             if progress_callback is not None:
+                skipped_count = sum(len(items) for items in skipped_images.values())
                 progress_callback(
                     {
                         "phase": "dataset_preparation",
-                        "message": f"Prepared {completed_images} of {total_images} images",
+                        "message": (
+                            f"Prepared {prepared_count} {role} images; processed "
+                            f"{completed_images} of {total_images} overall "
+                            f"({skipped_count} skipped)"
+                        ),
                         "role": role,
                         "completed": completed_images,
+                        "skipped": skipped_count,
                         "total": total_images,
                         "progress": completed_images / total_images if total_images else 1.0,
                     }
                 )
-        role_counts[role] = len(role_images)
+        role_counts[role] = prepared_count
+
+    if role_counts.get("train", 0) == 0:
+        shutil.rmtree(target, ignore_errors=True)
+        raise ValidationError("No readable training images remain after preprocessing")
+    role_names = list(prepared_hashes_by_role)
+    for index, role in enumerate(role_names):
+        for other in role_names[index + 1 :]:
+            if same_snapshot_monitor and {role, other} == {"train", "validation"}:
+                continue
+            if prepared_hashes_by_role[role] & prepared_hashes_by_role[other]:
+                shutil.rmtree(target, ignore_errors=True)
+                raise ValidationError(
+                    f"The {role} and {other} datasets contain duplicate readable images"
+                )
+    if role_counts.get("validation", 0) == 0:
+        validation_strategy = (
+            f"{validation_strategy}; training-set monitor "
+            "(no readable validation images)"
+        )
 
     dataset_config: dict[str, Any] = {
         "path": str(target),
         "train": "images/train",
-        "val": "images/validation",
+        "val": "images/validation" if role_counts.get("validation", 0) else "images/train",
         "labels": "labels",
         "names": {index: name for index, name in enumerate(expected_classes)},
         "validation_strategy": validation_strategy,
-        "evaluation": "test set available" if "test" in partitions else "not evaluated",
+        "evaluation": "test set available" if role_counts.get("test", 0) else "not evaluated",
         "preprocessing": config.to_dict(),
         "short_side_dimension": config.short_side_dimension,
         "training_image_size": canvas_size,
         "role_counts": role_counts,
+        "skipped_counts": {role: len(items) for role, items in skipped_images.items()},
+        "skipped_images": skipped_images,
         "snapshot_ids": {
             role: snapshot.manifest.snapshot_id for role, (snapshot, _) in partitions.items()
         },
         "data_mode": data_mode,
         "seed": seed,
     }
-    if "test" in partitions:
+    if role_counts.get("test", 0):
         dataset_config["test"] = "images/test"
     target.mkdir(parents=True, exist_ok=True)
     yaml_path = target / "dataset.yaml"
@@ -539,6 +605,8 @@ def prepare_yolo_training_dataset(
             "validation_strategy": validation_strategy,
             "snapshot_ids": dataset_config["snapshot_ids"],
             "role_counts": role_counts,
+            "skipped_counts": dataset_config["skipped_counts"],
+            "skipped_images": skipped_images,
             "seed": seed,
             "preprocessing": config.to_dict(),
             "short_side_dimension": config.short_side_dimension,

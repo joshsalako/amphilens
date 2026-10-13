@@ -237,7 +237,7 @@ def train_snapshot_and_register(
         dataset_metadata = read_json(dataset_yaml)
         config.evaluation = (
             "test set"
-            if "test" in dataset_metadata.get("role_counts", {})
+            if dataset_metadata.get("role_counts", {}).get("test", 0) > 0
             else "not evaluated"
         )
         config.metadata["dataset"] = {
@@ -247,6 +247,8 @@ def train_snapshot_and_register(
                 "validation_strategy",
                 "evaluation",
                 "role_counts",
+                "skipped_counts",
+                "skipped_images",
                 "snapshot_ids",
                 "seed",
                 "short_side_dimension",
@@ -267,11 +269,17 @@ def train_snapshot_and_register(
         raise
     check_cancellation(progress_callback, "Training canceled after dataset preparation.")
     if progress_callback is not None:
+        skipped_total = sum(dataset_metadata.get("skipped_counts", {}).values())
         progress_callback(
             {
                 "phase": "dataset_preparation",
-                "message": "Labeled images are ready for training",
+                "message": (
+                    "Labeled images are ready for training"
+                    if not skipped_total
+                    else f"Labeled images are ready; skipped {skipped_total} unreadable image(s)"
+                ),
                 "completed": sum(dataset_metadata["role_counts"].values()),
+                "skipped": skipped_total,
                 "total": sum(dataset_metadata["role_counts"].values()),
                 "progress": 1.0,
             }

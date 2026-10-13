@@ -129,11 +129,13 @@
     const countPhase = ["prediction", "image_transfer", "saving_results"].includes(details.phase);
     const completed = countPhase ? Number(details.completed) : NaN;
     const failed = countPhase ? Number(details.failed || 0) : NaN;
+    const skipped = countPhase ? Number(details.skipped || 0) : NaN;
     const remaining = countPhase ? Number(details.remaining) : NaN;
     const total = countPhase ? Number(details.total) : NaN;
     const counts = [
       Number.isFinite(completed) ? `${formatNumber(completed)} done` : "",
       Number.isFinite(failed) && failed > 0 ? `${formatNumber(failed)} failed` : "",
+      Number.isFinite(skipped) && skipped > 0 ? `${formatNumber(skipped)} skipped` : "",
       Number.isFinite(remaining) ? `${formatNumber(remaining)} remaining` : "",
     ].filter(Boolean).join(" · ");
     const epoch = Number(details.epoch);

@@ -1682,9 +1682,14 @@ def run_prediction_job(
                 "message": "Writing reports and updating the project",
                 "completed": summary.completed_images,
                 "failed": len(summary.failed_images),
+                "skipped": len(summary.skipped_images),
                 "total": summary.image_count,
                 "remaining": max(
-                    0, summary.image_count - summary.completed_images - len(summary.failed_images)
+                    0,
+                    summary.image_count
+                    - summary.completed_images
+                    - len(summary.failed_images)
+                    - len(summary.skipped_images),
                 ),
                 "progress": 1.0,
                 "device": getattr(detector, "device_name", effective.device),
@@ -1693,6 +1698,15 @@ def run_prediction_job(
     report = write_report(summary.predictions_csv, Path(output_dir) / "report")
     markdown = Path(report["markdown"])
     json_report = Path(report["summary_json"])
+    skipped_count = len(summary.skipped_images)
+    skipped_note = ""
+    if skipped_count:
+        examples = ", ".join(Path(path).name for path in summary.skipped_images[:3])
+        extra = f" and {skipped_count - 3} more" if skipped_count > 3 else ""
+        skipped_note = (
+            f" Skipped {skipped_count} unreadable image(s): {examples}{extra}. "
+            "Full paths and decoder errors are recorded in the run summary."
+        )
     if summary.interruption_reason:
         status = (
             "canceled"
@@ -1701,7 +1715,7 @@ def run_prediction_job(
         )
         message = (
             f"Prediction {status} after {summary.completed_images} of "
-            f"{summary.image_count} images. {summary.interruption_reason}"
+            f"{summary.image_count} images. {summary.interruption_reason}{skipped_note}"
         )
     elif request.execution != "local":
         provider_label = getattr(
@@ -1715,18 +1729,21 @@ def run_prediction_job(
             f"Processed {summary.completed_images} images on {detector.device_name}; "
             f"found {summary.detection_count} detections. Estimated {provider_label} spend: "
             f"${detector.estimated_cost_usd:.2f} of ${request.max_cost_usd:.2f}."
+            f"{skipped_note}"
         )
     else:
         message = (
             f"Processed {summary.completed_images} images on "
             f"{describe_device_name(effective.device)} with batch size "
             f"{effective.batch_size}; found {summary.detection_count} detections."
+            f"{skipped_note}"
         )
     return JobOutput(
         result={
             "message": message,
             "completed_images": summary.completed_images,
             "image_count": summary.image_count,
+            "skipped_image_count": skipped_count,
             "cancelled": bool(
                 summary.interruption_reason and "cancel" in summary.interruption_reason.lower()
             ),
@@ -1743,6 +1760,7 @@ def run_prediction_job(
             ),
             "paths": {
                 "csv": str(summary.predictions_csv),
+                "run_summary": str(summary.summary_json),
                 "report_markdown": str(markdown),
                 "report_json": str(json_report),
             },
@@ -1752,6 +1770,7 @@ def run_prediction_job(
                 "image_root": str(image_root_path),
                 "project_root": str(store.root),
                 "detection_count": summary.detection_count,
+                "skipped_image_count": skipped_count,
                 "run_name": run_name,
                 "execution": request.execution,
                 "gpu": request.gpu if request.execution != "local" else None,
@@ -2932,7 +2951,8 @@ def create_app(
             if (
                 run_manifest.kind != "inference"
                 or run_manifest.run_id != run_id
-                or run_manifest.status not in {"completed", "completed_with_failures"}
+                or run_manifest.status
+                not in {"completed", "completed_with_failures", "completed_with_skips"}
             ):
                 raise ValueError("Prediction run is not complete or does not match this job")
 

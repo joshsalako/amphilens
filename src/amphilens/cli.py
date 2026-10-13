@@ -704,6 +704,7 @@ if typer is not None:
                     "run_id": summary.run_id,
                     "completed_images": summary.completed_images,
                     "failed_images": summary.failed_images,
+                    "skipped_images": summary.skipped_images,
                     "detection_count": summary.detection_count,
                     "predictions_csv": str(summary.predictions_csv),
                 },

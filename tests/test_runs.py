@@ -3,6 +3,7 @@ import threading
 from pathlib import Path
 
 from amphilens.core import DetectionRecord, InferenceConfig
+from amphilens.preprocessing import UnreadableImageError
 from amphilens.runs import run_resumable_inference
 
 
@@ -89,6 +90,37 @@ def test_resumable_inference_records_failures_and_resumes(tmp_path: Path):
     progress = json.loads((tmp_path / "artifacts" / "progress.json").read_text())
     assert len(progress["completed_images"]) == 2
     assert json.loads(second.run_manifest.read_text())["status"] == "completed"
+
+
+def test_resumable_inference_skips_unreadable_images_and_continues(tmp_path: Path):
+    images = _images(tmp_path, 2)
+
+    class DetectorWithUnreadableImage(BatchRecordingDetector):
+        def predict(self, image_paths, config):
+            paths = list(image_paths)
+            if any(path.name == "00.jpg" for path in paths):
+                raise UnreadableImageError(paths[0], OSError("missing JPEG header"))
+            yield from super().predict(paths, config)
+
+    progress = []
+    result = run_resumable_inference(
+        DetectorWithUnreadableImage(),
+        images,
+        InferenceConfig(model_id="batch-recording", batch_size=2, run_id="run-skips"),
+        tmp_path / "skip-artifacts",
+        progress_callback=progress.append,
+    )
+
+    assert result.completed_images == 1
+    assert result.failed_images == []
+    assert result.skipped_images == [str(images[0].resolve())]
+    summary = json.loads(result.summary_json.read_text())
+    assert summary["status"] == "completed_with_skips"
+    assert summary["skipped_images"] == {
+        str(images[0].resolve()): "OSError: missing JPEG header"
+    }
+    assert summary["failed_images"] == {}
+    assert progress[-1]["completed"] + progress[-1]["skipped"] == progress[-1]["total"]
 
 
 def test_resumable_inference_sends_configured_batches_and_preserves_order(tmp_path: Path):

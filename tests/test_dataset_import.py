@@ -8,7 +8,12 @@ import pytest
 from PIL import Image
 
 from amphilens.core import ProjectManifest, ProjectStore, ValidationError
-from amphilens.dataset import DatasetImporter, DatasetMerger, DatasetSnapshot
+from amphilens.dataset import (
+    DatasetImporter,
+    DatasetMerger,
+    DatasetSnapshot,
+    prepare_yolo_training_dataset,
+)
 from amphilens.preprocessing import PreprocessingConfig
 
 
@@ -262,6 +267,49 @@ def test_snapshot_prepares_yolo_training_data_with_shared_preprocessing(tmp_path
     assert prepared["training_image_size"] == 64
     assert prepared["short_side_dimension"] == 20
     assert snapshot.training_canvas_size(PreprocessingConfig(short_side_dimension=20)) == 64
+
+
+def test_training_preparation_skips_unreadable_images_and_records_provenance(tmp_path: Path):
+    archive = _zip(
+        tmp_path / "training.zip",
+        {
+            "images/good.png": _image_bytes(),
+            "images/broken.png": _image_bytes(color=(10, 10, 10)),
+            "classes.txt": "toad\n",
+            "labels/good.txt": "0 0.5 0.5 0.25 0.25\n",
+            "labels/broken.txt": "0 0.5 0.5 0.25 0.25\n",
+        },
+    )
+    snapshot = DatasetImporter().import_archive(
+        archive, tmp_path / "snapshot", classes=["toad"]
+    )
+    broken = next(
+        item for item in snapshot.manifest.images if item.source_path.endswith("broken.png")
+    )
+    (snapshot.root / broken.relative_path).write_bytes(b"truncated image")
+    progress = []
+
+    dataset_yaml = prepare_yolo_training_dataset(
+        tmp_path / "prepared-training",
+        training_snapshot=snapshot,
+        data_mode="training-monitor",
+        preprocessing=PreprocessingConfig(short_side_dimension=20),
+        progress_callback=progress.append,
+    )
+
+    prepared = json.loads(dataset_yaml.read_text())
+    assert prepared["role_counts"] == {"train": 1, "validation": 1}
+    assert prepared["skipped_counts"] == {"train": 1, "validation": 1}
+    assert [item["path"] for item in prepared["skipped_images"]["train"]] == [
+        broken.relative_path
+    ]
+    assert [path.name for path in (dataset_yaml.parent / "images" / "train").iterdir()] == [
+        "good.png"
+    ]
+    assert (dataset_yaml.parent / "labels" / "train" / "good.txt").is_file()
+    assert not (dataset_yaml.parent / "labels" / "train" / "broken.txt").exists()
+    assert progress[-1]["completed"] == progress[-1]["total"] == 4
+    assert progress[-1]["skipped"] == 2
 
 
 def test_import_reports_validated_image_counts_and_stages_on_snapshot_filesystem(

@@ -15,7 +15,7 @@ from ..core import (
     UnsupportedCheckpointError,
     ValidationError,
 )
-from ..preprocessing import PreprocessingService
+from ..preprocessing import PreprocessingService, UnreadableImageError
 from .catalog import ModelPreset
 
 _ULTRALYTICS_AUGMENTATION = {
@@ -153,8 +153,11 @@ def _image_size(path: Path) -> tuple[int, int]:
         from PIL import Image
     except ImportError as exc:
         raise OptionalDependencyError("Image inference requires the 'inference' extra") from exc
-    with Image.open(path) as image:
-        return image.width, image.height
+    try:
+        with Image.open(path) as image:
+            return image.width, image.height
+    except Exception as exc:  # noqa: BLE001 - normalize image header errors for resilient runs
+        raise UnreadableImageError(path, exc) from exc
 
 
 def _inference_image(path: Path, config: InferenceConfig):
@@ -595,7 +598,6 @@ class FasterRCNNDetector:
         try:
             import numpy as np
             import torch
-            from PIL import Image
         except ImportError as exc:
             raise OptionalDependencyError(
                 "Faster R-CNN inference requires the 'inference' extra"
@@ -612,8 +614,7 @@ class FasterRCNNDetector:
             transformed_images = []
             tensors = []
             for path in batch_paths:
-                with Image.open(path) as image:
-                    dimensions.append(image.size)
+                dimensions.append(_image_size(path))
                 transformed = _inference_image(path, config)
                 transformed_images.append(transformed)
                 rgb = np.array(transformed.image, copy=True)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .cancellation import cancellation_requested
@@ -19,6 +19,7 @@ from .core import (
     utc_now,
 )
 from .inference import write_predictions_csv
+from .preprocessing import UnreadableImageError
 
 
 @dataclass(slots=True)
@@ -32,6 +33,7 @@ class RunSummary:
     summary_json: Path
     run_manifest: Path
     interruption_reason: str | None = None
+    skipped_images: list[str] = field(default_factory=list)
 
 
 class InferenceInterruption(RuntimeError):
@@ -86,7 +88,8 @@ def _report_inference_progress(
 ) -> None:
     if callback is None:
         return
-    remaining = max(0, total - completed - failed)
+    skipped = int(details.get("skipped", 0))
+    remaining = max(0, total - completed - failed - skipped)
     callback(
         {
             "phase": phase,
@@ -95,7 +98,7 @@ def _report_inference_progress(
             "failed": failed,
             "total": total,
             "remaining": remaining,
-            "progress": (completed + failed) / total if total else 1.0,
+            "progress": (completed + failed + skipped) / total if total else 1.0,
             **details,
         }
     )
@@ -136,6 +139,7 @@ def _run_resumable_inference(
         "model_id": config.model_id,
         "completed_images": [],
         "failed_images": {},
+        "skipped_images": {},
     }
     if progress_path.is_file():
         progress = read_json(progress_path)
@@ -143,6 +147,7 @@ def _run_resumable_inference(
             raise ValueError("Existing inference artifacts belong to a different run or model")
     completed = set(progress.get("completed_images", []))
     failures = dict(progress.get("failed_images", {}))
+    skips = dict(progress.get("skipped_images", {}))
     records = _load_jsonl(records_path)
     current_paths = {str(path) for path in paths}
     pending = [path for path in paths if str(path) not in completed]
@@ -183,11 +188,18 @@ def _run_resumable_inference(
                 completed.update(str(path) for path in successful_paths)
                 for path in successful_paths:
                     failures.pop(str(path), None)
+                    skips.pop(str(path), None)
                 attempted_this_run.update(str(path) for path in successful_paths)
                 effective_batch_size = max(effective_batch_size, len(successful_paths))
             else:
-                failures[str(successful_paths[0])] = f"{type(error).__name__}: {error}"
-                attempted_this_run.add(str(successful_paths[0]))
+                path = str(successful_paths[0])
+                if isinstance(error, UnreadableImageError):
+                    skips[path] = error.reason
+                    failures.pop(path, None)
+                else:
+                    failures[path] = f"{type(error).__name__}: {error}"
+                    skips.pop(path, None)
+                attempted_this_run.add(path)
             atomic_write_json(
                 progress_path,
                 {
@@ -195,12 +207,16 @@ def _run_resumable_inference(
                     "model_id": config.model_id,
                     "completed_images": sorted(completed),
                     "failed_images": failures,
+                    "skipped_images": skips,
                     "requested_batch_size": config.batch_size,
                     "effective_batch_size": effective_batch_size,
                 },
             )
             attempted_failures = sum(
                 1 for image in attempted_this_run if image in failures and image not in completed
+            )
+            attempted_skips = sum(
+                1 for image in attempted_this_run if image in skips and image not in completed
             )
             completed_count = sum(str(path) in completed for path in paths)
             _report_inference_progress(
@@ -210,6 +226,7 @@ def _run_resumable_inference(
                 total=len(paths),
                 completed=completed_count,
                 failed=attempted_failures,
+                skipped=attempted_skips,
                 device=getattr(detector, "device_name", config.device),
                 effective_batch_size=effective_batch_size or batch_size,
             )
@@ -222,6 +239,9 @@ def _run_resumable_inference(
         completed=sum(str(path) in completed for path in paths),
         failed=sum(
             1 for image in attempted_this_run if image in failures and image not in completed
+        ),
+        skipped=sum(
+            1 for image in attempted_this_run if image in skips and image not in completed
         ),
         device=getattr(detector, "device_name", config.device),
         effective_batch_size=effective_batch_size or batch_size,
@@ -236,12 +256,19 @@ def _run_resumable_inference(
         "image_count": len(paths),
         "completed_images": len(completed),
         "failed_images": failures,
+        "skipped_images": skips,
         "detection_count": len(records),
         "requested_batch_size": config.batch_size,
         "effective_batch_size": effective_batch_size,
         "status": "interrupted"
         if interruption_reason
-        else ("completed_with_failures" if failures else "completed"),
+        else (
+            "completed_with_failures"
+            if failures
+            else "completed_with_skips"
+            if skips
+            else "completed"
+        ),
         "interruption_reason": interruption_reason,
         "predictions_csv": str(predictions_csv),
     }
@@ -255,6 +282,7 @@ def _run_resumable_inference(
         image_count=len(paths),
         completed_images=len(completed),
         failed_images=sorted(failures),
+        skipped_images=sorted(skips),
         detection_count=len(records),
         predictions_csv=predictions_csv,
         summary_json=summary_path,

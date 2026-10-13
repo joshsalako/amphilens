@@ -28,7 +28,12 @@ from .dataset import (
 )
 from .execution import JobHandle, JobSpec, JobStatus, LocalExecutionBackend
 from .inference import read_predictions_csv
-from .preprocessing import PreprocessedImage, PreprocessingConfig, PreprocessingService
+from .preprocessing import (
+    PreprocessedImage,
+    PreprocessingConfig,
+    PreprocessingService,
+    UnreadableImageError,
+)
 from .reporting import write_report
 from .runs import RunSummary, run_resumable_inference
 
@@ -64,6 +69,7 @@ __all__ = [
     "PreprocessedImage",
     "PreprocessingConfig",
     "PreprocessingService",
+    "UnreadableImageError",
 ]
 
 __version__ = "0.1.0a1"

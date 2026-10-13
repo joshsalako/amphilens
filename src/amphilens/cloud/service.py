@@ -394,7 +394,7 @@ class CloudTrainingService:
             self._save(record)
             attempt = run_dir / "upload" / "attempt-1"
             prepared = attempt / "prepared-dataset"
-            prepare_yolo_training_dataset(
+            dataset_yaml = prepare_yolo_training_dataset(
                 prepared,
                 training_snapshot=snapshot,
                 validation_snapshot=(
@@ -410,6 +410,22 @@ class CloudTrainingService:
                 allow_image_level_fallback=allow_image_level_fallback,
                 preprocessing=effective.get("preprocessing"),
             )
+            prepared_dataset = read_json(dataset_yaml)
+            skipped_counts = prepared_dataset.get("skipped_counts", {})
+            skipped_total = sum(
+                count for count in skipped_counts.values() if isinstance(count, int)
+            )
+            if skipped_total:
+                record.progress_details = {
+                    "phase": "dataset_preparation",
+                    "message": (
+                        f"Prepared the training dataset; skipped {skipped_total} unreadable "
+                        "image(s) across its splits"
+                    ),
+                    "skipped": skipped_total,
+                    "skipped_by_role": skipped_counts,
+                }
+                self._save(record)
             mount_root = "/mnt/amphilens" if self.provider == "modal" else "/tmp/amphilens"
             mount = f"{mount_root}/jobs/{job_key}/dataset"
             payload_path = run_dir / "upload" / "payload.zip"
