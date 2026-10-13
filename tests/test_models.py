@@ -1,5 +1,6 @@
+import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 from PIL import Image
@@ -78,6 +79,15 @@ class FakeBaseTrainer:
 
     def final_eval(self):
         raise AssertionError("Cloud training must skip final evaluation")
+
+
+def _stub_ultralytics_trainers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep fake-model orchestration tests independent of optional Ultralytics."""
+    module_name = "amphilens.models.ultralytics_training"
+    trainers = ModuleType(module_name)
+    trainers.AmphiLensDetectionTrainer = type("AmphiLensDetectionTrainer", (), {})
+    trainers.AmphiLensRTDETRTrainer = type("AmphiLensRTDETRTrainer", (), {})
+    monkeypatch.setitem(sys.modules, module_name, trainers)
 
 
 def _image(tmp_path: Path) -> Path:
@@ -232,7 +242,10 @@ def test_ultralytics_adapter_runs_a_batch_and_maps_each_result(tmp_path: Path):
     assert [record.image_id for record in records] == ["first.jpg", "second.jpg"]
 
 
-def test_ultralytics_training_uses_prepared_dataset_canvas_without_resizing(tmp_path: Path):
+def test_ultralytics_training_uses_prepared_dataset_canvas_without_resizing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    _stub_ultralytics_trainers(monkeypatch)
     dataset_yaml = tmp_path / "dataset.yaml"
     dataset_yaml.write_text('{"training_image_size": 1280}\n', encoding="utf-8")
     detector = UltralyticsDetector(tmp_path / "base.pt", "yolo", ["toad"])
@@ -328,7 +341,10 @@ def test_faster_rcnn_prediction_keeps_the_preprocessed_short_side(
     assert model.batch_shapes == [(processed_size[1], processed_size[0])]
 
 
-def test_ultralytics_adapter_passes_resume_checkpoint_to_training(tmp_path: Path):
+def test_ultralytics_adapter_passes_resume_checkpoint_to_training(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    _stub_ultralytics_trainers(monkeypatch)
     dataset_yaml = tmp_path / "dataset.yaml"
     dataset_yaml.write_text('{"train":"images","val":"images"}\n', encoding="utf-8")
     parent = tmp_path / "parent.pt"
@@ -362,7 +378,10 @@ def test_ultralytics_adapter_passes_resume_checkpoint_to_training(tmp_path: Path
     assert model.train_calls["val"] is True
 
 
-def test_ultralytics_cloud_training_monitors_training_data_without_test_split(tmp_path: Path):
+def test_ultralytics_cloud_training_monitors_training_data_without_test_split(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    _stub_ultralytics_trainers(monkeypatch)
     dataset_yaml = tmp_path / "dataset.yaml"
     dataset_yaml.write_text('{"train":"images","val":"images"}\n', encoding="utf-8")
     detector = UltralyticsDetector(tmp_path / "base.pt", "yolo", ["toad"])
