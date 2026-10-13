@@ -104,7 +104,6 @@ amphilens cloud train /path/to/project \
   --snapshot /path/to/project/datasets/snapshot-123 \
   --gpu L4 --max-cost-usd 5
 amphilens cloud status /path/to/project cloud-0123456789ab
-amphilens cloud collect /path/to/project cloud-0123456789ab
 ```
 
 The CLI prints the estimate and requires confirmation before upload. A job is
@@ -127,10 +126,12 @@ the selected training settings and job identity are sent as invocation
 arguments. The worker checks the payload hash, source digest, class order,
 model configuration, and absolute deadline before training. It uses the same
 AmphiLens detector adapters and finalizer as local training. On success, it
-returns `best.pt`, `last.pt`, `metrics.json`, and `checkpoint.json` with hashes.
-The local app checks the returned job identity, file sizes, SHA-256 values,
-model compatibility, and checkpoint manifest before registering the checkpoint
-in the project. Validation data is used for early stopping in each of the two
+returns every regular file in the trainer's output directory, including nested
+phase outputs such as `results.csv`, plots, and checkpoints. The local app
+automatically downloads the files into `runs/<run-id>/results/`, checks the
+returned job identity, relative paths, file sizes, SHA-256 values, model
+compatibility, and checkpoint manifest, then registers the checkpoint in the
+project. Validation data is used for early stopping in each of the two
 freeze/unfreeze phases. If a test partition or test snapshot was selected, it
 is used only for final evaluation. Otherwise, the run records
 `evaluation: not evaluated` and skips final evaluation. The returned
@@ -139,16 +140,20 @@ is used only for final evaluation. Otherwise, the run records
 ## Status, cancel, and cleanup
 
 The saved cloud job list is shown on the **Train a model** page, including status,
-progress, environment, errors, logs, and the Modal dashboard link. Use **Refresh
-status**, **Cancel job**, and **Download and register checkpoint** as needed.
-The CLI supports the same actions:
+progress, environment, errors, and the Modal dashboard link. Refreshing a job
+also collects and verifies its outputs automatically. The matching run row lists
+the saved output directory and its files. Use **Cancel job** if needed. The CLI
+supports the same actions:
 
 ```bash
 amphilens cloud status PROJECT RUN_ID
 amphilens cloud cancel PROJECT RUN_ID
-amphilens cloud collect PROJECT RUN_ID
 amphilens cloud cleanup PROJECT RUN_ID
 ```
+
+`amphilens cloud status` refreshes the provider and automatically collects a
+successful run. `amphilens cloud collect PROJECT RUN_ID` remains available to
+retry collection manually if the saved job is marked incomplete.
 
 After collection, AmphiLens removes the remote job directory. If provider
 cleanup fails, the saved job record shows the failure and cleanup can be

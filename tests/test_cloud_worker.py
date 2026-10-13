@@ -6,7 +6,7 @@ import zipfile
 
 import pytest
 
-from amphilens.cloud.worker import _TailBuffer, safe_extract_payload
+from amphilens.cloud.worker import _regular_files, _TailBuffer, safe_extract_payload
 
 
 def _zip(entries: dict[str, bytes]) -> bytes:
@@ -50,6 +50,25 @@ def test_worker_log_buffer_keeps_only_the_tail():
     assert logs.write("first line\n") == 11
     assert logs.write("last line\n") == 10
     assert logs.getvalue() == "st line\n"
+
+
+def test_worker_lists_nested_regular_outputs_without_following_symlinks(tmp_path):
+    output = tmp_path / "run-output"
+    nested = output / "phase-1"
+    nested.mkdir(parents=True)
+    (output / "results.csv").write_text("epoch,loss\n1,0.5\n", encoding="utf-8")
+    (nested / "results.csv").write_text("epoch,loss\n1,0.6\n", encoding="utf-8")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("not a run output", encoding="utf-8")
+    try:
+        (output / "linked.txt").symlink_to(outside)
+        (output / "linked-directory").symlink_to(tmp_path, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlinks are not available: {exc}")
+
+    listed = {path.relative_to(output).as_posix() for path in _regular_files(output)}
+
+    assert listed == {"results.csv", "phase-1/results.csv"}
 
 
 @pytest.mark.parametrize("name", ["../escape.txt", "/absolute.txt", "dataset/../../escape.txt"])

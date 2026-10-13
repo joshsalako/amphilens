@@ -209,15 +209,40 @@ def _run_training(storage: _JobStorage, request_key: str, result_key: str) -> di
             model_cache_root=root / "model-cache",
         )
         if result.get("state") in {"finished", "success", "completed"}:
-            for name in ("best.pt", "last.pt", "metrics.json", "checkpoint.json"):
-                artifact = root / prefix / "results" / name
-                if not artifact.is_file():
-                    raise ValidationError(
-                        f"Managed training did not produce required artifact: {name}"
-                    )
-                storage.upload(artifact, f"{prefix}/results/{name}")
-                metadata = result.get("artifacts", {}).get(name, {})
-                metadata["remote_ref"] = _artifact_uri(storage.provider, f"{prefix}/results/{name}")
+            artifacts = result.get("artifacts")
+            required = {"best.pt", "last.pt", "metrics.json", "checkpoint.json"}
+            if not isinstance(artifacts, dict) or not required.issubset(artifacts):
+                raise ValidationError("Managed training did not return its required artifacts")
+            result_root = (root / prefix / "results").resolve()
+            if not result_root.is_relative_to(root.resolve()):
+                raise ValidationError("Managed training results are outside its job directory")
+            for name, metadata in artifacts.items():
+                if not isinstance(name, str) or not name or not isinstance(metadata, dict):
+                    raise ValidationError("Managed training returned an unsafe artifact path")
+                relative = PurePosixPath(name)
+                if (
+                    "\\" in name
+                    or relative.is_absolute()
+                    or not relative.parts
+                    or any(part in {"", ".", ".."} for part in relative.parts)
+                    or any(":" in part for part in relative.parts)
+                    or relative.as_posix() != name
+                ):
+                    raise ValidationError("Managed training returned an unsafe artifact path")
+                artifact = result_root.joinpath(*relative.parts)
+                if (
+                    artifact.is_symlink()
+                    or not artifact.is_file()
+                    or not artifact.resolve().is_relative_to(result_root)
+                ):
+                    raise ValidationError(f"Managed training artifact is missing: {name}")
+                if artifact.stat().st_size != metadata.get("size_bytes") or _sha256(
+                    artifact
+                ) != metadata.get("sha256"):
+                    raise ValidationError(f"Managed training artifact failed verification: {name}")
+                remote_key = f"{prefix}/results/{name}"
+                storage.upload(artifact, remote_key)
+                metadata["remote_ref"] = _artifact_uri(storage.provider, remote_key)
                 result["artifacts"][name] = metadata
         result_path = root / "result.json"
         _write_json(storage, result_path, result_key, result)

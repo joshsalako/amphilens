@@ -9,7 +9,7 @@ import shutil
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ..core import CheckpointManifest, ProjectStore, ValidationError, atomic_write_json, read_json
@@ -489,7 +489,13 @@ class CloudTrainingService:
 
     def refresh(self, run_id: str) -> CloudJobRecord:
         record = self.get_job(run_id)
-        if record.state in TERMINAL_CLOUD_JOB_STATES or not record.call_id:
+        if record.state == "verified" or record.state in {"failed", "canceled", "timed_out"}:
+            return record
+        if record.state in {"finished", "incomplete"} and self._remote_training_succeeded(
+            record.remote_result
+        ):
+            return self._collect_outputs(run_id)
+        if not record.call_id:
             return record
         if record.deadline_at and self._now().astimezone(timezone.utc) >= datetime.fromisoformat(
             record.deadline_at
@@ -621,18 +627,29 @@ class CloudTrainingService:
             record.error = str(result.get("error", "Remote training failed"))
         else:
             record.state, record.phase = "running", "remote-running"
-        return self._save(record)
+        self._save(record)
+        if record.state == "finished":
+            return self._collect_outputs(run_id)
+        return record
 
-    def collect(self, run_id: str) -> CloudJobRecord:
+    @staticmethod
+    def _remote_training_succeeded(result: Any) -> bool:
+        return isinstance(result, dict) and result.get("state") in {
+            "finished",
+            "success",
+            "completed",
+        }
+
+    def _collect_outputs(self, run_id: str, *, raise_errors: bool = False) -> CloudJobRecord:
         record = self.get_job(run_id)
-        retryable_result = (
-            record.state == "incomplete"
-            and record.remote_result.get("state") in {"finished", "success", "completed"}
-            and isinstance(record.remote_result.get("artifacts"), dict)
-        )
-        if record.state != "finished" and not retryable_result:
+        if record.state not in {"finished", "incomplete"} or not self._remote_training_succeeded(
+            record.remote_result
+        ):
             raise ValidationError("Cloud job must be finished before collecting its results")
         try:
+            record.phase = "collecting-results"
+            record.error = ""
+            self._save(record)
             result = record.remote_result
             self._verify_echo(record, result.get("echo"))
             artifacts = result.get("artifacts")
@@ -641,18 +658,83 @@ class CloudTrainingService:
                 missing = sorted(required - set(artifacts or {}))
                 raise ValidationError(f"Remote training is missing required artifacts: {missing}")
 
-            results_dir = self._run_path(run_id) / "results"
-            results_dir.mkdir(parents=True, exist_ok=True)
-            downloaded: dict[str, Path] = {}
+            safe_names: dict[str, tuple[PurePosixPath, dict[str, Any]]] = {}
+            folded_names: set[str] = set()
             for name, metadata in artifacts.items():
-                if Path(name).name != name or name in {".", ".."}:
+                if (
+                    not isinstance(name, str)
+                    or not name
+                    or "\\" in name
+                    or PurePosixPath(name).is_absolute()
+                    or PurePosixPath(name).as_posix() != name
+                    or any(part in {"", ".", ".."} for part in PurePosixPath(name).parts)
+                    or any(":" in part for part in PurePosixPath(name).parts)
+                    or not isinstance(metadata, dict)
+                ):
                     raise ValidationError(f"Remote artifact name is unsafe: {name}")
+                path = PurePosixPath(name)
+                folded = name.casefold()
+                if folded in folded_names:
+                    raise ValidationError(
+                        f"Remote artifact paths conflict on this filesystem: {name}"
+                    )
+                folded_names.add(folded)
                 remote_ref = metadata.get("remote_ref")
                 expected_hash = metadata.get("sha256")
-                if not isinstance(remote_ref, str) or not isinstance(expected_hash, str):
+                size = metadata.get("size_bytes")
+                if (
+                    not isinstance(remote_ref, str)
+                    or not remote_ref
+                    or "\\" in remote_ref
+                    or "?" in remote_ref
+                    or "#" in remote_ref
+                    or not remote_ref.endswith(f"/jobs/{record.job_key}/results/{name}")
+                    or not isinstance(expected_hash, str)
+                    or len(expected_hash) != 64
+                    or any(character not in "0123456789abcdef" for character in expected_hash)
+                    or not isinstance(size, int)
+                    or isinstance(size, bool)
+                    or size < 0
+                ):
                     raise ValidationError(f"Remote artifact metadata is invalid: {name}")
-                destination = results_dir / name
-                size = int(metadata.get("size_bytes", -1))
+                safe_names[name] = (path, metadata)
+            for name in safe_names:
+                parts = PurePosixPath(name).parts
+                for length in range(1, len(parts)):
+                    if PurePosixPath(*parts[:length]).as_posix() in safe_names:
+                        raise ValidationError(f"Remote artifact paths overlap: {name}")
+                    folded_prefix = PurePosixPath(
+                        *(part.casefold() for part in parts[:length])
+                    ).as_posix()
+                    if folded_prefix in folded_names:
+                        raise ValidationError(f"Remote artifact paths overlap: {name}")
+
+            project_root = self.store.root.resolve()
+            run_dir = self._run_path(run_id)
+            expected_run_dir = project_root / "runs" / run_id
+            if run_dir.resolve() != expected_run_dir:
+                raise ValidationError("Cloud run directory resolves outside the project")
+            results_dir = run_dir / "results"
+            results_dir.mkdir(parents=True, exist_ok=True)
+            results_root = results_dir.resolve()
+            if results_root != expected_run_dir / "results":
+                raise ValidationError("Cloud results directory resolves outside its run")
+            downloaded: dict[str, Path] = {}
+            for name, (relative, metadata) in safe_names.items():
+                remote_ref = metadata.get("remote_ref")
+                expected_hash = metadata.get("sha256")
+                size = metadata["size_bytes"]
+                destination = results_dir.joinpath(*relative.parts)
+                parent = results_dir
+                for part in relative.parts[:-1]:
+                    parent = parent / part
+                    if parent.is_symlink() or (parent.exists() and not parent.is_dir()):
+                        raise ValidationError(f"Local artifact path is unsafe: {name}")
+                    parent.mkdir(exist_ok=True)
+                    if not parent.resolve().is_relative_to(results_root):
+                        raise ValidationError(f"Local artifact path is outside the run: {name}")
+                if destination.is_symlink():
+                    raise ValidationError(f"Local artifact path is unsafe: {name}")
                 if (
                     destination.is_file()
                     and destination.stat().st_size == size
@@ -721,11 +803,21 @@ class CloudTrainingService:
                 preprocessing=expected_preprocessing,
             )
             atomic_write_json(results_dir / "checkpoint.json", local_manifest.to_dict())
-            checkpoint_dir = self.store.root / "checkpoints" / run_id
+            checkpoint_root = project_root / "checkpoints"
+            checkpoint_root.mkdir(parents=True, exist_ok=True)
+            if checkpoint_root.is_symlink() or checkpoint_root.resolve() != checkpoint_root:
+                raise ValidationError("Cloud checkpoint directory resolves outside the project")
+            checkpoint_dir = checkpoint_root / run_id
             checkpoint_dir.mkdir(parents=True, exist_ok=True)
+            if checkpoint_dir.is_symlink() or checkpoint_dir.resolve() != checkpoint_dir:
+                raise ValidationError("Cloud checkpoint directory resolves outside the project")
+            if (checkpoint_dir / "best.pt").is_symlink() or (
+                checkpoint_dir / "checkpoint.json"
+            ).is_symlink():
+                raise ValidationError("Cloud checkpoint output path is unsafe")
             shutil.copy2(best_path, checkpoint_dir / "best.pt")
             atomic_write_json(checkpoint_dir / "checkpoint.json", local_manifest.to_dict())
-            self._register_results(run_id, results_dir, checkpoint_dir)
+            self._register_results(run_id, results_dir, checkpoint_dir, safe_names)
             record.state, record.phase = "verified", "artifacts-verified-and-registered"
             record.error = ""
             record.checkpoint_manifest = local_manifest
@@ -734,17 +826,26 @@ class CloudTrainingService:
         except Exception as exc:
             record.state, record.phase = "incomplete", "artifact-verification-failed"
             record.error = self._safe_error(exc)
-            self._save(record)
-            raise
+            saved = self._save(record)
+            if raise_errors:
+                raise
+            return saved
 
     def cancel(self, run_id: str) -> CloudJobRecord:
         record = self.get_job(run_id)
-        if record.state in TERMINAL_CLOUD_JOB_STATES:
+        if record.state in TERMINAL_CLOUD_JOB_STATES or record.state == "finished":
             return record
         if record.call_id:
             self.transport.cancel(record.call_id)
         record.state, record.phase = "canceled", "canceled-by-user"
         return self._save(record)
+
+    def collect(self, run_id: str) -> CloudJobRecord:
+        """Retry output collection for a finished or incomplete cloud run."""
+        record = self.get_job(run_id)
+        if record.state == "verified":
+            return record
+        return self._collect_outputs(run_id, raise_errors=True)
 
     def retry_cleanup(self, run_id: str) -> CloudJobRecord:
         record = self.get_job(run_id)
@@ -761,20 +862,40 @@ class CloudTrainingService:
         if echo != expected:
             raise ValidationError("Remote result identity does not match this cloud training job")
 
-    def _register_results(self, run_id: str, results_dir: Path, checkpoint_dir: Path) -> None:
-        paths = {
-            results_dir / "best.pt": "cloud-checkpoint-best",
-            results_dir / "last.pt": "cloud-checkpoint-last",
-            results_dir / "metrics.json": "cloud-training-metrics",
-            results_dir / "checkpoint.json": "cloud-checkpoint-manifest",
-            checkpoint_dir / "best.pt": "cloud-checkpoint-best-registered",
-            checkpoint_dir / "checkpoint.json": "cloud-checkpoint-manifest-registered",
+    def _register_results(
+        self,
+        run_id: str,
+        results_dir: Path,
+        checkpoint_dir: Path,
+        output_files: dict[str, Any],
+    ) -> None:
+        artifact_types = {
+            "best.pt": "cloud-checkpoint-best",
+            "last.pt": "cloud-checkpoint-last",
+            "metrics.json": "cloud-training-metrics",
+            "checkpoint.json": "cloud-checkpoint-manifest",
         }
+        paths = {
+            results_dir.joinpath(*PurePosixPath(relative).parts): artifact_types.get(
+                relative, "cloud-training-output"
+            )
+            for relative in output_files
+        }
+        paths.update(
+            {
+                checkpoint_dir / "best.pt": "cloud-checkpoint-best-registered",
+                checkpoint_dir / "checkpoint.json": "cloud-checkpoint-manifest-registered",
+            }
+        )
         current = {item.relative_path: item for item in self.store.load_artifact_index()}
         from ..core import ArtifactRecord
 
         for path, artifact_type in paths.items():
-            if not path.is_file() or not path.resolve().is_relative_to(self.store.root):
+            if (
+                path.is_symlink()
+                or not path.is_file()
+                or not path.resolve().is_relative_to(self.store.root.resolve())
+            ):
                 raise ValidationError(f"Cloud artifact is missing or outside the project: {path}")
             relative = path.relative_to(self.store.root).as_posix()
             current[relative] = ArtifactRecord(

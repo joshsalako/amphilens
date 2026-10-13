@@ -274,7 +274,8 @@ different dataset or CVAT behavior.
 | Submit consented cloud training | **Train model** | `amphilens cloud train PROJECT` |
 | Refresh cloud job | **Refresh status** | `amphilens cloud status PROJECT RUN_ID` |
 | Cancel cloud job | **Cancel job** | `amphilens cloud cancel PROJECT RUN_ID` |
-| Verify and register cloud result | **Download and register checkpoint** | `amphilens cloud collect PROJECT RUN_ID` |
+| Verify and register cloud outputs | **Automatic on refresh** | `amphilens cloud status PROJECT RUN_ID` |
+| Retry incomplete cloud output collection | **Refresh** | `amphilens cloud collect PROJECT RUN_ID` |
 | Retry remote cleanup | **Retry remote cleanup** | `amphilens cloud cleanup PROJECT RUN_ID` |
 
 ## Non-negotiable behavior

@@ -28,7 +28,6 @@
     cvatServerUrl: "",
     cloudEstimate: null,
     cloudJobs: [],
-    cloudActionResults: new Map(),
     cloudJobsExpanded: false,
     cloudRefreshTimer: null,
     cloudRefreshRunning: false,
@@ -98,7 +97,7 @@
   }
 
   function activeCloudJob(job) {
-    return !["finished", "verified", "incomplete", "failed", "canceled", "timed_out"].includes(String(job?.state || "").toLowerCase());
+    return !["verified", "incomplete", "failed", "canceled", "timed_out"].includes(String(job?.state || "").toLowerCase());
   }
 
   function progressDetails(job, cloud = false) {
@@ -942,8 +941,9 @@
       const status = humanize(state);
       const phase = humanize(job.phase || "");
       const terminal = /complete|success|finish|verified/i.test(`${state} ${job.phase || ""}`);
-      const busy = activeCloudJob(job);
-      const verified = state === "verified" || job.phase === "artifacts-verified-and-registered";
+      const cancellable = ![
+        "finished", "verified", "incomplete", "failed", "canceled", "timed_out",
+      ].includes(String(state).toLowerCase());
       const requestedGpu = job.gpu || job.training_config?.gpu || "";
       const actualGpu = job.progress_details?.environment?.gpu || job.environment?.gpu || "";
       const gpuDetail = [
@@ -954,23 +954,16 @@
       const error = job.error ? `<p class="job-detail">${escapeHtml(job.error)}</p>` : "";
       const dashboard = job.dashboard_url ? `<a class="button small" href="${escapeHtml(safeHref(job.dashboard_url))}" target="_blank" rel="noopener noreferrer">Open provider job</a>` : "";
       const deadline = job.deadline_at ? new Date(job.deadline_at).toLocaleString() : "";
-      const actionResult = runId ? renderCloudActionResult(runId) : "";
-      return `<div class="cloud-job"><div class="cloud-job-copy"><strong>${escapeHtml(cloudJobTitle(job))}</strong><span>${escapeHtml(status)}${phase ? ` · ${escapeHtml(phase)}` : ""}${gpuDetail ? ` · ${escapeHtml(gpuDetail)}` : ""}${deadline ? ` · Deadline ${escapeHtml(deadline)}` : ""}</span>${job.progress != null ? `<span>Progress: ${escapeHtml(typeof job.progress === "object" ? job.progress.message || job.progress.percent || "In progress" : job.progress)}</span>` : ""}${consent ? `<span>${escapeHtml(consent)}</span>` : ""}${error}</div><div class="cloud-job-actions"><button class="button small" type="button" data-cloud-action="refresh" data-run-id="${escapeHtml(runId)}">Refresh</button>${dashboard}${busy ? `<button class="button small" type="button" data-cloud-action="cancel" data-run-id="${escapeHtml(runId)}">Cancel</button>` : ""}${terminal && !verified ? `<button class="button small" type="button" data-cloud-action="collect" data-run-id="${escapeHtml(runId)}">Collect checkpoint</button>` : ""}${job.cleanup_error || (terminal && job.cleanup_succeeded === false) ? `<button class="button small" type="button" data-cloud-action="cleanup" data-run-id="${escapeHtml(runId)}">Retry cleanup</button>` : ""}</div>${actionResult}</div>`;
+      const artifactNames = Object.keys(job.remote_result?.artifacts || {}).sort();
+      const outputDetails = runId && artifactNames.length
+        ? `<details class="cloud-job-output"><summary>Run outputs · ${artifactNames.length} files · runs/${escapeHtml(runId)}/results/</summary><ul>${artifactNames.map((name) => `<li>${escapeHtml(name)}</li>`).join("")}</ul></details>`
+        : "";
+      return `<div class="cloud-job"><div class="cloud-job-copy"><strong>${escapeHtml(cloudJobTitle(job))}</strong><span>${escapeHtml(status)}${phase ? ` · ${escapeHtml(phase)}` : ""}${gpuDetail ? ` · ${escapeHtml(gpuDetail)}` : ""}${deadline ? ` · Deadline ${escapeHtml(deadline)}` : ""}</span>${job.progress != null ? `<span>Progress: ${escapeHtml(typeof job.progress === "object" ? job.progress.message || job.progress.percent || "In progress" : job.progress)}</span>` : ""}${consent ? `<span>${escapeHtml(consent)}</span>` : ""}${error}</div><div class="cloud-job-actions"><button class="button small" type="button" data-cloud-action="refresh" data-run-id="${escapeHtml(runId)}">Refresh</button>${dashboard}${cancellable ? `<button class="button small" type="button" data-cloud-action="cancel" data-run-id="${escapeHtml(runId)}">Cancel</button>` : ""}${job.cleanup_error || (terminal && job.cleanup_succeeded === false) ? `<button class="button small" type="button" data-cloud-action="cleanup" data-run-id="${escapeHtml(runId)}">Retry cleanup</button>` : ""}</div>${outputDetails}</div>`;
     }).join("");
     const toggle = app.cloudJobs.length > previewCount
       ? `<button class="button small cloud-jobs-toggle" type="button" data-toggle-cloud-jobs aria-expanded="${app.cloudJobsExpanded}" aria-controls="cloud-jobs-list">${app.cloudJobsExpanded ? "Show fewer" : `Show all ${app.cloudJobs.length} jobs`}</button>`
       : "";
     slot.innerHTML = `<div id="cloud-jobs-list">${rows || `<p class="empty-inline">No saved cloud jobs for this project yet.</p>`}</div>${hiddenCount > 0 || app.cloudJobsExpanded ? toggle : ""}`;
-  }
-
-  function renderCloudActionResult(runId) {
-    const response = app.cloudActionResults.get(runId);
-    if (!response?.result || typeof response.result !== "object") return "";
-    const result = response.result || {};
-    const downloads = Array.isArray(result.downloads) ? result.downloads : [];
-    const paths = result.paths && typeof result.paths === "object" ? Object.entries(result.paths) : [];
-    if (!result.message && !paths.length && !downloads.length) return "";
-    return `<div class="cloud-collection-result">${result.message ? `<strong>${escapeHtml(result.message)}</strong>` : ""}${paths.length ? `<ul class="path-list">${paths.map(([label, value]) => `<li><span>${escapeHtml(label)}</span><span>${escapeHtml(value)}</span></li>`).join("")}</ul>` : ""}${downloads.length ? `<div class="download-list">${downloads.map((item) => `<a class="download-link" href="${escapeHtml(safeHref(item.url))}" download="${escapeHtml(item.filename || "")}">${escapeHtml(item.label || item.filename || "Download file")}</a>`).join("")}</div>` : ""}</div>`;
   }
 
   async function loadCloudJobs() {
@@ -1025,13 +1018,9 @@
     try {
       const result = await api(`/api/cloud/jobs/${encodeURIComponent(runId)}/${action}`, { method: "POST", body: "{}" });
       const job = result.job || {};
-      const message = job.message || (action === "collect" ? "Checkpoint collection finished." : action === "cleanup" ? "Cleanup retry finished." : action === "cancel" ? "Cancellation requested." : "Cloud job refreshed.");
-      if (result.result && typeof result.result === "object") {
-        app.cloudActionResults.set(runId, result);
-        app.cloudJobsExpanded = true;
-      }
       if (job.run_id) upsertCloudJob(job);
-      toast(message);
+      if (action === "cleanup") toast("Cleanup retry finished.");
+      else if (action === "cancel") toast("Cancellation requested.");
       await loadCloudJobs();
     } catch (error) {
       toast(error.message, true);

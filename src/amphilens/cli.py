@@ -273,7 +273,7 @@ if typer is not None:
 
     @cloud_app.command("collect")
     def cloud_collect(project_dir: Path, run_id: str):
-        """Download, verify, and register a finished cloud checkpoint."""
+        """Retry output collection for a finished or incomplete cloud run."""
         service, _ = _cloud_service(project_dir)
         record = service.collect(run_id)
         typer.echo(

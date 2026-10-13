@@ -199,6 +199,8 @@ def complete_remote_run(transport: FakeCloudTransport, payload: dict):
         "best.pt": best,
         "last.pt": b"remote-last-weights",
         "metrics.json": b'{"evaluation":"not evaluated"}\n',
+        "results.csv": b"epoch,metrics/precision(B)\n1,0.5\n",
+        "phase-1/results.csv": b"epoch,metrics/precision(B)\n1,0.4\n",
     }
     cloud_info = payload["echo"]
     checkpoint = {
@@ -220,7 +222,10 @@ def complete_remote_run(transport: FakeCloudTransport, payload: dict):
     artifacts["checkpoint.json"] = (json.dumps(checkpoint, sort_keys=True) + "\n").encode()
     remote_artifacts = {}
     for name, content in artifacts.items():
-        remote_ref = f"remote/{name}"
+        remote_ref = (
+            "modal-volume://amphilens-cloud-training/jobs/"
+            f"{payload['job_key']}/results/{name}"
+        )
         transport.downloads[remote_ref] = content
         remote_artifacts[name] = {
             "remote_ref": remote_ref,
@@ -329,18 +334,16 @@ def test_cloud_job_record_redacts_remote_tokens_and_signed_urls(tmp_path: Path):
         gpu="T4",
         data_mode="training-monitor",
     )
-    transport.poll_result = {
-        "state": "finished",
-        "progress_details": {
-            "message": "Bearer access-secret",
-            "log_tail": "https://storage.example/file?sig=signed-secret",
-        },
+    complete_remote_run(transport, transport.submissions[0])
+    transport.poll_result["progress_details"] = {
+        "message": "Bearer access-secret",
+        "log_tail": "https://storage.example/file?sig=signed-secret",
     }
 
     refreshed = service.refresh(record.run_id)
     saved = (store.root / "runs" / record.run_id / "cloud-job.json").read_text(encoding="utf-8")
 
-    assert refreshed.state == "finished"
+    assert refreshed.state == "verified"
     assert "access-secret" not in saved
     assert "signed-secret" not in saved
     assert "[redacted]" in saved
@@ -390,7 +393,7 @@ def test_cloud_run_can_resume_after_restart_and_register_only_local_verified_byt
     assert restarted_service.get_job(record.run_id).call_id == "call-1"
     assert restarted_service.list_jobs()[0].run_id == record.run_id
     complete_remote_run(transport, transport.submissions[0])
-    assert restarted_service.refresh(record.run_id).state == "finished"
+    assert restarted_service.refresh(record.run_id).state == "verified"
 
     verified = restarted_service.collect(record.run_id)
     best_path = store.root / "runs" / record.run_id / "results" / "best.pt"
@@ -400,6 +403,8 @@ def test_cloud_run_can_resume_after_restart_and_register_only_local_verified_byt
     assert verified.checkpoint_manifest.sha256 == hashlib.sha256(best_path.read_bytes()).hexdigest()
     indexed = {item.relative_path for item in store.load_artifact_index()}
     assert f"runs/{record.run_id}/results/best.pt" in indexed
+    assert f"runs/{record.run_id}/results/results.csv" in indexed
+    assert f"runs/{record.run_id}/results/phase-1/results.csv" in indexed
     assert f"checkpoints/{record.run_id}/best.pt" in indexed
 
 
@@ -421,24 +426,22 @@ def test_cloud_collect_retries_a_transient_artifact_transfer_failure(tmp_path: P
 
     def transient_download_failure(remote_ref, destination):
         nonlocal best_attempts, fail_last_once, successful_best_downloads
-        if remote_ref == "remote/best.pt" and best_attempts == 0:
+        if remote_ref.endswith("/results/best.pt") and best_attempts == 0:
             best_attempts += 1
             Path(destination).write_bytes(b"transiently corrupted transfer")
             return
-        if remote_ref == "remote/best.pt":
+        if remote_ref.endswith("/results/best.pt"):
             successful_best_downloads += 1
-        if remote_ref == "remote/last.pt" and fail_last_once:
+        if remote_ref.endswith("/results/last.pt") and fail_last_once:
             fail_last_once = False
             Path(destination).write_bytes(b"partial transfer")
             raise OSError("temporary storage DNS failure")
         original_download(remote_ref, destination)
 
     transport.download = transient_download_failure
-    service.refresh(record.run_id)
-
-    with pytest.raises(ValueError, match="hash mismatch"):
-        service.collect(record.run_id)
-    assert service.get_job(record.run_id).state == "incomplete"
+    refreshed = service.refresh(record.run_id)
+    assert refreshed.state == "incomplete"
+    assert "hash mismatch" in refreshed.error
 
     with pytest.raises(OSError, match="DNS failure"):
         service.collect(record.run_id)

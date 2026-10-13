@@ -2383,8 +2383,6 @@ def _create_cloud_action(
         record = service.refresh(run_id)
     elif action == "cancel":
         record = service.cancel(run_id)
-    elif action == "collect":
-        record = service.collect(run_id)
     elif action == "cleanup":
         record = service.retry_cleanup(run_id)
     else:
@@ -3196,7 +3194,7 @@ def create_app(
         try:
             run_id = request.path_params["run_id"]
             action = request.path_params["action"]
-            if action not in {"refresh", "cancel", "collect", "cleanup"}:
+            if action not in {"refresh", "cancel", "cleanup"}:
                 return _json({"detail": "Unsupported cloud job action"}, 404)
             store = active_store()
             payload = _create_cloud_action(
@@ -3207,28 +3205,6 @@ def create_app(
                 app.state.cloud_provider_settings_store,
             )
             response: dict[str, Any] = {"job": payload}
-            if action == "collect":
-                checkpoint_dir = store.root / "checkpoints" / run_id
-                checkpoint = checkpoint_dir / "best.pt"
-                manifest = checkpoint_dir / "checkpoint.json"
-                local_job = app.state.jobs.register_result(
-                    JobOutput(
-                        result={
-                            "message": f"Verified checkpoint registered at {checkpoint}.",
-                            "paths": {"checkpoint": str(checkpoint), "manifest": str(manifest)},
-                        },
-                        downloads=[
-                            DownloadArtifact(checkpoint, "Verified model checkpoint", "best.pt"),
-                            DownloadArtifact(
-                                manifest,
-                                "Checkpoint manifest",
-                                "checkpoint.json",
-                                "application/json",
-                            ),
-                        ],
-                    )
-                )
-                response["result"] = local_job.get("result")
             return _json(response)
         except Exception as exc:
             return _failure(exc)

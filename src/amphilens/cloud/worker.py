@@ -7,13 +7,14 @@ import hashlib
 import importlib.metadata
 import io
 import json
+import os
 import platform
 import re
 import shutil
 import signal
 import tempfile
 import zipfile
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -35,6 +36,18 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _regular_files(root: Path) -> Iterator[Path]:
+    for directory, directory_names, file_names in os.walk(root, followlinks=False):
+        directory_path = Path(directory)
+        directory_names[:] = sorted(
+            name for name in directory_names if not (directory_path / name).is_symlink()
+        )
+        for name in sorted(file_names):
+            path = directory_path / name
+            if not path.is_symlink() and path.is_file():
+                yield path
 
 
 def safe_extract_payload(
@@ -578,19 +591,36 @@ def run_remote_training(
             return _remote_result(payload, "timed_out", error="Cloud job deadline was reached")
         for name in ("best.pt", "last.pt", "metrics.json", "checkpoint.json"):
             source = output_root / name
-            if not source.is_file():
+            if not source.is_file() or source.is_symlink():
                 raise ValidationError(f"Remote training did not produce required artifact: {name}")
-            shutil.copy2(source, result_root / name)
+
+        output_root = output_root.resolve()
+        for source in _regular_files(output_root):
+            relative_path = source.relative_to(output_root).as_posix()
+            path = PurePosixPath(relative_path)
+            if (
+                not relative_path
+                or "\\" in relative_path
+                or path.is_absolute()
+                or not path.parts
+                or any(part in {"", ".", ".."} for part in path.parts)
+                or any(":" in part for part in path.parts)
+                or path.as_posix() != relative_path
+            ):
+                raise ValidationError("Training output contains an unsafe artifact path")
+            destination = result_root.joinpath(*path.parts)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
         remote_manifest = CheckpointManifest.from_dict(read_json(result_root / "checkpoint.json"))
         remote_manifest.checkpoint_path = f"{Path(expected_mount).parent}/results/best.pt"
         atomic_write_json(result_root / "checkpoint.json", remote_manifest.to_dict())
         volume_commit()
 
         artifacts = {}
-        for name in ("best.pt", "last.pt", "metrics.json", "checkpoint.json"):
-            artifact = result_root / name
-            artifacts[name] = {
-                "remote_ref": f"modal-volume://{VOLUME_NAME}/{prefix}/results/{name}",
+        for artifact in _regular_files(result_root):
+            relative_path = artifact.relative_to(result_root).as_posix()
+            artifacts[relative_path] = {
+                "remote_ref": f"modal-volume://{VOLUME_NAME}/{prefix}/results/{relative_path}",
                 "sha256": _sha256_file(artifact),
                 "size_bytes": artifact.stat().st_size,
             }
