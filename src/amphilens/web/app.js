@@ -585,7 +585,7 @@
       const preferenceKey = window.AmphiLensCvatProjectState.mappingPreferenceKey(app.cvatServerUrl, projectId, label);
       if (matchedClass) {
         const matchText = matchedClass === label ? "Matches project class" : `Auto-matched to ${matchedClass}`;
-        return `<div class="cvat-label-row"><span>${escapeHtml(label)}</span><span class="class-match">${escapeHtml(matchText)}</span><input type="hidden" name="mapping_${index}" data-preference-key="${escapeHtml(preferenceKey)}" data-cvat-map-source="${escapeHtml(label)}" value="${escapeHtml(matchedClass)}"></div>`;
+        return `<div class="cvat-label-row cvat-label-row-matched"><span>${escapeHtml(label)}</span><span class="class-match">${escapeHtml(matchText)}</span><input type="hidden" name="mapping_${index}" data-preference-key="${escapeHtml(preferenceKey)}" data-cvat-map-source="${escapeHtml(label)}" value="${escapeHtml(matchedClass)}"></div>`;
       }
       return `<div class="cvat-label-row"><label for="initial-cvat-map-${index}">${escapeHtml(label)}</label><select id="initial-cvat-map-${index}" name="mapping_${index}" data-preference-key="${escapeHtml(preferenceKey)}" data-cvat-map-source="${escapeHtml(label)}" required><option value="">Choose matching project class</option>${classes.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("")}</select></div>`;
     }).join("");

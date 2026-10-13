@@ -195,6 +195,10 @@ label[data-required]::after { content: "*"; margin-left: .22em; color: var(--err
 .cvat-project-summary { display: grid; gap: 12px; padding: 3px 0 4px; }
 .cvat-label-list { display: grid; gap: 7px; }
 .cvat-label-row { display: grid; grid-template-columns: minmax(90px, .8fr) minmax(0, 1.2fr); align-items: center; gap: 9px; color: #46534a; font-size: 0.75rem; }
+.cvat-label-row:not(.cvat-label-row-matched) > :first-child, .cvat-label-row:not(.cvat-label-row-matched) > .class-match { min-width: 0; overflow-wrap: anywhere; }
+.cvat-label-row-matched { display: flex; justify-content: space-between; gap: 10px; }
+.cvat-label-row-matched > :first-child { flex: 1; min-width: 0; white-space: nowrap; }
+.cvat-label-row-matched > .class-match { flex: none; white-space: nowrap; text-align: right; }
 .hosted-model-panel { display: grid; gap: 12px; padding: 16px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-soft); }
 .hosted-model-panel[hidden], .hosted-class-mapping[hidden], [data-training-general][hidden], [data-training-hosted][hidden], [data-training-checkpoint][hidden], .modal-prediction-settings[hidden], [data-local-prediction-settings][hidden] { display: none !important; }
 .hosted-model-facts { display: flex; flex-wrap: wrap; gap: 6px 13px; margin: 0; color: var(--muted); font-size: 0.75rem; }
@@ -245,7 +249,9 @@ select:not([multiple]) { appearance: none; -webkit-appearance: none; padding-rig
 .notice p { margin: 0; }
 .notice strong { font-weight: 690; }
 @media (max-width: 560px) {
-  .hosted-class-mapping .cvat-label-row { grid-template-columns: minmax(0, 1fr); gap: 5px; }
+  .cvat-label-row { grid-template-columns: minmax(0, 1fr); gap: 5px; }
+  .cvat-label-row-matched { flex-direction: column; align-items: flex-start; gap: 5px; }
+  .cvat-label-row-matched > .class-match { text-align: left; }
 }
 .empty-state { max-width: 740px; margin: 5vh auto 0; padding: 38px 34px; text-align: left; }
 .empty-illustration { display: grid; place-items: center; width: 54px; height: 54px; margin-bottom: 21px; border-radius: 13px; background: #e4ece3; color: var(--marsh); }

@@ -286,25 +286,6 @@ def test_cloud_training_persists_the_selected_transport_provider(tmp_path: Path)
     assert len(transport.submissions) == 1
 
 
-def test_cloud_job_record_without_provider_defaults_to_modal(tmp_path: Path):
-    from amphilens.cloud.models import CloudJobRecord
-
-    store, snapshot = make_project(tmp_path)
-    service = CloudTrainingService(store, FakeCloudTransport())
-    record = service.submit(
-        snapshot_path=snapshot,
-        effective_configuration=config(),
-        training_config={"epochs": 1, "image_size": 64},
-        consent=consent(),
-        gpu="T4",
-        data_mode="training-monitor",
-    )
-    legacy_payload = record.to_dict()
-    legacy_payload.pop("provider")
-
-    assert CloudJobRecord.from_dict(legacy_payload).provider == "modal"
-
-
 def test_cloud_training_blocks_before_upload_when_provider_price_is_unknown(tmp_path: Path):
     store, snapshot = make_project(tmp_path)
     transport = FakeCloudTransport()

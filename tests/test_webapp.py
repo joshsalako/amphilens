@@ -114,6 +114,33 @@ def test_static_frontend_and_assets_are_served(client):
     assert client.get("/static/favicon.svg").status_code == 200
 
 
+def test_matched_cvat_project_labels_follow_review_task_list_layout(client):
+    stylesheet = client.get("/static/app.css")
+    script = client.get("/static/app.js")
+
+    assert stylesheet.status_code == 200
+    assert script.status_code == 200
+    assert (
+        'class="cvat-label-row cvat-label-row-matched"'
+    ) in script.text
+    assert (
+        ".cvat-label-row-matched { display: flex; justify-content: space-between; gap: 10px; }"
+    ) in stylesheet.text
+    assert (
+        ".cvat-label-row-matched > :first-child "
+        "{ flex: 1; min-width: 0; white-space: nowrap; }"
+    ) in stylesheet.text
+    assert (
+        ".cvat-label-row-matched > .class-match "
+        "{ flex: none; white-space: nowrap; text-align: right; }"
+    ) in stylesheet.text
+    mobile_matched_row = (
+        ".cvat-label-row-matched { flex-direction: column; "
+        "align-items: flex-start; gap: 5px; }"
+    )
+    assert mobile_matched_row in stylesheet.text
+
+
 def test_cvat_project_endpoint_returns_fresh_selected_project_details(client, monkeypatch):
     from amphilens.annotations import managed
     from amphilens.annotations.managed import CVATProjectSummary, CVATTaskSummary
