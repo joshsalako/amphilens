@@ -8,7 +8,7 @@
   const pageToastRegion = document.getElementById("toast-region");
   const dialogToastRegion = document.getElementById("dialog-toast-region");
   const app = {
-    view: "home",
+    view: window.AmphiLensNavigationState?.load() || "home",
     project: null,
     doctor: null,
     modalConnectivity: null,
@@ -79,6 +79,7 @@
 
   function setPage(view) {
     saveWorkflowViewState(app.view);
+    window.AmphiLensNavigationState?.save(view);
     app.view = view;
     document.querySelectorAll("[data-view]").forEach((button) => {
       const active = button.dataset.view === view;

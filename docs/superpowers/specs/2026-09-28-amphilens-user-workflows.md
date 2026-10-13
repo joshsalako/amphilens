@@ -26,6 +26,8 @@ learning process uses CVAT when human annotation is required.
   live outside the source checkout by default.
 - **Active project:** the project explicitly created or opened for the current
   browser session. All workflow pages use this project until it is closed.
+- **Active workflow view:** the current browser tab restores its selected
+  workflow view after a page refresh.
 - **Base model:** an official pretrained model, a paper-specific checkpoint, or
   a compatible local checkpoint used before project-specific training.
 - **Initial dataset:** the first labelled images used for fine-tuning. It may

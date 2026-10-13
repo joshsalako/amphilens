@@ -68,11 +68,13 @@ def test_static_frontend_and_assets_are_served(client):
     assert 'src="/static/prediction_state.js"' in page.text
     assert 'src="/static/cvat_project_state.js"' in page.text
     assert 'src="/static/activity_view.js"' in page.text
+    assert 'src="/static/navigation_state.js"' in page.text
     assert 'src="/static/required_fields.js"' in page.text
     assert '<span class="nav-label">Choose images to review</span>' in page.text
     assert client.get("/static/prediction_state.js").status_code == 200
     assert client.get("/static/cvat_project_state.js").status_code == 200
     assert client.get("/static/activity_view.js").status_code == 200
+    assert client.get("/static/navigation_state.js").status_code == 200
     assert client.get("/static/required_fields.js").status_code == 200
     assert client.get("/static/app.js").status_code == 200
     assert 'api("/api/path-picker"' in client.get("/static/app.js").text
