@@ -21,12 +21,26 @@ function loadPreferences(storage) {
   return window.AmphiLensPredictionPreferences;
 }
 
+function loadWorkflowState(storage) {
+  const window = { localStorage: storage };
+  vm.runInNewContext(fs.readFileSync(sourcePath, "utf8"), { window });
+  return window.AmphiLensWorkflowState;
+}
+
 function control(name, value, type = "text", options = []) {
   return { name, value, type, options, tagName: type === "select-one" ? "SELECT" : "INPUT" };
 }
 
 function form(...elements) {
   return { elements };
+}
+
+function page(...controls) {
+  return {
+    querySelectorAll(selector) {
+      return selector === "details" ? [] : controls;
+    },
+  };
 }
 
 test("prediction preferences persist within a project, but not across projects or consent fields", () => {
@@ -70,6 +84,33 @@ test("prediction preferences persist within a project, but not across projects o
     storage.getItem("amphilens:prediction-preferences:v1:/projects/grass"),
     /do-not-save/,
   );
+});
+
+test("prediction image folder is selected again on each visit", () => {
+  const storage = createStorage();
+  const workflow = loadWorkflowState(storage);
+
+  workflow.save("/projects/grass", "predict", page(
+    control("image_root", "/data/first-survey"),
+    control("confidence", "0.55", "range"),
+  ));
+  const saved = JSON.parse(storage.getItem(
+    "amphilens:workflow-preferences:v1:%2Fprojects%2Fgrass:predict",
+  ));
+  assert.equal(Object.hasOwn(saved.values, "image_root"), false);
+
+  storage.setItem(
+    "amphilens:workflow-preferences:v1:%2Fprojects%2Fgrass:predict",
+    JSON.stringify({ values: { image_root: "/data/first-survey", confidence: "0.55" }, details: {} }),
+  );
+  const reopenedPage = page(
+    control("image_root", ""),
+    control("confidence", "0.25", "range"),
+  );
+  workflow.restore("/projects/grass", "predict", reopenedPage);
+
+  assert.equal(reopenedPage.querySelectorAll("input[name], select[name], textarea[name]")[0].value, "");
+  assert.equal(reopenedPage.querySelectorAll("input[name], select[name], textarea[name]")[1].value, "0.55");
 });
 
 test("stale select values do not replace current model options", () => {

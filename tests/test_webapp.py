@@ -956,6 +956,44 @@ def test_bootstrap_and_project_create_open_close_persist(client, tmp_path):
     assert client.get("/api/bootstrap").json()["project"] is None
 
 
+def test_project_create_does_not_require_an_image_folder(client, tmp_path):
+    project_path = tmp_path / "projects" / "field-notes"
+
+    response = client.post(
+        "/api/projects/create",
+        json={
+            "name": "Field notes",
+            "path": str(project_path),
+            "classes": ["toad"],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["project"]["image_roots"] == []
+    assert ProjectStore(project_path).load_manifest().image_roots == []
+
+
+def test_prediction_requires_a_folder_when_project_has_no_saved_folder(client, tmp_path):
+    from amphilens.webapp import PredictionsRequest, run_prediction_job
+
+    project_path = tmp_path / "projects" / "field-notes"
+    created = client.post(
+        "/api/projects/create",
+        json={
+            "name": "Field notes",
+            "path": str(project_path),
+            "classes": ["toad"],
+        },
+    )
+    assert created.status_code == 200, created.text
+
+    with pytest.raises(ValueError, match="Choose an image folder"):
+        run_prediction_job(
+            ProjectStore(project_path),
+            PredictionsRequest(run_name="Camera survey"),
+        )
+
+
 def test_project_create_rejects_source_checkout_path(client, tmp_path):
     checkout = tmp_path / "checkout"
     checkout.mkdir()

@@ -276,8 +276,6 @@ class ProjectManifest:
             raise ValidationError("Project name cannot be empty")
         clean_classes = _validate_classes(classes)
         roots = [_resolve(root) for root in image_roots]
-        if not roots:
-            raise ValidationError("At least one image root is required")
         missing = [str(root) for root in roots if not root.exists()]
         if missing:
             raise ValidationError(f"Image root does not exist: {missing[0]}")
@@ -301,8 +299,6 @@ class ProjectManifest:
         if not self.name.strip():
             raise ValidationError("Project name cannot be empty")
         _validate_classes(self.classes)
-        if not self.image_roots:
-            raise ValidationError("At least one image root is required")
         roots = [_resolve(root) for root in self.image_roots]
         if len(roots) != len(set(roots)):
             raise ValidationError("Image roots must be unique")

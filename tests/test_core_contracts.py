@@ -40,6 +40,19 @@ def test_project_store_creates_portable_manifest_and_run(tmp_path: Path):
     assert (tmp_path / "project" / "runs" / run.run_id / "run.json").exists()
 
 
+def test_project_store_accepts_projects_without_saved_image_roots(tmp_path: Path):
+    manifest = ProjectManifest.create(
+        name="field-notes",
+        image_roots=[],
+        classes=["toad"],
+    )
+    store = ProjectStore(tmp_path / "project")
+
+    store.create(manifest)
+
+    assert store.load_manifest().image_roots == []
+
+
 def test_inference_config_preserves_effective_configuration_metadata():
     config = InferenceConfig(
         model_id="demo",

@@ -252,7 +252,7 @@
   function renderHome() {
     if (!app.project) {
       root.innerHTML = `${pageHead("Your wildlife field desk", "Scan camera-trap images with a pretrained model, or build a labeled dataset when you are ready.")}
-      <section class="surface empty-state"><div class="empty-illustration" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="12" stroke="currentColor" stroke-width="1.7"/><circle cx="16" cy="16" r="7" stroke="currentColor" stroke-width="1.7"/><circle cx="16" cy="16" r="2.3" fill="currentColor"/></svg></div><h2>Set up your first project</h2><p>Choose a project folder and the image folder you want to scan. You can make predictions before collecting any annotations.</p><div class="project-actions"><button class="button primary" type="button" data-open-project data-project-tab="create">Create project</button><button class="button" type="button" data-open-project>Open existing project</button></div></section>`;
+      <section class="surface empty-state"><div class="empty-illustration" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="12" stroke="currentColor" stroke-width="1.7"/><circle cx="16" cy="16" r="7" stroke="currentColor" stroke-width="1.7"/><circle cx="16" cy="16" r="2.3" fill="currentColor"/></svg></div><h2>Set up your first project</h2><p>Create a project to organize your wildlife classes, datasets, and runs. Choose an image folder whenever you use Find Wildlife.</p><div class="project-actions"><button class="button primary" type="button" data-open-project data-project-tab="create">Create project</button><button class="button" type="button" data-open-project>Open existing project</button></div></section>`;
       return;
     }
     const project = app.project;
@@ -488,13 +488,11 @@
 
   function renderPredict() {
     if (projectRequired()) return;
-    const roots = app.project.image_roots || [];
-    const currentRoot = roots[0] || "";
     root.innerHTML = `${pageHead("Run detection", "Scan an image folder and create a predictions file with reports.")}
       <div class="form-layout form-layout-single"><section class="surface form-panel"><div class="panel-heading"><div><h2>Choose images and model</h2>This name is saved with the results. The exact model ID is recorded separately.</div></div>
         <form class="form-stack" data-form="predict">
           <div class="field"><label for="prediction-run-name">Prediction run name</label><input id="prediction-run-name" name="run_name" type="text" maxlength="120" placeholder="e.g. Spring survey" required></div>
-          <div class="field"><label for="prediction-root">Image folder</label>${pathPickerControl("prediction-root", "image_root", "directory", "/path/to/camera-trap-images", { value: currentRoot, required: true, label: "an image folder" })}<span class="field-help">Choose a folder visible to the computer running AmphiLens.</span></div>
+          <div class="field"><label for="prediction-root">Image folder</label>${pathPickerControl("prediction-root", "image_root", "directory", "/path/to/camera-trap-images", { required: true, label: "an image folder" })}<span class="field-help">Choose a folder visible to the computer running AmphiLens. You can select a different folder for every run.</span></div>
           <div class="field"><label for="prediction-model">Model</label><select id="prediction-model" name="model_choice">${modelOptions()}</select></div>
           <div id="prediction-hosted-details" class="hosted-model-panel" hidden></div>
           <div id="prediction-class-mapping" class="hosted-class-mapping" hidden></div>
@@ -1193,7 +1191,6 @@
         const values = formData(form);
         values.classes = String(values.classes || "").split(",").map((item) => item.trim()).filter(Boolean);
         if (!values.classes.length) throw new Error("Add at least one wildlife class.");
-        if (!values.image_root?.trim()) throw new Error("Choose an image folder for this project.");
         const result = await api("/api/projects/create", { method: "POST", body: JSON.stringify(values) });
         app.project = result.project || null;
         updateProjectHeader();

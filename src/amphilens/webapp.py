@@ -515,8 +515,8 @@ class ProjectOpenRequest:
 class ProjectCreateRequest:
     name: str
     path: str
-    image_root: str
     classes: list[str]
+    image_root: str | None = None
     model_preset: str = "yolo26-l"
     image_dimension: int = 640
     grayscale: bool = True
@@ -807,8 +807,8 @@ def _request(cls, payload: dict[str, Any]):
         request = cls(
             name=_string(payload, "name"),
             path=_string(payload, "path"),
-            image_root=_string(payload, "image_root"),
             classes=classes,
+            image_root=_optional_string(payload, "image_root"),
             model_preset=_string(payload, "model_preset", required=False, default="yolo26-l"),
             image_dimension=_integer(payload, dimension_key, 640, minimum=32),
             grayscale=_boolean(payload, "grayscale", True),
@@ -1232,6 +1232,15 @@ def _training_snapshots(store: ProjectStore, request):
     return training, validation, test
 
 
+def _resolve_prediction_image_root(project, request: PredictionsRequest) -> Path:
+    image_root = request.image_root
+    if image_root is None or not image_root.strip():
+        if not project.image_roots:
+            raise ValueError("Choose an image folder in Find Wildlife before running detection.")
+        image_root = project.image_roots[0]
+    return Path(image_root).expanduser().resolve()
+
+
 def prediction_preflight(
     store: ProjectStore,
     request: PredictionsRequest,
@@ -1254,8 +1263,7 @@ def prediction_preflight(
     from .core import iter_images
 
     project = store.load_manifest()
-    image_root = request.image_root or project.image_roots[0]
-    image_root_path = Path(image_root).expanduser().resolve()
+    image_root_path = _resolve_prediction_image_root(project, request)
     if not image_root_path.is_dir():
         raise ValueError(f"Image folder was not found: {image_root_path}")
     paths = iter_images([image_root_path])
@@ -1394,8 +1402,7 @@ def run_prediction_job(
 
     run_name = _prediction_run_name(request.run_name)
     project = store.load_manifest()
-    image_root = request.image_root or project.image_roots[0]
-    image_root_path = Path(image_root).expanduser().resolve()
+    image_root_path = _resolve_prediction_image_root(project, request)
     if not image_root_path.is_dir():
         raise ValueError(f"Image folder was not found: {image_root_path}")
     image_paths = iter_images([image_root_path])
@@ -2516,7 +2523,7 @@ def create_app(
             )
             manifest = ProjectManifest.create(
                 body.name,
-                [body.image_root],
+                [body.image_root] if body.image_root else [],
                 classes,
                 project_config=config,
             )

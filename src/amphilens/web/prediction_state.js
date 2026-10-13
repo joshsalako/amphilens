@@ -88,6 +88,10 @@
       .filter((control) => isPreferenceControl(control) && !control.dataset?.modelPreference);
   }
 
+  function isTransientWorkflowControl(view, control) {
+    return view === "predict" && control.name === "image_root";
+  }
+
   function saveModel(projectIdentity, workflow, modelIdentity, settings) {
     if (!projectIdentity || !workflow || !modelIdentity || !settings) return;
     try {
@@ -133,6 +137,7 @@
     try {
       const values = {};
       for (const control of pageControls(container)) {
+        if (isTransientWorkflowControl(view, control)) continue;
         values[preferenceKey(control)] = String(control.value ?? "");
       }
       const key = workflowStorageKey(projectIdentity, view);
@@ -140,6 +145,7 @@
       const previousValues = previous?.values && typeof previous.values === "object"
         ? previous.values
         : {};
+      if (view === "predict") delete previousValues.image_root;
       const previousDetails = previous?.details && typeof previous.details === "object"
         ? previous.details
         : {};
@@ -155,10 +161,11 @@
     }
   }
 
-  function applyViewState(container, state, keyPrefix = "") {
+  function applyViewState(container, state, keyPrefix = "", view = "") {
     if (!container || !state || typeof state !== "object") return;
     const values = state.values && typeof state.values === "object" ? state.values : state;
     for (const control of pageControls(container)) {
+      if (isTransientWorkflowControl(view, control)) continue;
       const key = preferenceKey(control);
       if (keyPrefix && !key.startsWith(keyPrefix)) continue;
       const saved = typeof values[key] === "string" ? values[key] : values[control.name];
@@ -197,7 +204,7 @@
         }
       }
     }
-    applyViewState(container, state, keyPrefix);
+    applyViewState(container, state, keyPrefix, view);
   }
 
   window.AmphiLensPredictionPreferences = { save, restore, saveModel, restoreModel, resetModel };
