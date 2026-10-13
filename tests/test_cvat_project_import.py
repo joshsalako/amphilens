@@ -180,6 +180,28 @@ class _ImportTransport:
         return destination
 
 
+class _TaskImportTransport:
+    server_url = "https://cvat.example"
+    client_version = "cvat-sdk==2.76.0"
+    export_format = "CVAT for images 1.1"
+
+    def __init__(self, project: CVATProjectSummary, archives: dict[str, Path]):
+        self.project = project
+        self.archives = archives
+        self.exported_task_ids = []
+
+    def get_project(self, project_id):
+        assert str(project_id) == self.project.project_id
+        return self.project
+
+    def export_task(self, task_id, destination):
+        self.exported_task_ids.append(str(task_id))
+        destination = Path(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(self.archives[str(task_id)].read_bytes())
+        return destination
+
+
 def _store(tmp_path: Path) -> ProjectStore:
     (tmp_path / "images").mkdir()
     store = ProjectStore(tmp_path / "project")
@@ -254,3 +276,74 @@ def test_project_import_requires_explicit_mapping_for_unknown_cvat_label(tmp_pat
 
     with pytest.raises(ValidationError, match="explicit class mapping"):
         CVATProjectImportService(_store(tmp_path), transport).import_project("7")
+
+
+def test_task_import_reports_per_image_progress_and_keeps_splits_separate(tmp_path: Path):
+    tasks = [
+        CVATTaskSummary("11", "train", 1, "completed"),
+        CVATTaskSummary("12", "validation", 1, "completed"),
+        CVATTaskSummary("13", "test", 1, "completed"),
+    ]
+    project = CVATProjectSummary("7", "study", ["toad"], tasks)
+    archives = {
+        task.task_id: _valid_project_archive(tmp_path / f"{task.name}.zip") for task in tasks
+    }
+    transport = _TaskImportTransport(project, archives)
+    store = _store(tmp_path)
+    progress = []
+
+    snapshots = CVATProjectImportService(store, transport).import_project_tasks(
+        "7",
+        progress_callback=progress.append,
+    )
+
+    assert transport.exported_task_ids == ["11", "12", "13"]
+    assert [snapshot.manifest.source_provenance["task_id"] for snapshot in snapshots] == [
+        "11",
+        "12",
+        "13",
+    ]
+    display_names = [
+        store.dataset_display_name(snapshot.root).rsplit(" · ", 1)[-1]
+        for snapshot in snapshots
+    ]
+    assert display_names == [
+        "train",
+        "validation",
+        "test",
+    ]
+    image_events = [event for event in progress if event.get("phase") == "validating-images"]
+    assert [
+        (event["task_index"], event["task_count"], event["completed"], event["total"])
+        for event in image_events
+    ] == [(1, 3, 1, 1), (2, 3, 1, 1), (3, 3, 1, 1)]
+    export_messages = [
+        event["message"] for event in progress if event.get("phase") == "cvat-export"
+    ]
+    assert any("train" in message and "1 of 3" in message for message in export_messages)
+    assert any("validation" in message and "2 of 3" in message for message in export_messages)
+    assert any("test" in message and "3 of 3" in message for message in export_messages)
+
+
+def test_task_import_failure_publishes_no_partial_snapshots(tmp_path: Path):
+    tasks = [
+        CVATTaskSummary("11", "train", 1, "completed"),
+        CVATTaskSummary("12", "validation", 1, "completed"),
+        CVATTaskSummary("13", "test", 1, "completed"),
+    ]
+    project = CVATProjectSummary("7", "study", ["toad"], tasks)
+    archives = {
+        task.task_id: _valid_project_archive(tmp_path / f"{task.name}.zip") for task in tasks
+    }
+    archives["13"] = tmp_path / "annotations-only.zip"
+    with zipfile.ZipFile(archives["13"], "w") as handle:
+        handle.writestr("annotations.xml", "<annotations/>")
+    store = _store(tmp_path)
+    transport = _TaskImportTransport(project, archives)
+
+    with pytest.raises(ValidationError, match="image files"):
+        CVATProjectImportService(store, transport).import_project_tasks("7")
+
+    dataset_root = store.root / "datasets"
+    assert not list(dataset_root.glob("snapshot-*"))
+    assert not (dataset_root / "catalog.json").exists()

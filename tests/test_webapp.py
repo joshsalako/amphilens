@@ -315,6 +315,42 @@ def test_job_manager_exposes_download_progress_to_status_clients(jobs):
     finish.set()
 
 
+def test_dataset_import_routes_run_progress_aware_jobs(client, tmp_path, monkeypatch):
+    image_root = tmp_path / "images"
+    image_root.mkdir()
+    store = ProjectStore(tmp_path / "project")
+    store.create(ProjectManifest.create("study", [image_root], ["toad"]))
+    client.app.state.active_project_path = store.root
+    client.app.state.project_restored = True
+
+    def reportable_job(_store, _request, progress_callback):
+        progress_callback(
+            {
+                "phase": "validating-images",
+                "message": "Validated 1 of 1 images",
+                "completed": 1,
+                "total": 1,
+                "progress": 1.0,
+                "phase_progress": 1.0,
+            }
+        )
+        return {"message": "Import complete"}
+
+    monkeypatch.setattr(webapp, "run_dataset_import_job", reportable_job)
+    monkeypatch.setattr(webapp, "run_cvat_import_job", reportable_job)
+
+    for endpoint, payload in (
+        ("/api/datasets/import", {"archive": str(tmp_path / "dataset.zip")}),
+        ("/api/datasets/import-cvat", {"project_id": "7"}),
+    ):
+        response = client.post(endpoint, json=payload)
+        assert response.status_code == 200
+        job = _wait_for_job(client, response.json()["job_id"])
+        assert job["state"] == "completed"
+        assert job["progress"]["message"] == "Validated 1 of 1 images"
+        assert job["progress"]["phase_progress"] == 1.0
+
+
 def test_job_manager_exposes_cancellation_to_an_active_workflow(jobs):
     import threading
 

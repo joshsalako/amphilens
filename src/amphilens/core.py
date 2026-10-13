@@ -10,7 +10,7 @@ import shutil
 import sys
 import tempfile
 import uuid
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -693,6 +693,7 @@ class ProjectStore:
         source_provenance: dict[str, Any] | None = None,
         display_name: str | None = None,
         snapshot_id: str | None = None,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
     ):
         """Import an initial CVAT/COCO/YOLO archive under this project."""
         from .dataset import DatasetImporter
@@ -705,6 +706,7 @@ class ProjectStore:
             class_mapping=class_mapping,
             source_provenance=source_provenance,
             snapshot_id=snapshot_id,
+            progress_callback=progress_callback,
         )
         fallback = Path(archive_path).expanduser().stem or "Imported dataset"
         self.set_dataset_display_name(snapshot.root, display_name or fallback)

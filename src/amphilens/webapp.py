@@ -1763,11 +1763,16 @@ def run_prediction_job(
     )
 
 
-def run_dataset_import_job(store: ProjectStore, request: DatasetImportRequest) -> dict[str, Any]:
+def run_dataset_import_job(
+    store: ProjectStore,
+    request: DatasetImportRequest,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
     snapshot = store.import_dataset(
         request.archive,
         class_mapping=request.class_mapping,
         display_name=request.display_name,
+        progress_callback=progress_callback,
     )
     return {
         "message": (
@@ -1779,7 +1784,11 @@ def run_dataset_import_job(store: ProjectStore, request: DatasetImportRequest) -
     }
 
 
-def run_cvat_import_job(store: ProjectStore, request: CvatProjectImportRequest) -> dict[str, Any]:
+def run_cvat_import_job(
+    store: ProjectStore,
+    request: CvatProjectImportRequest,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
     from .annotations.initial import CVATProjectImportService
     from .annotations.managed import CVATSdkTransport
 
@@ -1788,6 +1797,7 @@ def run_cvat_import_job(store: ProjectStore, request: CvatProjectImportRequest) 
         request.project_id,
         class_mapping=request.class_mapping,
         display_name=request.display_name,
+        progress_callback=progress_callback,
     )
     snapshot_summaries = [
         {
@@ -2643,7 +2653,12 @@ def create_app(
         try:
             body = _request(DatasetImportRequest, await _read_body(request))
             store = active_store()
-            return _json(submit(lambda: run_dataset_import_job(store, body)))
+            return _json(
+                submit(
+                    lambda progress: run_dataset_import_job(store, body, progress),
+                    with_progress=True,
+                )
+            )
         except Exception as exc:
             return _failure(exc)
 
@@ -2651,7 +2666,12 @@ def create_app(
         try:
             body = _request(CvatProjectImportRequest, await _read_body(request))
             store = active_store()
-            return _json(submit(lambda: run_cvat_import_job(store, body)))
+            return _json(
+                submit(
+                    lambda progress: run_cvat_import_job(store, body, progress),
+                    with_progress=True,
+                )
+            )
         except Exception as exc:
             return _failure(exc)
 

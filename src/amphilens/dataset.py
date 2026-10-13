@@ -6,13 +6,14 @@ import ast
 import hashlib
 import json
 import math
+import os
 import re
 import shutil
 import tempfile
 import xml.etree.ElementTree as ET
 import zipfile
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -149,13 +150,10 @@ class DatasetManifest:
         classes = _classes(self.classes)
         image_ids = [image.image_id for image in self.images]
         paths = [image.relative_path for image in self.images]
-        hashes = [image.sha256 for image in self.images]
         if len(image_ids) != len(set(image_ids)):
             raise ValidationError("Dataset snapshot contains duplicate image ids")
         if len(paths) != len(set(paths)):
             raise ValidationError("Dataset snapshot contains duplicate image paths")
-        if len(hashes) != len(set(hashes)):
-            raise ValidationError("Dataset snapshot contains duplicate image content")
         for image in self.images:
             image.validate(classes)
 
@@ -537,14 +535,17 @@ class DatasetImporter:
         class_mapping: dict[str, str] | None = None,
         source_provenance: dict[str, Any] | None = None,
         snapshot_id: str | None = None,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> DatasetSnapshot:
         archive = Path(archive_path).expanduser().resolve()
         if not archive.is_file() or archive.suffix.lower() != ".zip":
             raise ValidationError("Dataset import requires a ZIP archive")
-        target = Path(destination).expanduser().resolve()
-        if target.exists():
-            raise ValidationError(f"Dataset snapshot destination already exists: {target}")
-        target.parent.mkdir(parents=True, exist_ok=True)
+        destination_root = Path(destination).expanduser().resolve()
+        if destination_root.exists():
+            raise ValidationError(
+                f"Dataset snapshot destination already exists: {destination_root}"
+            )
+        destination_root.parent.mkdir(parents=True, exist_ok=True)
         target_id = snapshot_id or f"snapshot-{_sha256(archive)[:12]}"
         if (
             Path(target_id).name != target_id
@@ -552,32 +553,90 @@ class DatasetImporter:
             or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,119}", target_id)
         ):
             raise ValidationError("Dataset snapshot ID contains unsupported characters")
-        target = target.parent / target_id
+        target = destination_root.parent / target_id
         if target.exists():
             raise ValidationError(f"Dataset snapshot already exists: {target}")
         expected_classes = _classes(classes)
-        with tempfile.TemporaryDirectory(prefix="amphilens-import-") as temporary:
-            extracted = Path(temporary)
+
+        staging_root = Path(
+            tempfile.mkdtemp(prefix=f".{target_id}.staging-", dir=destination_root.parent)
+        )
+        try:
+            extracted = staging_root / "payload"
+            extracted.mkdir()
+            self._report_progress(
+                progress_callback,
+                phase="extracting-archive",
+                message="Extracting and checking dataset archive",
+            )
             self._extract(archive, extracted)
             images = self._find_images(extracted)
             if not images:
                 raise ValidationError("Dataset archive must include image files")
-            source_format, parsed = self._parse(extracted, images, expected_classes, class_mapping)
-            manifest_images = self._copy_images(parsed, target)
-        source_dir = target / "source"
-        source_dir.mkdir()
-        shutil.copy2(archive, source_dir / archive.name)
-        manifest = DatasetManifest(
-            snapshot_id=target_id,
-            source_format=source_format,
-            classes=expected_classes,
-            images=manifest_images,
-            source_archive=archive.name,
-            source_archive_sha256=_sha256(archive),
-            source_provenance=dict(source_provenance or {}),
+            source_format, parsed = self._parse(
+                extracted,
+                images,
+                expected_classes,
+                class_mapping,
+                progress_callback=progress_callback,
+            )
+            self._report_progress(
+                progress_callback,
+                phase="saving-snapshot",
+                message="Saving verified images and source archive",
+            )
+            manifest_images = self._move_images(parsed, staging_root)
+            shutil.rmtree(extracted)
+            source_dir = staging_root / "source"
+            source_dir.mkdir()
+            shutil.copy2(archive, source_dir / archive.name)
+            manifest = DatasetManifest(
+                snapshot_id=target_id,
+                source_format=source_format,
+                classes=expected_classes,
+                images=manifest_images,
+                source_archive=archive.name,
+                source_archive_sha256=_sha256(archive),
+                source_provenance=dict(source_provenance or {}),
+            )
+            atomic_write_json(staging_root / "manifest.json", manifest.to_dict())
+            os.replace(staging_root, target)
+        finally:
+            shutil.rmtree(staging_root, ignore_errors=True)
+        self._report_progress(
+            progress_callback,
+            phase="completed",
+            message=f"Imported {len(manifest.images)} images",
+            completed=len(manifest.images),
+            total=len(manifest.images),
+            progress=1.0,
+            phase_progress=1.0,
         )
-        atomic_write_json(target / "manifest.json", manifest.to_dict())
         return DatasetSnapshot(target, manifest)
+
+    @staticmethod
+    def _report_progress(
+        callback: Callable[[dict[str, Any]], None] | None,
+        *,
+        phase: str,
+        message: str,
+        completed: int | None = None,
+        total: int | None = None,
+        progress: float | None = None,
+        phase_progress: float | None = None,
+    ) -> None:
+        if callback is None:
+            return
+        event: dict[str, Any] = {"phase": phase, "message": message}
+        if completed is not None:
+            event["completed"] = completed
+        if total is not None:
+            event["total"] = total
+        if progress is not None:
+            event["progress"] = progress
+        if phase_progress is not None:
+            event["phase_progress"] = phase_progress
+        callback(event)
 
     @staticmethod
     def _extract(archive: Path, destination: Path) -> None:
@@ -605,11 +664,18 @@ class DatasetImporter:
         images: list[Path],
         expected_classes: list[str],
         class_mapping: dict[str, str] | None,
+        *,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> tuple[str, list[dict[str, Any]]]:
         xml_files = sorted(root.rglob("*.xml"))
         if xml_files:
             return "cvat-xml", self._parse_cvat(
-                xml_files[0], root, images, expected_classes, class_mapping
+                xml_files[0],
+                root,
+                images,
+                expected_classes,
+                class_mapping,
+                progress_callback=progress_callback,
             )
         json_files = sorted(root.rglob("*.json"))
         for path in json_files:
@@ -618,8 +684,21 @@ class DatasetImporter:
             except (OSError, json.JSONDecodeError):
                 continue
             if {"images", "annotations", "categories"}.issubset(data):
-                return "coco", self._parse_coco(data, root, images, expected_classes, class_mapping)
-        return "yolo", self._parse_yolo(root, images, expected_classes, class_mapping)
+                return "coco", self._parse_coco(
+                    data,
+                    root,
+                    images,
+                    expected_classes,
+                    class_mapping,
+                    progress_callback=progress_callback,
+                )
+        return "yolo", self._parse_yolo(
+            root,
+            images,
+            expected_classes,
+            class_mapping,
+            progress_callback=progress_callback,
+        )
 
     def _class_map(
         self,
@@ -646,7 +725,16 @@ class DatasetImporter:
             lookup.setdefault(image.name, image)
         return lookup
 
-    def _parse_cvat(self, xml_path, root, images, expected_classes, class_mapping):
+    def _parse_cvat(
+        self,
+        xml_path,
+        root,
+        images,
+        expected_classes,
+        class_mapping,
+        *,
+        progress_callback=None,
+    ):
         tree = ET.parse(xml_path)
         labels = [item.text.strip() for item in tree.findall(".//label/name") if item.text]
         mapping = self._class_map(
@@ -656,8 +744,9 @@ class DatasetImporter:
         )
         lookup = self._image_lookup(root, images)
         parsed: list[dict[str, Any]] = []
-        used_hashes: set[str] = set()
-        for image_node in tree.findall(".//image"):
+        image_nodes = tree.findall(".//image")
+        total = len(image_nodes)
+        for image_node in image_nodes:
             source_name = image_node.attrib.get("name", "")
             image = self._resolve_image(source_name, lookup)
             width = self._positive_int(image_node.attrib.get("width"), "image width")
@@ -681,14 +770,23 @@ class DatasetImporter:
                     boxes,
                     mapping,
                     expected_classes,
-                    used_hashes,
                 )
             )
+            self._report_image_progress(progress_callback, len(parsed), total)
         if not parsed:
             raise ValidationError("CVAT XML contains no image annotations")
         return parsed
 
-    def _parse_coco(self, data, root, images, expected_classes, class_mapping):
+    def _parse_coco(
+        self,
+        data,
+        root,
+        images,
+        expected_classes,
+        class_mapping,
+        *,
+        progress_callback=None,
+    ):
         lookup = self._image_lookup(root, images)
         categories = {int(item["id"]): str(item["name"]) for item in data["categories"]}
         mapping = self._class_map(list(categories.values()), expected_classes, class_mapping)
@@ -696,7 +794,7 @@ class DatasetImporter:
         for item in data["annotations"]:
             annotations.setdefault(int(item["image_id"]), []).append(item)
         parsed = []
-        used_hashes: set[str] = set()
+        total = len(data["images"])
         for item in data["images"]:
             image = self._resolve_image(str(item["file_name"]), lookup)
             width = self._positive_int(item.get("width"), "image width")
@@ -718,19 +816,27 @@ class DatasetImporter:
                 )
             parsed.append(
                 self._parsed_image(
-                    image, root, width, height, boxes, mapping, expected_classes, used_hashes
+                    image, root, width, height, boxes, mapping, expected_classes
                 )
             )
+            self._report_image_progress(progress_callback, len(parsed), total)
         return parsed
 
-    def _parse_yolo(self, root, images, expected_classes, class_mapping):
+    def _parse_yolo(
+        self,
+        root,
+        images,
+        expected_classes,
+        class_mapping,
+        *,
+        progress_callback=None,
+    ):
         names = self._yolo_classes(root)
         mapping = self._class_map(names, expected_classes, class_mapping)
         label_files = {
             path.stem: path for path in root.rglob("*.txt") if path.name != "classes.txt"
         }
         parsed = []
-        used_hashes: set[str] = set()
         for image in images:
             width, height = self._actual_size(image)
             boxes = []
@@ -772,10 +878,23 @@ class DatasetImporter:
                     )
             parsed.append(
                 self._parsed_image(
-                    image, root, width, height, boxes, mapping, expected_classes, used_hashes
+                    image, root, width, height, boxes, mapping, expected_classes
                 )
             )
+            self._report_image_progress(progress_callback, len(parsed), len(images))
         return parsed
+
+    def _report_image_progress(self, callback, completed: int, total: int) -> None:
+        fraction = completed / total if total else 1.0
+        self._report_progress(
+            callback,
+            phase="validating-images",
+            message=f"Validated {completed} of {total} images",
+            completed=completed,
+            total=total,
+            progress=fraction,
+            phase_progress=fraction,
+        )
 
     @staticmethod
     def _yolo_classes(root: Path) -> list[str]:
@@ -803,16 +922,11 @@ class DatasetImporter:
                     return _classes(ast.literal_eval("[" + match.group(1) + "]"))
         raise ValidationError("YOLO archive must include classes.txt or dataset.yaml")
 
-    def _parsed_image(
-        self, image, root, width, height, boxes, mapping, expected_classes, used_hashes
-    ):
+    def _parsed_image(self, image, root, width, height, boxes, mapping, expected_classes):
         actual_width, actual_height = self._actual_size(image)
         if (width, height) != (actual_width, actual_height):
             raise ValidationError(f"Dataset image dimensions do not match: {image.name}")
         digest = _sha256(image)
-        if digest in used_hashes:
-            raise ValidationError("Dataset contains duplicate image content")
-        used_hashes.add(digest)
         annotations = []
         for box in boxes:
             label = str(box["label"])
@@ -881,7 +995,7 @@ class DatasetImporter:
             raise ValidationError(f"Dataset image cannot be read: {path.name}") from exc
 
     @staticmethod
-    def _copy_images(parsed: list[dict[str, Any]], target: Path) -> list[DatasetImage]:
+    def _move_images(parsed: list[dict[str, Any]], target: Path) -> list[DatasetImage]:
         image_dir = target / "images"
         image_dir.mkdir(parents=True, exist_ok=True)
         used_names: set[str] = set()
@@ -892,10 +1006,17 @@ class DatasetImporter:
             source = item["source"]
             name = Path(item["source_name"]).name
             if name in used_names:
-                name = f"{Path(name).stem}_{item['sha256'][:10]}{Path(name).suffix}"
+                stem = Path(name).stem
+                suffix = Path(name).suffix
+                hash_suffix = f"_{item['sha256'][:10]}"
+                name = f"{stem}{hash_suffix}{suffix}"
+                collision_index = 2
+                while name in used_names:
+                    name = f"{stem}{hash_suffix}_{collision_index}{suffix}"
+                    collision_index += 1
             used_names.add(name)
             destination = image_dir / name
-            shutil.copy2(source, destination)
+            os.replace(source, destination)
             result.append(
                 DatasetImage(
                     image_id=f"image-{index:06d}",

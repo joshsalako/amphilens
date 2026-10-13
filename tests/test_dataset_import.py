@@ -1,4 +1,6 @@
+import hashlib
 import json
+import os
 import zipfile
 from pathlib import Path
 
@@ -6,7 +8,7 @@ import pytest
 from PIL import Image
 
 from amphilens.core import ProjectManifest, ProjectStore, ValidationError
-from amphilens.dataset import DatasetImporter, DatasetMerger
+from amphilens.dataset import DatasetImporter, DatasetMerger, DatasetSnapshot
 from amphilens.preprocessing import PreprocessingConfig
 
 
@@ -126,7 +128,7 @@ def test_import_rejects_annotation_only_archives_and_invalid_boxes(tmp_path: Pat
         DatasetImporter().import_archive(invalid, tmp_path / "invalid-out", classes=["toad"])
 
 
-def test_import_rejects_class_mismatch_corrupt_image_and_duplicate_hash(tmp_path: Path):
+def test_import_rejects_class_mismatch_and_corrupt_image(tmp_path: Path):
     mismatch = _zip(
         tmp_path / "mismatch.zip",
         {
@@ -144,12 +146,49 @@ def test_import_rejects_class_mismatch_corrupt_image_and_duplicate_hash(tmp_path
     with pytest.raises(ValidationError, match="cannot be read"):
         DatasetImporter().import_archive(corrupt, tmp_path / "corrupt-out", classes=["toad"])
 
-    duplicate = _zip(
-        tmp_path / "duplicate.zip",
-        {"images/a.png": _image_bytes(), "images/b.png": _image_bytes(), "classes.txt": "toad\n"},
+
+
+def test_import_retains_identical_images_with_unique_snapshot_paths(tmp_path: Path):
+    image_content = _image_bytes()
+    archive = _zip(
+        tmp_path / "duplicate-content.zip",
+        {
+            "images/group-a/frame.png": image_content,
+            "images/group-b/frame.png": image_content,
+            "images/group-c/frame.png": image_content,
+            "annotations.xml": """
+                <annotations>
+                  <meta><task><labels><label><name>toad</name></label></labels></task></meta>
+                  <image name="images/group-a/frame.png" width="40" height="30">
+                    <box label="toad" xtl="2" ytl="3" xbr="12" ybr="13"/>
+                  </image>
+                  <image name="images/group-b/frame.png" width="40" height="30"/>
+                  <image name="images/group-c/frame.png" width="40" height="30">
+                    <box label="toad" xtl="4" ytl="5" xbr="14" ybr="15"/>
+                  </image>
+                </annotations>
+            """,
+        },
     )
-    with pytest.raises(ValidationError, match="duplicate image content"):
-        DatasetImporter().import_archive(duplicate, tmp_path / "duplicate-out", classes=["toad"])
+
+    snapshot = DatasetImporter().import_archive(
+        archive, tmp_path / "duplicate-out", classes=["toad"]
+    )
+
+    assert len(snapshot.manifest.images) == 3
+    assert len({image.relative_path for image in snapshot.manifest.images}) == 3
+    assert {image.sha256 for image in snapshot.manifest.images} == {
+        hashlib.sha256(image_content).hexdigest()
+    }
+    assert [len(image.annotations) for image in snapshot.manifest.images] == [1, 0, 1]
+    assert all(
+        (snapshot.root / image.relative_path).read_bytes() == image_content
+        for image in snapshot.manifest.images
+    )
+    reloaded = DatasetSnapshot.load(snapshot.root)
+    assert [image.relative_path for image in reloaded.manifest.images] == [
+        image.relative_path for image in snapshot.manifest.images
+    ]
 
 
 def test_dataset_merge_creates_new_snapshot_without_mutating_parent(tmp_path: Path):
@@ -223,3 +262,71 @@ def test_snapshot_prepares_yolo_training_data_with_shared_preprocessing(tmp_path
     assert prepared["training_image_size"] == 64
     assert prepared["short_side_dimension"] == 20
     assert snapshot.training_canvas_size(PreprocessingConfig(short_side_dimension=20)) == 64
+
+
+def test_import_reports_validated_image_counts_and_stages_on_snapshot_filesystem(
+    tmp_path: Path, monkeypatch
+):
+    archive = _zip(
+        tmp_path / "bulk.zip",
+        {
+            "images/a.png": _image_bytes(color=(1, 2, 3)),
+            "images/b.png": _image_bytes(color=(4, 5, 6)),
+            "images/c.png": _image_bytes(color=(7, 8, 9)),
+            "classes.txt": "toad\n",
+        },
+    )
+    progress = []
+    extraction_roots = []
+    original_extract = DatasetImporter._extract
+
+    def observe_extract(source, destination):
+        extraction_roots.append(Path(destination))
+        return original_extract(source, destination)
+
+    monkeypatch.setattr(DatasetImporter, "_extract", staticmethod(observe_extract))
+
+    snapshot = DatasetImporter().import_archive(
+        archive,
+        tmp_path / "incoming",
+        classes=["toad"],
+        progress_callback=progress.append,
+    )
+
+    assert extraction_roots and extraction_roots[0].is_relative_to(tmp_path)
+    image_progress = [item for item in progress if item.get("phase") == "validating-images"]
+    assert [(item["completed"], item["total"]) for item in image_progress] == [
+        (1, 3),
+        (2, 3),
+        (3, 3),
+    ]
+    assert image_progress[-1]["phase_progress"] == 1.0
+    assert (snapshot.root / "source" / "bulk.zip").read_bytes() == archive.read_bytes()
+    for item in snapshot.manifest.images:
+        image_path = snapshot.root / item.relative_path
+        assert hashlib.sha256(image_path.read_bytes()).hexdigest() == item.sha256
+
+
+def test_import_removes_staging_directory_if_snapshot_publish_fails(tmp_path: Path, monkeypatch):
+    archive = _zip(
+        tmp_path / "publish-failure.zip",
+        {"images/a.png": _image_bytes(), "classes.txt": "toad\n"},
+    )
+    snapshot_id = f"snapshot-{hashlib.sha256(archive.read_bytes()).hexdigest()[:12]}"
+    destination = tmp_path / snapshot_id
+    original_replace = os.replace
+
+    def fail_publish(source, target):
+        source_path = Path(source)
+        target_path = Path(target)
+        if target_path == destination and source_path.name.startswith(f".{snapshot_id}.staging-"):
+            raise OSError("injected snapshot publish failure")
+        return original_replace(source, target)
+
+    monkeypatch.setattr(os, "replace", fail_publish)
+
+    with pytest.raises(OSError, match="injected snapshot publish failure"):
+        DatasetImporter().import_archive(archive, tmp_path / "incoming", classes=["toad"])
+
+    assert not destination.exists()
+    assert not list(tmp_path.glob(f".{snapshot_id}.staging-*"))

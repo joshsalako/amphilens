@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
-from ..core import ProjectStore, ValidationError
+from ..core import ProjectStore, ValidationError, atomic_write_json, read_json
 from ..dataset import DatasetImporter, DatasetSnapshot
 from .managed import CVATProjectSummary, CVATTransport
 
@@ -99,6 +101,7 @@ class CVATProjectImportService:
         *,
         class_mapping: dict[str, str] | None = None,
         display_name: str | None = None,
+        progress_callback: Callable[[dict[str, object]], None] | None = None,
     ) -> list[DatasetSnapshot]:
         """Import each CVAT task as a separately selectable immutable snapshot."""
         mapping = dict(class_mapping or {})
@@ -111,10 +114,18 @@ class CVATProjectImportService:
 
         base_name = " ".join(str(display_name or project.name).split())
         importer = DatasetImporter()
-        with tempfile.TemporaryDirectory(prefix="amphilens-cvat-tasks-") as temporary:
+        task_count = len(project.tasks)
+        dataset_root = self.store.root / "datasets"
+        dataset_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(
+            prefix=".amphilens-cvat-import-", dir=dataset_root
+        ) as temporary:
             temporary_root = Path(temporary)
+            archive_root = temporary_root / "archives"
+            archive_root.mkdir()
+            snapshot_parent = temporary_root / "snapshots"
             staged: list[tuple[DatasetSnapshot, str]] = []
-            for task in project.tasks:
+            for task_index, task in enumerate(project.tasks, start=1):
                 task_identity = "\0".join(
                     (
                         str(getattr(self.transport, "server_url", "")),
@@ -123,13 +134,39 @@ class CVATProjectImportService:
                     )
                 )
                 task_key = hashlib.sha256(task_identity.encode("utf-8")).hexdigest()[:8]
-                archive = temporary_root / f"task-{task_key}.zip"
+                archive = archive_root / f"task-{task_key}.zip"
+                if progress_callback is not None:
+                    progress_callback(
+                        {
+                            "phase": "cvat-export",
+                            "message": (
+                                f"Exporting CVAT task {task.name} "
+                                f"({task_index} of {task_count}) with images"
+                            ),
+                            "completed": task_index - 1,
+                            "total": task_count,
+                            "progress": (task_index - 1) / task_count,
+                        }
+                    )
                 exported = Path(
                     self.transport.export_task(task.task_id, archive)
                 ).expanduser().resolve()
                 if not exported.is_file():
                     raise ValidationError(
                         f"CVAT task {task.name!r} did not produce an export archive"
+                    )
+                if progress_callback is not None:
+                    progress_callback(
+                        {
+                            "phase": "cvat-export",
+                            "message": (
+                                f"Exported CVAT task {task.name} "
+                                f"({task_index} of {task_count}); validating its images"
+                            ),
+                            "completed": task_index,
+                            "total": task_count,
+                            "progress": task_index / task_count,
+                        }
                     )
                 archive_hash = _sha256(exported)
                 snapshot_id = f"snapshot-{archive_hash[:12]}-task-{task_key}"
@@ -153,20 +190,35 @@ class CVATProjectImportService:
                 task_suffix = f" · {task.name or f'Task {task.task_id}'}"
                 name_prefix = base_name[: max(0, 120 - len(task_suffix))].rstrip()
                 task_display_name = f"{name_prefix}{task_suffix}".strip()[:120]
+
+                def report_task_progress(event: dict[str, object]) -> None:
+                    if progress_callback is None:
+                        return
+                    progress = dict(event)
+                    progress["task_index"] = task_index
+                    progress["task_count"] = task_count
+                    progress["task_name"] = task.name
+                    progress["message"] = (
+                        f"CVAT task {task.name} ({task_index} of {task_count}): "
+                        f"{event.get('message', 'Importing images')}"
+                    )
+                    progress_callback(progress)
+
                 staged_snapshot = importer.import_archive(
                     exported,
-                    temporary_root / "snapshots" / "incoming",
+                    snapshot_parent / "incoming",
                     classes=self.store.load_manifest().classes,
                     class_mapping=mapping,
                     source_provenance=provenance,
                     snapshot_id=snapshot_id,
+                    progress_callback=report_task_progress,
                 )
                 staged.append((staged_snapshot, task_display_name))
 
-            dataset_root = self.store.root / "datasets"
-            dataset_root.mkdir(parents=True, exist_ok=True)
             snapshots: list[DatasetSnapshot] = []
             created_paths: list[Path] = []
+            catalog_path = dataset_root / "catalog.json"
+            original_catalog = read_json(catalog_path) if catalog_path.is_file() else None
             try:
                 for staged_snapshot, task_display_name in staged:
                     destination = dataset_root / staged_snapshot.manifest.snapshot_id
@@ -184,7 +236,7 @@ class CVATProjectImportService:
                                 "Existing snapshot identity does not match the CVAT task export"
                             )
                     else:
-                        shutil.copytree(staged_snapshot.root, destination)
+                        os.replace(staged_snapshot.root, destination)
                         created_paths.append(destination)
                         snapshot = DatasetSnapshot.load(destination)
                     self.store.set_dataset_display_name(snapshot.root, task_display_name)
@@ -192,5 +244,24 @@ class CVATProjectImportService:
             except Exception:
                 for path in reversed(created_paths):
                     shutil.rmtree(path, ignore_errors=True)
+                if original_catalog is None:
+                    catalog_path.unlink(missing_ok=True)
+                else:
+                    atomic_write_json(catalog_path, original_catalog)
                 raise
+        if progress_callback is not None:
+            total_images = sum(len(snapshot.manifest.images) for snapshot in snapshots)
+            progress_callback(
+                {
+                    "phase": "completed",
+                    "message": (
+                        f"Imported {len(snapshots)} CVAT task snapshots "
+                        f"({total_images} images)"
+                    ),
+                    "completed": task_count,
+                    "total": task_count,
+                    "progress": 1.0,
+                    "phase_progress": 1.0,
+                }
+            )
         return snapshots
