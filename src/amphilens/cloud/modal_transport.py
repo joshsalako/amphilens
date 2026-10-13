@@ -8,6 +8,7 @@ import io
 import json
 import re
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,7 @@ from ..models.backends import OptionalDependencyError
 from .constants import (
     MODAL_APP_NAME,
     MODEL_CACHE_VOLUME_NAME,
+    PREDICTION_SESSION_SCALEDOWN_WINDOW_SECONDS,
     PREDICTION_VOLUME_NAME,
     VOLUME_NAME,
 )
@@ -27,6 +29,34 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+class _ModalPredictionSession:
+    """One app-scoped Modal class instance reused for sequential prediction batches."""
+
+    def __init__(self, transport: ModalTransport, engine, job_key: str):
+        self._transport = transport
+        self._engine = engine
+        self._job_key = job_key
+
+    def predict_batch(
+        self,
+        payload: dict[str, Any],
+        *,
+        cancellation_requested=None,
+        progress_callback=None,
+        job_id_callback=None,
+    ) -> dict[str, Any]:
+        if str(payload.get("job_key", "")) != self._job_key:
+            raise ValueError("Modal prediction batch does not belong to the active run")
+        return self._transport._predict_batch_in_session(
+            self._engine,
+            self._job_key,
+            payload,
+            cancellation_requested=cancellation_requested,
+            progress_callback=progress_callback,
+            job_id_callback=job_id_callback,
+        )
 
 
 class ModalTransport:
@@ -221,6 +251,45 @@ class ModalTransport:
         except Exception as exc:
             raise RuntimeError(self._redact(str(exc))) from exc
 
+    @contextmanager
+    def prediction_session(
+        self,
+        *,
+        job_key: str,
+        gpu: str,
+        model_spec: dict[str, Any],
+        timeout_seconds: int,
+    ):
+        """Keep one Modal app and prediction engine alive across a run's batches."""
+        from .prediction import PredictionCancelled
+
+        timeout = max(1, int(timeout_seconds))
+        try:
+            self._load_modal()
+            client = self._get_client()
+            module = self._load_app_module()
+            model_spec_json = json.dumps(model_spec, ensure_ascii=False, sort_keys=True)
+            with module.app.run(detach=False, client=client):
+                engine_class = module.PredictionEngine.with_options(
+                    gpu=str(gpu),
+                    timeout=timeout,
+                    retries=0,
+                    max_containers=1,
+                    scaledown_window=min(
+                        timeout, PREDICTION_SESSION_SCALEDOWN_WINDOW_SECONDS
+                    ),
+                )
+                engine = engine_class(
+                    model_spec_json=model_spec_json,
+                    job_key=str(job_key),
+                    gpu_type=str(gpu),
+                )
+                yield _ModalPredictionSession(self, engine, str(job_key))
+        except PredictionCancelled:
+            raise
+        except Exception as exc:
+            raise RuntimeError(self._redact(str(exc))) from exc
+
     def predict_batch(
         self,
         payload: dict[str, Any],
@@ -229,54 +298,61 @@ class ModalTransport:
         progress_callback=None,
         job_id_callback=None,
     ) -> dict[str, Any]:
-        """Submit one staged batch to a single dynamically selected Modal GPU worker."""
+        """Submit a standalone staged batch and stop its app when the batch ends."""
+        with self.prediction_session(
+            job_key=str(payload["job_key"]),
+            gpu=str(payload["gpu"]),
+            model_spec=payload["model_spec"],
+            timeout_seconds=int(payload["timeout_seconds"]),
+        ) as session:
+            return session.predict_batch(
+                payload,
+                cancellation_requested=cancellation_requested,
+                progress_callback=progress_callback,
+                job_id_callback=job_id_callback,
+            )
+
+    def _predict_batch_in_session(
+        self,
+        engine,
+        job_key: str,
+        payload: dict[str, Any],
+        *,
+        cancellation_requested=None,
+        progress_callback=None,
+        job_id_callback=None,
+    ) -> dict[str, Any]:
         from .prediction import PredictionCancelled
 
-        self._load_modal()
-        client = self._get_client()
-        module = self._load_app_module()
-        gpu = str(payload["gpu"])
         timeout = max(1, int(payload["timeout_seconds"]))
-        model_spec_json = json.dumps(payload["model_spec"], ensure_ascii=False, sort_keys=True)
-        job_key = str(payload["job_key"])
         try:
-            with module.app.run(detach=True, client=client):
-                engine_class = module.PredictionEngine.with_options(
-                    gpu=gpu,
-                    timeout=timeout,
-                    retries=0,
-                    max_containers=1,
-                )
-                engine = engine_class(
-                    model_spec_json=model_spec_json,
-                    job_key=job_key,
-                    gpu_type=gpu,
-                )
-                call = engine.predict_batch.spawn(payload)
-                if job_id_callback is not None:
-                    call_id = getattr(call, "object_id", None)
-                    if call_id:
-                        job_id_callback(str(call_id))
-                deadline = time.monotonic() + timeout + 120
-                while True:
-                    try:
-                        result = call.get(timeout=1)
-                        break
-                    except TimeoutError:
-                        progress = self._prediction_progress(job_key)
-                        if progress and progress_callback is not None:
-                            progress_callback(progress)
-                        if cancellation_requested and cancellation_requested():
-                            call.cancel(terminate_containers=True)
-                            raise PredictionCancelled(
-                                "Prediction canceled. The active Modal call was stopped."
-                            )
-                        if time.monotonic() >= deadline:
-                            call.cancel(terminate_containers=True)
-                            raise TimeoutError("Modal prediction exceeded its local wait deadline")
+            call = engine.predict_batch.spawn(payload)
+            if job_id_callback is not None:
+                call_id = getattr(call, "object_id", None)
+                if call_id:
+                    job_id_callback(str(call_id))
+            deadline = time.monotonic() + timeout + 120
+            while True:
+                try:
+                    result = call.get(timeout=1)
+                    break
+                except TimeoutError:
+                    progress = self._prediction_progress(job_key)
+                    if progress and progress_callback is not None:
+                        progress_callback(progress)
+                    if cancellation_requested and cancellation_requested():
+                        call.cancel(terminate_containers=True)
+                        raise PredictionCancelled(
+                            "Prediction canceled. The active Modal call was stopped."
+                        )
+                    if time.monotonic() >= deadline:
+                        call.cancel(terminate_containers=True)
+                        raise TimeoutError("Modal prediction exceeded its local wait deadline")
             if not isinstance(result, dict):
                 raise RuntimeError("Modal prediction worker returned an invalid response")
             return result
+        except PredictionCancelled:
+            raise
         except Exception as exc:
             raise RuntimeError(self._redact(str(exc))) from exc
 

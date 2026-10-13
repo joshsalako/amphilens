@@ -10,6 +10,7 @@ import shutil
 import tempfile
 import time
 from collections.abc import Callable
+from contextlib import ExitStack, contextmanager
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -413,6 +414,8 @@ class CloudPredictionDetector:
         self.model_id = str(model_spec["model_id"])
         self._batch_number = 0
         self._uploaded_images = 0
+        self._prediction_session = None
+        self._prediction_session_stack: ExitStack | None = None
         self.device_name = f"{self.provider_label} GPU"
         self._cost_path = self.output_dir / "cloud-cost.json"
         self.estimated_cost_usd = 0.0
@@ -432,6 +435,22 @@ class CloudPredictionDetector:
                 self._uploaded_images = self.completed_image_count
             except (OSError, ValueError, TypeError):
                 self.estimated_cost_usd = 0.0
+
+    @contextmanager
+    def prediction_session(self):
+        """Share a provider session across this resumable run when supported."""
+        session_factory = getattr(self.transport, "prediction_session", None)
+        if self.provider != "modal" or not callable(session_factory):
+            yield
+            return
+
+        with ExitStack() as stack:
+            self._prediction_session_stack = stack
+            try:
+                yield
+            finally:
+                self._prediction_session_stack = None
+                self._prediction_session = None
 
     def _rate_per_second(self) -> float:
         if self._provider_rate is not None:
@@ -630,7 +649,22 @@ class CloudPredictionDetector:
                     )
                 self.progress_callback(event)
 
-            result = self.transport.predict_batch(
+            session = self._prediction_session
+            if session is None and self._prediction_session_stack is not None:
+                session_factory = getattr(self.transport, "prediction_session")
+                session = self._prediction_session_stack.enter_context(
+                    session_factory(
+                        job_key=self.job_key,
+                        gpu=self.gpu,
+                        model_spec=self.model_spec,
+                        timeout_seconds=self.timeout_seconds,
+                    )
+                )
+                self._prediction_session = session
+            predict_batch = (
+                session.predict_batch if session is not None else self.transport.predict_batch
+            )
+            result = predict_batch(
                 payload,
                 cancellation_requested=self.cancellation_requested,
                 progress_callback=report_remote,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -61,6 +62,22 @@ class FakeTransport:
         self.cleaned.append((job_key, batch_id))
 
 
+class SessionFakeTransport(FakeTransport):
+    def __init__(self, result=None):
+        super().__init__(result)
+        self.session_entries = 0
+        self.session_exits = 0
+
+    @contextmanager
+    def prediction_session(self, **kwargs):
+        del kwargs
+        self.session_entries += 1
+        try:
+            yield self
+        finally:
+            self.session_exits += 1
+
+
 def _save_test_image(path: Path, *, size=(10, 10), color=(20, 30, 40)) -> Path:
     Image.new("RGB", size, color=color).save(path)
     return path
@@ -110,6 +127,60 @@ def test_modal_prediction_detector_maps_local_ids_and_cleans_batch(tmp_path):
     assert "image_path" not in json.dumps(transport.payload)
     assert transport.cleaned == [("job123", transport.uploaded[0][1])]
     assert (tmp_path / "run" / "cloud-cost.json").is_file()
+
+
+def test_resumable_prediction_opens_one_session_for_all_batches(tmp_path):
+    paths = [_save_test_image(tmp_path / f"{index}.jpg") for index in range(3)]
+    transport = SessionFakeTransport()
+    detector = ModalPredictionDetector(
+        transport,
+        job_key="session-run",
+        gpu="L4",
+        model_spec={"source": "preset", "model_id": "yolo26-l"},
+        timeout_seconds=100,
+        max_cost_usd=5,
+        output_dir=tmp_path / "artifacts",
+    )
+
+    summary = run_resumable_inference(
+        detector,
+        paths,
+        InferenceConfig(model_id="yolo26-l", run_id="session-run", batch_size=1),
+        tmp_path / "artifacts",
+    )
+
+    assert summary.completed_images == 3
+    assert len(transport.uploaded) == 3
+    assert transport.session_entries == 1
+    assert transport.session_exits == 1
+
+
+def test_resumable_prediction_closes_session_when_canceled(tmp_path):
+    paths = [_save_test_image(tmp_path / f"{index}.jpg") for index in range(2)]
+    transport = SessionFakeTransport()
+    detector = ModalPredictionDetector(
+        transport,
+        job_key="session-cancel",
+        gpu="L4",
+        model_spec={"source": "preset", "model_id": "yolo26-l"},
+        timeout_seconds=100,
+        max_cost_usd=5,
+        output_dir=tmp_path / "artifacts",
+        cancellation_requested=lambda: len(transport.uploaded) > 0,
+    )
+
+    summary = run_resumable_inference(
+        detector,
+        paths,
+        InferenceConfig(model_id="yolo26-l", run_id="session-cancel", batch_size=1),
+        tmp_path / "artifacts",
+    )
+
+    assert summary.completed_images == 1
+    assert summary.interruption_reason
+    assert len(transport.uploaded) == 1
+    assert transport.session_entries == 1
+    assert transport.session_exits == 1
 
 
 def test_modal_prediction_uploads_locally_preprocessed_images_and_restores_boxes(tmp_path):

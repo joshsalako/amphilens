@@ -50,12 +50,29 @@ def test_modal_timestamp_ocr_adds_rapidocr_to_its_worker_image_only():
         def __init__(self, steps=()):
             self.steps = list(steps)
 
+        def env(self, values):
+            del values
+            assert not self.steps or self.steps[-1] != "local-source"
+            return FakeImage([*self.steps, "env"])
+
         def uv_pip_install(self, *packages):
+            assert not self.steps or self.steps[-1] != "local-source"
             return FakeImage([*self.steps, *packages])
 
-    prediction_image = FakeImage(["torch", "ultralytics"])
+        def add_local_python_source(self, module):
+            assert module == "amphilens"
+            return FakeImage([*self.steps, "local-source"])
 
-    ocr_image = modal_app._build_timestamp_ocr_image(prediction_image)
+    prediction_image = FakeImage(["torch", "ultralytics"])
+    environment = {"HF_HOME": "/models/hf"}
+
+    ocr_image = modal_app._build_timestamp_ocr_image(prediction_image, environment)
 
     assert prediction_image.steps == ["torch", "ultralytics"]
-    assert ocr_image.steps == ["torch", "ultralytics", "rapidocr==3.10.0"]
+    assert ocr_image.steps == [
+        "torch",
+        "ultralytics",
+        "env",
+        "rapidocr==3.10.0",
+        "local-source",
+    ]

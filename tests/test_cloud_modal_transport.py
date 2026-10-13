@@ -5,6 +5,8 @@ import sys
 from contextlib import contextmanager
 from types import SimpleNamespace
 
+import pytest
+
 from amphilens.cloud.credentials import CloudCredentials
 from amphilens.cloud.modal_transport import ModalTransport
 
@@ -101,11 +103,17 @@ class FakeFunction:
 class FakeApp:
     def __init__(self):
         self.run_options = None
+        self.run_count = 0
+        self.exit_count = 0
 
     @contextmanager
     def run(self, **kwargs):
         self.run_options = kwargs
-        yield self
+        self.run_count += 1
+        try:
+            yield self
+        finally:
+            self.exit_count += 1
 
 
 def make_transport(monkeypatch):
@@ -285,6 +293,115 @@ def test_prediction_call_uses_selected_gpu_model_spec_and_one_container(monkeypa
     assert json.loads(engine_class.model_spec_json) == payload["model_spec"]
     assert engine_class.job_key == payload["job_key"]
     assert engine_class.gpu_type == payload["gpu"]
+    assert app.run_options["detach"] is False
+    assert engine_class.options["scaledown_window"] == payload["timeout_seconds"]
+
+
+def test_prediction_session_reuses_one_engine_and_closes_app_after_all_batches(monkeypatch):
+    transport, _, _, app, _ = make_transport(monkeypatch)
+    call = FakeCall(result={"state": "finished", "records": []})
+    engine_instances = []
+
+    class FakePredictionMethod:
+        def __init__(self):
+            self.payloads = []
+
+        def spawn(self, payload):
+            self.payloads.append(payload)
+            return call
+
+    class FakeEngine:
+        def __init__(self, model_spec_json, *, job_key, gpu_type):
+            self.model_spec_json = model_spec_json
+            self.job_key = job_key
+            self.gpu_type = gpu_type
+            self.predict_batch = FakePredictionMethod()
+            engine_instances.append(self)
+
+    class FakeEngineClass:
+        def with_options(self, **kwargs):
+            self.options = kwargs
+            return self
+
+        def __call__(self, *, model_spec_json, job_key, gpu_type):
+            return FakeEngine(model_spec_json, job_key=job_key, gpu_type=gpu_type)
+
+    engine_class = FakeEngineClass()
+    monkeypatch.setattr(
+        transport,
+        "_load_app_module",
+        lambda: SimpleNamespace(app=app, PredictionEngine=engine_class),
+    )
+    payload = {
+        "job_key": "prediction-session-test",
+        "batch_id": "batch-1",
+        "gpu": "A10",
+        "timeout_seconds": 120,
+        "model_spec": {"source": "preset", "model_id": "yolo26-l"},
+    }
+
+    with transport.prediction_session(
+        job_key=payload["job_key"],
+        gpu=payload["gpu"],
+        model_spec=payload["model_spec"],
+        timeout_seconds=payload["timeout_seconds"],
+    ) as session:
+        assert session.predict_batch(payload)["state"] == "finished"
+        second_payload = {**payload, "batch_id": "batch-2"}
+        assert session.predict_batch(second_payload)["state"] == "finished"
+
+    assert app.run_count == 1
+    assert app.exit_count == 1
+    assert app.run_options["detach"] is False
+    assert engine_class.options["max_containers"] == 1
+    assert engine_class.options["scaledown_window"] == 120
+    assert len(engine_instances) == 1
+    assert [
+        payload["batch_id"] for payload in engine_instances[0].predict_batch.payloads
+    ] == ["batch-1", "batch-2"]
+
+
+def test_prediction_session_closes_app_and_terminates_call_on_cancel(monkeypatch):
+    transport, call, _, app, _ = make_transport(monkeypatch)
+
+    class FakeEngine:
+        def __init__(self, model_spec_json, *, job_key, gpu_type):
+            del model_spec_json, job_key, gpu_type
+            self.predict_batch = FakeFunction(call)
+
+    class FakeEngineClass:
+        def with_options(self, **kwargs):
+            return self
+
+        def __call__(self, **kwargs):
+            return FakeEngine(**kwargs)
+
+    monkeypatch.setattr(
+        transport,
+        "_load_app_module",
+        lambda: SimpleNamespace(app=app, PredictionEngine=FakeEngineClass()),
+    )
+    payload = {
+        "job_key": "prediction-cancel-test",
+        "gpu": "A10",
+        "timeout_seconds": 120,
+        "model_spec": {"source": "preset", "model_id": "yolo26-l"},
+    }
+
+    from amphilens.cloud.prediction import PredictionCancelled
+
+    with pytest.raises(PredictionCancelled):
+        with transport.prediction_session(
+            job_key=payload["job_key"],
+            gpu=payload["gpu"],
+            model_spec=payload["model_spec"],
+            timeout_seconds=payload["timeout_seconds"],
+        ) as session:
+            session.predict_batch(payload, cancellation_requested=lambda: True)
+
+    assert call.canceled == [True]
+    assert app.run_count == 1
+    assert app.exit_count == 1
 
 
 def test_modal_download_streams_volume_chunks_to_disk(tmp_path, monkeypatch):

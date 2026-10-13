@@ -82,21 +82,23 @@ def _build_prediction_image(image, environment):
     return image.env(environment).add_local_python_source("amphilens")
 
 
-prediction_image = _build_prediction_image(
-    base_image,
-    {
-        "YOLO_CONFIG_DIR": f"{MODEL_CACHE_MOUNT}/ultralytics",
-        "TORCH_HOME": f"{MODEL_CACHE_MOUNT}/torch",
-        "HF_HOME": f"{MODEL_CACHE_MOUNT}/huggingface",
-    },
-)
+prediction_image_environment = {
+    "YOLO_CONFIG_DIR": f"{MODEL_CACHE_MOUNT}/ultralytics",
+    "TORCH_HOME": f"{MODEL_CACHE_MOUNT}/torch",
+    "HF_HOME": f"{MODEL_CACHE_MOUNT}/huggingface",
+}
+prediction_image = _build_prediction_image(base_image, prediction_image_environment)
 
-def _build_timestamp_ocr_image(image):
+def _build_timestamp_ocr_image(image, environment):
     """Add OCR only to its optional cloud worker image."""
-    return image.uv_pip_install(f"rapidocr=={IMAGE_PINS['rapidocr']}")
+    return (
+        image.env(environment)
+        .uv_pip_install(f"rapidocr=={IMAGE_PINS['rapidocr']}")
+        .add_local_python_source("amphilens")
+    )
 
 
-timestamp_ocr_image = _build_timestamp_ocr_image(prediction_image)
+timestamp_ocr_image = _build_timestamp_ocr_image(base_image, prediction_image_environment)
 
 
 @app.cls(

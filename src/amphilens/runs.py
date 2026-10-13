@@ -101,7 +101,7 @@ def _report_inference_progress(
     )
 
 
-def run_resumable_inference(
+def _run_resumable_inference(
     detector,
     image_paths: Iterable[str | Path],
     config: InferenceConfig,
@@ -261,3 +261,31 @@ def run_resumable_inference(
         run_manifest=run_manifest_path,
         interruption_reason=interruption_reason,
     )
+
+
+def run_resumable_inference(
+    detector,
+    image_paths: Iterable[str | Path],
+    config: InferenceConfig,
+    artifact_dir: str | Path,
+    *,
+    progress_callback: Callable[[dict], None] | None = None,
+) -> RunSummary:
+    """Run resumable inference inside any optional run-scoped detector session."""
+    session_factory = getattr(detector, "prediction_session", None)
+    if not callable(session_factory):
+        return _run_resumable_inference(
+            detector,
+            image_paths,
+            config,
+            artifact_dir,
+            progress_callback=progress_callback,
+        )
+    with session_factory():
+        return _run_resumable_inference(
+            detector,
+            image_paths,
+            config,
+            artifact_dir,
+            progress_callback=progress_callback,
+        )

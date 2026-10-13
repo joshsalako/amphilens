@@ -26,3 +26,4 @@ PREDICTION_VOLUME_NAME = "amphilens-prediction-images"
 PREDICTION_MOUNT = "/mnt/amphilens-predictions"
 MODEL_CACHE_VOLUME_NAME = "amphilens-model-cache"
 MODEL_CACHE_MOUNT = "/mnt/amphilens-model-cache"
+PREDICTION_SESSION_SCALEDOWN_WINDOW_SECONDS = 10 * 60
