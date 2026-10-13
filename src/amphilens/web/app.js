@@ -351,7 +351,7 @@
     controls.clahe.checked = Boolean(settings.clahe_enabled);
     if (controls.help) {
       controls.help.textContent = metadataMissing
-        ? "This model has no recorded image-preparation settings. Defaults are 640 px, grayscale on, and local contrast on."
+        ? "Defaults values are applied: 640 px, grayscale on, and CLAHE."
         : "Settings start from this model’s recorded configuration. The model’s input size is selected automatically.";
     }
   }
@@ -482,21 +482,21 @@
     if (projectRequired()) return;
     const roots = app.project.image_roots || [];
     const currentRoot = roots[0] || "";
-    root.innerHTML = `${pageHead("Run detection", "Scan an image folder and create a predictions file with reports. This workflow works without annotations or CVAT.")}
-      <div class="form-layout form-layout-single"><section class="surface form-panel"><div class="panel-heading"><div><h2>Choose images and model</h2><p>Original image files are never changed.</p></div></div>
+    root.innerHTML = `${pageHead("Run detection", "Scan an image folder and create a predictions file with reports.")}
+      <div class="form-layout form-layout-single"><section class="surface form-panel"><div class="panel-heading"><div><h2>Choose images and model</h2>This name is saved with the results. The exact model ID is recorded separately.</div></div>
         <form class="form-stack" data-form="predict">
-          <div class="field"><label for="prediction-run-name">Prediction run name</label><input id="prediction-run-name" name="run_name" type="text" maxlength="120" placeholder="e.g. Spring survey" required><span class="field-help">This name is saved with the results. The exact model ID is recorded separately.</span></div>
+          <div class="field"><label for="prediction-run-name">Prediction run name</label><input id="prediction-run-name" name="run_name" type="text" maxlength="120" placeholder="e.g. Spring survey" required></div>
           <div class="field"><label for="prediction-root">Image folder</label>${pathPickerControl("prediction-root", "image_root", "directory", "/path/to/camera-trap-images", { value: currentRoot, required: true, label: "an image folder" })}<span class="field-help">Choose a folder visible to the computer running AmphiLens.</span></div>
           <div class="field"><label for="prediction-model">Model</label><select id="prediction-model" name="model_choice">${modelOptions()}</select></div>
           <div id="prediction-hosted-details" class="hosted-model-panel" hidden></div>
           <div id="prediction-class-mapping" class="hosted-class-mapping" hidden></div>
           <details class="advanced-settings"><summary>Image preparation</summary><div class="advanced-body">${modelSettingsFields("prediction")}</div></details>
-          <div class="field"><label for="prediction-execution">Where to run</label><select id="prediction-execution" name="execution"><option value="local">This computer</option><option value="modal">Modal cloud GPU</option><option value="azure_ml">Azure Machine Learning</option><option value="vertex_ai">Google Vertex AI</option></select><span class="field-help">Cloud prediction transfers images in small batches. Images remain in this project on your computer.</span></div>
+          <div class="field"><label for="prediction-execution">Where to run</label><select id="prediction-execution" name="execution"><option value="local">This computer</option><option value="modal">Modal cloud GPU</option><option value="azure_ml">Azure Machine Learning</option><option value="vertex_ai">Google Vertex AI</option></select></div>
           <details class="advanced-settings"><summary>Detection settings</summary><div class="advanced-body">
             <div class="field"><label for="confidence">Confidence threshold</label><div class="range-field"><input id="confidence" name="confidence" type="range" min="0.05" max="0.95" step="0.05" value="0.25"><output class="range-value" for="confidence">0.25</output></div><span class="field-help">Higher values keep only more confident detections.</span></div>
             <div class="field"><label for="prediction-output">Save results in <span class="optional">optional</span></label>${pathPickerControl("prediction-output", "output_dir", "directory", "Use the project runs folder", { label: "a results folder" })}</div>
             <div class="field" data-local-prediction-settings><label for="prediction-device">Local device</label><select id="prediction-device" name="device"><option value="auto">Auto</option><option value="cpu">CPU</option>${app.doctor?.cuda_available ? `<option value="cuda">CUDA GPU</option>` : ""}${app.doctor?.mps_available ? `<option value="mps">Apple MPS GPU</option>` : ""}</select><span class="field-help">Auto uses CUDA or Apple MPS when available, then CPU.</span></div>
-            <div class="field"><label for="prediction-batch-size">Batch size</label><select id="prediction-batch-size" name="batch_size"><option value="auto" selected>Auto</option>${Array.from({ length: 32 }, (_, index) => `<option value="${index + 1}">${index + 1}</option>`).join("")}</select><span class="field-help">Auto starts at up to 8 images on GPU and reduces the batch if memory is low. CPU always processes one image at a time.</span></div>
+            <div class="field"><label for="prediction-batch-size">Batch size</label><select id="prediction-batch-size" name="batch_size"><option value="auto" selected>Auto</option>${Array.from({ length: 32 }, (_, index) => `<option value="${index + 1}">${index + 1}</option>`).join("")}</select></div>
             <div class="cloud-prediction-settings" data-cloud-prediction-settings hidden><div class="field"><label for="prediction-gpu">Cloud GPU</label><select id="prediction-gpu" name="gpu">${cloudGpuOptions("modal", "L4")}</select><span class="field-help">The current full VM rate is checked for the selected provider and region before transfer.</span></div><div class="field"><label for="prediction-max-cost">Spending limit (USD)</label><input id="prediction-max-cost" name="max_cost_usd" type="number" min="0.01" step="0.01" value="5.00" required><span class="field-help">AmphiLens stops scheduling batches when its runtime estimate reaches this amount. This is not a billing cap.</span></div></div>
           </div></details>
           <div class="form-actions"><button class="button primary" type="submit">Run detection</button><span class="muted" style="font-size:.75rem">You can leave this page while it runs.</span></div>
@@ -671,7 +671,7 @@
         <label class="consent-row" data-training-image-split hidden><input type="checkbox" name="allow_image_level_split"><span>Allow an image-level split if source groups cannot be kept together.</span></label>
         <div class="field"><label for="training-source">Training source</label><select id="training-source" name="training_source"><option value="general-pretrained" selected>General pretrained weights</option><option value="amphilens-pretrained">AmphiLens pretrained model</option><option value="project-checkpoint"${checkpoints.length ? "" : " disabled"}>Existing project checkpoint</option></select><span class="field-help">Choose the pretrained model or a saved project checkpoint to fine-tune.</span></div>
         <div class="field" data-training-general><label for="training-model">Pretrained model</label><select id="training-model" name="model_preset">${(app.models || []).map((item) => `<option value="${escapeHtml(item.model_id)}"${item.model_id === (app.defaultModelId || app.models?.[0]?.model_id) ? " selected" : ""}>${escapeHtml(item.name || item.model_id)}</option>`).join("")}</select></div>
-        <div class="field" data-training-hosted hidden><label for="training-hosted-model">AmphiLens model</label><select id="training-hosted-model" name="hosted_model_id"><option value="">Choose a model</option>${(app.hostedModels || []).map((item) => `<option value="${escapeHtml(item.model_id)}">${escapeHtml(item.name || item.model_id)}</option>`).join("")}</select><span class="field-help">Architecture and model input size come from its metadata. Image preparation can be changed below.</span></div>
+        <div class="field" data-training-hosted hidden><label for="training-hosted-model">AmphiLens model</label><select id="training-hosted-model" name="hosted_model_id"><option value="">Choose a model</option>${(app.hostedModels || []).map((item) => `<option value="${escapeHtml(item.model_id)}">${escapeHtml(item.name || item.model_id)}</option>`).join("")}</select></div>
         <div class="hosted-model-panel" data-training-hosted-details hidden></div>
         <div class="field" data-training-checkpoint hidden><label for="training-checkpoint">Project checkpoint</label><select id="training-checkpoint" name="checkpoint"><option value="">Choose a saved checkpoint</option>${checkpoints.map((item) => `<option value="${escapeHtml(item.path)}">${escapeHtml(item.name || item.model_id || basename(item.path))}</option>`).join("")}</select></div>
         <div class="field"><label for="training-execution">Where should it run?</label><select id="training-execution" name="execution"><option value="local">On this computer</option><option value="cloud">Cloud GPU</option></select></div>
@@ -688,7 +688,7 @@
       </form><div id="job-slot" aria-live="polite"></div>
     </section></div>
       <section class="surface panel cloud-jobs-panel"><div class="panel-heading"><div><h2>Cloud jobs</h2><p>Training progress refreshes automatically while AmphiLens is open.</p></div><button class="button small" type="button" data-refresh-cloud-jobs>Refresh jobs</button></div><div id="cloud-jobs-slot" aria-live="polite"><p class="empty-inline">Loading saved cloud jobs…</p></div></section>` : `<section class="surface empty-state" style="margin-top:0"><div class="empty-illustration" aria-hidden="true">↗</div><h2>No labeled dataset yet</h2><p>Import a reviewed archive or CVAT project first. You can still use Find wildlife with a pretrained model while you gather annotations.</p><div class="project-actions"><button class="button primary" type="button" data-view="import">Import labeled images</button><button class="button" type="button" data-view="predict">Find wildlife</button></div></section>`;
-    root.innerHTML = `${pageHead("Train a model", "Fine-tune a model using a validated labeled dataset snapshot.")}${workflow}`;
+    root.innerHTML = `${pageHead("Train a model", "Fine-tune a model using labeled dataset snapshots.")}${workflow}`;
     const form = root.querySelector('form[data-form="training"]');
     restoreWorkflowViewState("training");
     syncTrainingDataControls(form);

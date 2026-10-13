@@ -195,7 +195,7 @@ h3 { margin: 0; font-size: 0.9375rem; line-height: 1.4; font-weight: 650; }
 .cvat-label-list { display: grid; gap: 7px; }
 .cvat-label-row { display: grid; grid-template-columns: minmax(90px, .8fr) minmax(0, 1.2fr); align-items: center; gap: 9px; color: #46534a; font-size: 0.75rem; }
 .hosted-model-panel { display: grid; gap: 12px; padding: 16px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-soft); }
-.hosted-model-panel[hidden], .hosted-class-mapping[hidden], [data-training-hosted][hidden], [data-training-checkpoint][hidden], .modal-prediction-settings[hidden], [data-local-prediction-settings][hidden] { display: none !important; }
+.hosted-model-panel[hidden], .hosted-class-mapping[hidden], [data-training-general][hidden], [data-training-hosted][hidden], [data-training-checkpoint][hidden], .modal-prediction-settings[hidden], [data-local-prediction-settings][hidden] { display: none !important; }
 .hosted-model-facts { display: flex; flex-wrap: wrap; gap: 6px 13px; margin: 0; color: var(--muted); font-size: 0.75rem; }
 .hosted-model-facts strong { color: var(--ink); font-weight: 660; text-transform: uppercase; }
 .hosted-class-mapping { display: grid; gap: 12px; padding: 15px 16px; border: 1px solid var(--line); border-radius: 7px; background: #fbfcf9; }
