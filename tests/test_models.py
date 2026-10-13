@@ -245,16 +245,19 @@ def test_ultralytics_training_uses_prepared_dataset_canvas_without_resizing(tmp_
     assert model.train_calls["imgsz"] == 1280
     assert model.train_calls["close_mosaic"] == 0
     assert config["training_image_size"] == 1280
-    assert model.train_calls["degrees"] == 15.0
-    assert model.train_calls["translate"] == 0.1
-    assert model.train_calls["scale"] == 0.5
-    assert model.train_calls["shear"] == 2.0
-    assert model.train_calls["perspective"] == 0.0001
+    assert model.train_calls["degrees"] == 10.0
+    assert model.train_calls["translate"] == 0.0
+    assert model.train_calls["scale"] == 0.0
+    assert model.train_calls["shear"] == 0.0
+    assert model.train_calls["perspective"] == 0.0
     assert model.train_calls["flipud"] == 0.5
     assert model.train_calls["fliplr"] == 0.5
-    assert model.train_calls["mosaic"] == 1.0
-    assert model.train_calls["mixup"] == 0.15
-    assert model.train_calls["copy_paste"] == 0.2
+    assert model.train_calls["mosaic"] == 0.0
+    assert model.train_calls["mixup"] == 0.0
+    assert model.train_calls["copy_paste"] == 0.0
+    assert model.train_calls["trainer"].__name__ == "AmphiLensDetectionTrainer"
+    assert config["augmentation"]["composition"]["max_images"] == 2
+    assert config["augmentation"]["composition"]["minimum_box_visibility"] == 0.5
 
 
 def test_faster_rcnn_augmentation_keeps_boxes_aligned_after_horizontal_flip():

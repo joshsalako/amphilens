@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import os
+import random
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from ..core import ValidationError, atomic_write_json
+from .augmentation import PANEL_AUGMENTATION, DetectionSample, compose_detection_samples
 from .backends import (
     OptionalDependencyError,
     _configure_faster_rcnn_transform,
@@ -25,15 +27,14 @@ _CLASSIFIER_HEAD_PREFIXES = (
 _FASTER_RCNN_AUGMENTATION = {
     "horizontal_flip_probability": 0.5,
     "vertical_flip_probability": 0.5,
-    "color_jitter_probability": 0.8,
-    "brightness": 0.4,
-    "contrast": 0.4,
-    "saturation": 0.4,
-    "affine_probability": 0.5,
-    "affine_scale": [0.5, 1.5],
-    "affine_translation_fraction": 0.1,
-    "affine_rotation_degrees": 10.0,
-    "minimum_box_visibility": 0.2,
+    "color_jitter_probability": 0.5,
+    "brightness": 0.1,
+    "contrast": 0.1,
+    "saturation": 0.0,
+    "rotation_probability": 1.0,
+    "rotation_degrees": 10.0,
+    "rotation_canvas": "expand-and-fit",
+    "minimum_box_visibility": 0.5,
     "fill": 114,
 }
 
@@ -41,25 +42,18 @@ _FASTER_RCNN_AUGMENTATION = {
 def _build_faster_rcnn_augmentation():
     from torchvision.transforms import v2
 
-    color_jitter = v2.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.0)
-    affine = v2.RandomAffine(
-        degrees=10,
-        translate=(0.1, 0.1),
-        scale=(0.5, 1.5),
-        fill=(114, 114, 114),
-    )
+    color_jitter = v2.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.0, hue=0.0)
     return v2.Compose(
         [
             v2.RandomHorizontalFlip(p=0.5),
             v2.RandomVerticalFlip(p=0.5),
-            v2.RandomApply([color_jitter], p=0.8),
-            v2.RandomApply([affine], p=0.5),
+            v2.RandomApply([color_jitter], p=0.5),
         ]
     )
 
 
 def _apply_faster_rcnn_augmentation(image, target, *, transform=None):
-    """Apply WTL-style joint image and box augmentation to a training sample."""
+    """Apply joint flips and mild lighting changes after safe rotation/composition."""
     import torch
     from torchvision import tv_tensors
 
@@ -241,7 +235,9 @@ class FasterRCNNDatasetSpec:
         test_label_dir = (
             label_root / "test"
             if test_image_dir is not None and (label_root / "test").is_dir()
-            else label_root if test_image_dir is not None else None
+            else label_root
+            if test_image_dir is not None
+            else None
         )
         classes = _classes_from_names(mapping.get("names"))
         short_side_dimension = mapping.get("short_side_dimension", 640)
@@ -331,20 +327,19 @@ class FasterRCNNDataset:
         self.paths = spec.image_paths()
         self.augment = augment
         self.transform = transform or (_build_faster_rcnn_augmentation() if augment else None)
+        self.last_augmentation_sources = []
 
     def __len__(self) -> int:
         return len(self.paths)
 
-    def __getitem__(self, index: int):
+    def _load_sample(self, index: int):
         path = self.paths[index]
         try:
             with self._image.open(path) as image:
                 rgb = image.convert("RGB")
                 width, height = rgb.size
-            array = self._np.array(rgb, copy=True)
         except OSError as exc:
             raise ValidationError(f"Dataset image cannot be read: {path}") from exc
-        tensor = self._torch.from_numpy(array).permute(2, 0, 1)
         label_path = self.spec.label_dir / f"{path.stem}.txt"
         lines = label_path.read_text(encoding="utf-8").splitlines() if label_path.is_file() else []
         try:
@@ -353,17 +348,32 @@ class FasterRCNNDataset:
             )
         except ValueError as exc:
             raise ValidationError(f"Invalid labels for dataset image {path}: {exc}") from exc
-        boxes = self._torch.tensor([box for box, _ in parsed], dtype=self._torch.float32)
-        if not parsed:
-            boxes = self._torch.zeros((0, 4), dtype=self._torch.float32)
-        labels = self._torch.tensor([label for _, label in parsed], dtype=self._torch.int64)
+        return DetectionSample(
+            rgb, [box for box, _ in parsed], [label for _, label in parsed], str(path)
+        )
+
+    def __getitem__(self, index: int):
+        sample = self._load_sample(index)
+        self.last_augmentation_sources = []
+        if self.augment:
+            samples = [sample]
+            if len(self) > 1 and random.random() < PANEL_AUGMENTATION["pair_probability"]:
+                partner = random.randrange(len(self) - 1)
+                partner += partner >= index
+                samples.append(self._load_sample(partner))
+            sample = compose_detection_samples(samples, sample.image.size)
+            self.last_augmentation_sources = sample.sources
+        array = self._np.array(sample.image, copy=True)
+        tensor = self._torch.from_numpy(array).permute(2, 0, 1)
+        boxes = self._torch.tensor(sample.boxes, dtype=self._torch.float32).reshape(-1, 4)
+        labels = self._torch.tensor(sample.labels, dtype=self._torch.int64)
         area = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
         target = {
             "boxes": boxes,
             "labels": labels,
             "image_id": self._torch.tensor([index]),
             "area": area,
-            "iscrowd": self._torch.zeros((len(parsed),), dtype=self._torch.int64),
+            "iscrowd": self._torch.zeros((len(labels),), dtype=self._torch.int64),
         }
         if self.augment:
             tensor, target = _apply_faster_rcnn_augmentation(
@@ -443,6 +453,7 @@ class FasterRCNNTrainer:
             "backend": "torchvision-v2",
             "enabled": augment,
             "parameters": dict(_FASTER_RCNN_AUGMENTATION) if augment else {},
+            "composition": dict(PANEL_AUGMENTATION) if augment else {},
         }
         if not len(dataset):
             raise ValidationError("Faster R-CNN training dataset contains no images")
@@ -450,6 +461,7 @@ class FasterRCNNTrainer:
         output.mkdir(parents=True, exist_ok=True)
         device = _select_torch_device(torch, str(config.get("device", "auto")))
         torch.manual_seed(int(config.get("seed", 42)))
+        random.seed(int(config.get("seed", 42)))
         weights = None
         if config.get("use_official_weights"):
             from torchvision.models.detection import FasterRCNN_ResNet50_FPN_V2_Weights
@@ -519,8 +531,10 @@ class FasterRCNNTrainer:
             raise ValidationError("epochs must be positive")
         patience = int(config.get("patience", 25))
         phase_specs = (
-            [("backbone-frozen", True, float(config.get("phase1_learning_rate", 0.0001))),
-             ("full-fine-tuning", False, float(config.get("phase2_learning_rate", 0.00005)))]
+            [
+                ("backbone-frozen", True, float(config.get("phase1_learning_rate", 0.0001))),
+                ("full-fine-tuning", False, float(config.get("phase2_learning_rate", 0.00005))),
+            ]
             if config.get("freeze_strategy", "paper-phased") == "paper-phased"
             else [("training", False, float(config.get("learning_rate", 0.0001)))]
         )

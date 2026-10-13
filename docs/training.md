@@ -146,6 +146,29 @@ The trainer writes `best.pt`, `last.pt`, `metrics.json`, and a checkpoint
 manifest. The manifest records classes, preprocessing, configuration, and
 software information.
 
+Training uses a gentle augmentation pipeline for YOLO, RT-DETR, and Faster
+R-CNN. Every source frame receives a random rotation between -10 and +10
+degrees on an expanded canvas, then is fitted without cropping. Half of the
+training samples combine two distinct training images in opaque panels, one
+above the other; the remaining samples use one image. Each panel contains its
+whole frame, and the bounding boxes are transformed with it. Composition
+requires at least 50% of every transformed box to remain visible (the fit
+normally preserves 100%). A dataset with one image uses single-image samples.
+
+Horizontal and vertical flips each have a 50% probability. YOLO and RT-DETR
+use mild brightness variation (HSV value gain 0.1); Faster R-CNN uses brightness
+and contrast jitter of 0.1 with 50% probability. The pipeline adds no blur,
+image blending, four-image mosaic, translation, shear, perspective distortion,
+or independent zoom. Resizing and rotation still involve interpolation, and
+motion blur already present in source frames remains visible. Two-panel
+samples make objects smaller because both frames share one training canvas.
+
+Validation and test images receive preprocessing only. Augmentation happens
+when training samples are loaded; it does not add files to the source dataset.
+The run records the composition policy and augmentation settings. These
+constraints improve the readability of samples; model accuracy must be
+measured with held-out data.
+
 For a Modal cloud GPU, install the optional `cloud` extra and choose **Modal
 cloud GPU** from the training location control. Cloud training requires an
 explicit dataset-upload and cost consent, uploads a prepared copy of the

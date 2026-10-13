@@ -18,16 +18,21 @@ from ..preprocessing import PreprocessingService
 from .catalog import ModelPreset
 
 _ULTRALYTICS_AUGMENTATION = {
-    "degrees": 15.0,
-    "translate": 0.1,
-    "scale": 0.5,
-    "shear": 2.0,
-    "perspective": 0.0001,
+    "degrees": 10.0,
+    "translate": 0.0,
+    "scale": 0.0,
+    "shear": 0.0,
+    "perspective": 0.0,
     "flipud": 0.5,
     "fliplr": 0.5,
-    "mosaic": 1.0,
-    "mixup": 0.15,
-    "copy_paste": 0.2,
+    "mosaic": 0.0,
+    "mixup": 0.0,
+    "copy_paste": 0.0,
+    "hsv_h": 0.0,
+    "hsv_s": 0.0,
+    "hsv_v": 0.1,
+    "bgr": 0.0,
+    "close_mosaic": 0,
 }
 
 
@@ -394,15 +399,20 @@ class UltralyticsDetector:
             "exist_ok": True,
             "rect": False,
         }
-        # Ultralytics disables mosaic for the last close_mosaic epochs. Keep
-        # this active for short smoke/fine-tuning runs (including 1 epoch),
-        # where the default of 10 would turn it off for the entire run.
-        if base_train_config["epochs"] <= 10:
-            base_train_config["close_mosaic"] = 0
+        from .augmentation import PANEL_AUGMENTATION
+        from .ultralytics_training import AmphiLensDetectionTrainer, AmphiLensRTDETRTrainer
+
+        # The custom trainer owns rotation/composition. Disabling close_mosaic
+        # prevents Ultralytics rebuilding the default transforms during training.
+        base_train_config["trainer"] = (
+            AmphiLensRTDETRTrainer if self.architecture == "rtdetr" else AmphiLensDetectionTrainer
+        )
         base_train_config.update(_ULTRALYTICS_AUGMENTATION)
         config["augmentation"] = {
             "backend": "ultralytics",
             "parameters": dict(_ULTRALYTICS_AUGMENTATION),
+            "composition": dict(PANEL_AUGMENTATION),
+            "pipeline": "amphilens-gentle-panels-v1",
         }
         paper_phased = config.get("freeze_strategy", "paper-phased") == "paper-phased"
         phases = (
@@ -450,9 +460,11 @@ class UltralyticsDetector:
 
                 current_model.add_callback("on_fit_epoch_end", report_epoch)
             results = current_model.train(**train_config)
-            final_save_dir = Path(
-                getattr(results, "save_dir", output / train_config["name"])
-            ).expanduser().resolve()
+            final_save_dir = (
+                Path(getattr(results, "save_dir", output / train_config["name"]))
+                .expanduser()
+                .resolve()
+            )
             best_path = final_save_dir / "weights" / "best.pt"
             last_path = final_save_dir / "weights" / "last.pt"
             selected_checkpoint = best_path if best_path.is_file() else last_path
@@ -465,8 +477,7 @@ class UltralyticsDetector:
                     "phase": phase_name,
                     "freeze_layers": freeze_layers,
                     "epochs": int(
-                        getattr(results, "epochs", train_config["epochs"])
-                        or train_config["epochs"]
+                        getattr(results, "epochs", train_config["epochs"]) or train_config["epochs"]
                     ),
                     "checkpoint": best_path.name if best_path.is_file() else last_path.name,
                 }
