@@ -171,6 +171,7 @@ h3 { margin: 0; font-size: 0.9375rem; line-height: 1.4; font-weight: 650; }
 .path-picker-control input { min-width: 0; }
 .path-picker-button { min-width: 84px; padding-inline: 13px; }
 .field label, .dialog-form > label { color: #36443a; font-size: 0.875rem; font-weight: 640; }
+label[data-required]::after { content: "*"; margin-left: .22em; color: var(--error); font-weight: 760; }
 .field label .optional, .optional { color: var(--quiet); font-weight: 450; }
 .field-help { margin: -2px 0 0; color: var(--muted); font-size: 0.8125rem; line-height: 1.55; }
 .consent-row { display: flex; align-items: flex-start; gap: 9px; margin-top: 12px; color: #46534a; font-size: 0.75rem; line-height: 1.55; }

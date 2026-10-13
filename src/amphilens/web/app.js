@@ -1,6 +1,8 @@
 (() => {
   "use strict";
 
+  window.AmphiLensRequiredFields.start(document);
+
   const root = document.getElementById("view-root");
   const dialog = document.getElementById("project-dialog");
   const pageToastRegion = document.getElementById("toast-region");
@@ -720,10 +722,10 @@
         <div class="cloud-settings hidden" data-cloud-settings>
           <div class="notice warning"><span class="notice-mark" aria-hidden="true">!</span><p>Cloud training uploads a prepared copy of the selected dataset and checkpoint. Review the estimate and approve both the upload and cost before submitting.</p></div>
           <div class="field" style="margin-top:15px"><label for="training-provider">Cloud provider</label><select id="training-provider" name="provider"><option value="modal">Modal</option><option value="azure_ml">Azure Machine Learning</option><option value="vertex_ai">Google Vertex AI</option></select><span class="field-help">Configure cloud identity and an existing workspace or project in Check your setup.</span></div>
-          <div class="field-row" style="margin-top:12px"><div class="field"><label for="training-gpu">GPU</label><select id="training-gpu" name="gpu">${cloudGpuOptions("modal", "L4")}</select></div><div class="field"><label for="training-max-cost">Maximum budget · USD</label><input id="training-max-cost" name="max_cost_usd" type="number" min="0.01" step="0.01" placeholder="Enter your limit"></div></div>
+          <div class="field-row" style="margin-top:12px"><div class="field"><label for="training-gpu">GPU</label><select id="training-gpu" name="gpu">${cloudGpuOptions("modal", "L4")}</select></div><div class="field"><label for="training-max-cost" data-required-when-cloud>Maximum budget · USD</label><input id="training-max-cost" name="max_cost_usd" type="number" min="0.01" step="0.01" placeholder="Enter your limit"></div></div>
           <button class="button" type="button" data-cloud-estimate>Request estimate</button><div id="cloud-estimate-slot" aria-live="polite">${renderCloudEstimate()}</div>
-          <label class="consent-row"><input type="checkbox" name="uploads_dataset"><span>I approve uploading the prepared dataset and selected checkpoint for this run.</span></label>
-          <label class="consent-row"><input type="checkbox" name="acknowledged"><span>I understand the estimate is a planning range, not a guaranteed billing cap.</span></label>
+          <label class="consent-row" data-required-when-cloud><input type="checkbox" name="uploads_dataset"><span>I approve uploading the prepared dataset and selected checkpoint for this run.</span></label>
+          <label class="consent-row" data-required-when-cloud><input type="checkbox" name="acknowledged"><span>I understand the estimate is a planning range, not a guaranteed billing cap.</span></label>
         </div>
         <div class="form-actions"><button class="button primary" type="submit">Train model</button></div>
       </form><div id="job-slot" aria-live="polite"></div>

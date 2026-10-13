@@ -68,10 +68,12 @@ def test_static_frontend_and_assets_are_served(client):
     assert 'src="/static/prediction_state.js"' in page.text
     assert 'src="/static/cvat_project_state.js"' in page.text
     assert 'src="/static/activity_view.js"' in page.text
+    assert 'src="/static/required_fields.js"' in page.text
     assert '<span class="nav-label">Choose images to review</span>' in page.text
     assert client.get("/static/prediction_state.js").status_code == 200
     assert client.get("/static/cvat_project_state.js").status_code == 200
     assert client.get("/static/activity_view.js").status_code == 200
+    assert client.get("/static/required_fields.js").status_code == 200
     assert client.get("/static/app.js").status_code == 200
     assert 'api("/api/path-picker"' in client.get("/static/app.js").text
     script = client.get("/static/app.js").text
@@ -87,6 +89,8 @@ def test_static_frontend_and_assets_are_served(client):
     assert 'detectionCount <= 0 ? "disabled" : ""' in script
     assert "There are no detected images to collect." in script
     assert 'name="training_source"' in script
+    assert 'data-required-when-cloud' in script
+    assert "window.AmphiLensRequiredFields.start(document)" in script
     assert 'name="hosted_model_id"' in script
     assert 'name="model_preset"' in script
     assert "preprocessing: selectedPreprocessing(form)" in script
@@ -102,6 +106,7 @@ def test_static_frontend_and_assets_are_served(client):
     assert "private Hugging Face repository" not in script
     stylesheet = client.get("/static/app.css")
     assert stylesheet.status_code == 200
+    assert 'label[data-required]::after { content: "*";' in stylesheet.text
     assert (
         ".nav-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }"
         in stylesheet.text
