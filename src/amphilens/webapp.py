@@ -564,6 +564,12 @@ class CvatProjectListRequest:
 
 
 @dataclass(slots=True)
+class CvatProjectDetailsRequest:
+    project_id: str
+    server_url: str | None = None
+
+
+@dataclass(slots=True)
 class CvatProjectImportRequest:
     project_id: str
     class_mapping: dict[str, str] | None = None
@@ -869,6 +875,11 @@ def _request(cls, payload: dict[str, Any]):
         )
     if cls is CvatProjectListRequest:
         return cls(server_url=_optional_string(payload, "server_url"))
+    if cls is CvatProjectDetailsRequest:
+        return cls(
+            project_id=_string(payload, "project_id"),
+            server_url=_optional_string(payload, "server_url"),
+        )
     if cls is CvatProjectImportRequest:
         return cls(
             project_id=_string(payload, "project_id"),
@@ -2668,6 +2679,17 @@ def create_app(
         except Exception as exc:
             return _failure(exc)
 
+    async def cvat_project(request: Request) -> Response:
+        try:
+            body = _request(CvatProjectDetailsRequest, await _read_body(request))
+            from .annotations.managed import CVATSdkTransport
+
+            transport = CVATSdkTransport(server_url=body.server_url)
+            project = transport.get_project(body.project_id)
+            return _json({"project": project.to_dict()})
+        except Exception as exc:
+            return _failure(exc)
+
     async def training(request: Request) -> Response:
         try:
             body = _request(TrainingRequest, await _read_body(request))
@@ -3110,6 +3132,7 @@ def create_app(
     app.add_route("/api/datasets/rename", dataset_rename, methods=["POST"])
     app.add_route("/api/datasets/delete", dataset_delete, methods=["POST"])
     app.add_route("/api/cvat/projects", cvat_projects, methods=["POST"])
+    app.add_route("/api/cvat/project", cvat_project, methods=["POST"])
     app.add_route("/api/training", training, methods=["POST"])
     app.add_route("/api/active-learning/select", active_learning, methods=["POST"])
     app.add_route("/api/cvat/cycle", cvat_cycle, methods=["POST"])

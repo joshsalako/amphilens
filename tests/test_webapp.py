@@ -66,9 +66,11 @@ def test_static_frontend_and_assets_are_served(client):
     assert 'name="grayscale"' not in page.text
     assert 'name="clahe"' not in page.text
     assert 'src="/static/prediction_state.js"' in page.text
+    assert 'src="/static/cvat_project_state.js"' in page.text
     assert 'src="/static/activity_view.js"' in page.text
     assert '<span class="nav-label">Choose images to review</span>' in page.text
     assert client.get("/static/prediction_state.js").status_code == 200
+    assert client.get("/static/cvat_project_state.js").status_code == 200
     assert client.get("/static/activity_view.js").status_code == 200
     assert client.get("/static/app.js").status_code == 200
     assert 'api("/api/path-picker"' in client.get("/static/app.js").text
@@ -105,6 +107,42 @@ def test_static_frontend_and_assets_are_served(client):
         in stylesheet.text
     )
     assert client.get("/static/favicon.svg").status_code == 200
+
+
+def test_cvat_project_endpoint_returns_fresh_selected_project_details(client, monkeypatch):
+    from amphilens.annotations import managed
+    from amphilens.annotations.managed import CVATProjectSummary, CVATTaskSummary
+
+    received = {}
+
+    class FreshTransport:
+        def __init__(self, server_url=None):
+            received["server_url"] = server_url
+
+        def get_project(self, project_id):
+            received["project_id"] = project_id
+            return CVATProjectSummary(
+                project_id="17",
+                name="WLT-UP",
+                labels=["Small_Mammal", "Western_Leopard_Toad"],
+                tasks=[CVATTaskSummary("31", "train", 12, "completed")],
+            )
+
+    monkeypatch.setattr(managed, "CVATSdkTransport", FreshTransport)
+    response = client.post(
+        "/api/cvat/project",
+        json={"project_id": "17", "server_url": "http://localhost:8080"},
+    )
+
+    assert response.status_code == 200
+    assert received == {"server_url": "http://localhost:8080", "project_id": "17"}
+    assert response.json()["project"] == {
+        "project_id": "17",
+        "name": "WLT-UP",
+        "labels": ["Small_Mammal", "Western_Leopard_Toad"],
+        "task_count": 1,
+        "tasks": [{"task_id": "31", "name": "train", "size": 12, "status": "completed"}],
+    }
 
 
 def test_bootstrap_includes_cvat_url_from_dotenv_but_never_token(client, tmp_path, monkeypatch):

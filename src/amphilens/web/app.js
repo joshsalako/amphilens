@@ -577,11 +577,17 @@
     if (!project) return "";
     const labels = (Array.isArray(project.labels) ? project.labels : []).map(cvatLabelName).filter(Boolean);
     const classes = (app.project?.classes || []).map((item) => typeof item === "string" ? item : item?.name).filter(Boolean);
+    const projectId = project.project_id ?? project.id ?? project.pk ?? "";
     const tasks = Array.isArray(project.tasks) ? project.tasks : [];
     const taskCount = Number(project.task_count ?? tasks.length);
     const labelMap = labels.map((label, index) => {
-      if (classes.includes(label)) return `<div class="cvat-label-row"><span>${escapeHtml(label)}</span><span class="class-match">Matches project class</span></div>`;
-      return `<div class="cvat-label-row"><label for="initial-cvat-map-${index}">${escapeHtml(label)}</label><select id="initial-cvat-map-${index}" name="mapping_${index}" data-preference-key="cvat_mapping:${escapeHtml(label)}" data-cvat-map-source="${escapeHtml(label)}" required><option value="">Choose matching project class</option>${classes.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("")}</select></div>`;
+      const matchedClass = window.AmphiLensCvatProjectState.matchProjectClass(label, classes);
+      const preferenceKey = window.AmphiLensCvatProjectState.mappingPreferenceKey(app.cvatServerUrl, projectId, label);
+      if (matchedClass) {
+        const matchText = matchedClass === label ? "Matches project class" : `Auto-matched to ${matchedClass}`;
+        return `<div class="cvat-label-row"><span>${escapeHtml(label)}</span><span class="class-match">${escapeHtml(matchText)}</span><input type="hidden" name="mapping_${index}" data-preference-key="${escapeHtml(preferenceKey)}" data-cvat-map-source="${escapeHtml(label)}" value="${escapeHtml(matchedClass)}"></div>`;
+      }
+      return `<div class="cvat-label-row"><label for="initial-cvat-map-${index}">${escapeHtml(label)}</label><select id="initial-cvat-map-${index}" name="mapping_${index}" data-preference-key="${escapeHtml(preferenceKey)}" data-cvat-map-source="${escapeHtml(label)}" required><option value="">Choose matching project class</option>${classes.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("")}</select></div>`;
     }).join("");
     const issue = cvatProjectIssue(project);
     return `<div class="cvat-project-summary"><div class="small-stat"><span>CVAT tasks</span><strong>${formatNumber(taskCount)}</strong></div><div class="field"><span class="field-title">Project labels</span>${labels.length ? `<div class="cvat-label-list">${labelMap}</div>` : `<div class="notice warning"><span class="notice-mark" aria-hidden="true">!</span><p>No labels were returned for this CVAT project.</p></div>`}</div>${issue ? `<div class="notice error"><span class="notice-mark" aria-hidden="true">!</span><p>${escapeHtml(issue)} Select a different project or review its contents in CVAT.</p></div>` : ""}${tasks.length ? `<details class="advanced-settings"><summary>Review task list (${tasks.length})</summary><ul class="task-list">${tasks.map((task) => `<li><span>${escapeHtml(task.name || `Task ${task.task_id ?? ""}`)}</span><span>${formatNumber(task.size)} images · ${escapeHtml(task.status || "")}</span></li>`).join("")}</ul></details>` : ""}</div>`;
@@ -603,6 +609,9 @@
     const project = selected || app.cvatProjects?.[0];
     const summary = form?.querySelector("#initial-cvat-summary");
     if (summary) summary.innerHTML = renderCvatProjectSummary(project);
+    const selectedOption = form?.elements.project_id?.selectedOptions?.[0];
+    const selectedName = project?.name || project?.title;
+    if (selectedOption && selectedName) selectedOption.textContent = selectedName;
     const nameInput = form?.elements.display_name;
     if (nameInput && (nameInput.value === nameInput.dataset.sourceName || !nameInput.value)) {
       const sourceName = project?.name || project?.title || "CVAT dataset";
@@ -611,6 +620,32 @@
     }
     const submit = form?.querySelector('button[type="submit"]');
     if (submit) submit.disabled = Boolean(cvatProjectIssue(project));
+  }
+
+  async function refreshInitialCvatProject(form) {
+    const projectSelect = form?.elements.project_id;
+    const selectedId = projectSelect?.value;
+    if (!selectedId) return;
+    const summary = form.querySelector("#initial-cvat-summary");
+    const submit = form.querySelector('button[type="submit"]');
+    projectSelect.disabled = true;
+    if (submit) submit.disabled = true;
+    if (summary) summary.innerHTML = `<div class="notice"><span class="notice-mark" aria-hidden="true">i</span><p>Refreshing this CVAT project’s labels and tasks…</p></div>`;
+    try {
+      app.cvatProjects = await window.AmphiLensCvatProjectState.refreshSelectedProject(
+        app.cvatProjects,
+        selectedId,
+        app.cvatServerUrl,
+        api,
+      );
+      syncInitialCvatProject(form);
+      restoreWorkflowViewState("import", "cvat_mapping:");
+    } catch (error) {
+      if (summary) summary.innerHTML = `<div class="notice error"><span class="notice-mark" aria-hidden="true">!</span><p>Could not refresh this CVAT project. ${escapeHtml(error.message)}</p></div>`;
+      if (submit) submit.disabled = true;
+    } finally {
+      projectSelect.disabled = false;
+    }
   }
 
   function trainingModelInputSize(form) {
@@ -1195,7 +1230,7 @@
       } else if (form.dataset.form === "initial-cvat") {
         const mapping = {};
         form.querySelectorAll("[data-cvat-map-source]").forEach((select) => {
-          if (!select.value) throw new Error(`Choose the matching project class for “${select.dataset.cvatMapSource}”.`);
+          if (select.tagName === "SELECT" && !select.value) throw new Error(`Choose the matching project class for “${select.dataset.cvatMapSource}”.`);
           mapping[select.dataset.cvatMapSource] = select.value;
         });
         endpoint = "/api/datasets/import-cvat";
@@ -1763,8 +1798,7 @@
       if (form) invalidateTrainingEstimate(form);
     }
     if (event.target.id === "initial-cvat-project") {
-      syncInitialCvatProject(event.target.form);
-      restoreWorkflowViewState("import", "cvat_mapping:");
+      refreshInitialCvatProject(event.target.form);
     }
     const trainingForm = event.target.closest('form[data-form="training"]');
     if (event.target.matches?.("[data-model-preference]")) saveActiveModelSettings(trainingForm);
