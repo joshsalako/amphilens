@@ -280,9 +280,9 @@ def test_import_reports_validated_image_counts_and_stages_on_snapshot_filesystem
     extraction_roots = []
     original_extract = DatasetImporter._extract
 
-    def observe_extract(source, destination):
+    def observe_extract(source, destination, **kwargs):
         extraction_roots.append(Path(destination))
-        return original_extract(source, destination)
+        return original_extract(source, destination, **kwargs)
 
     monkeypatch.setattr(DatasetImporter, "_extract", staticmethod(observe_extract))
 

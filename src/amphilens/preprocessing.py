@@ -261,6 +261,17 @@ class PreprocessingService:
             scale_y=image.height / original_size[1],
         )
 
+    def load_processed(self, source: str | Path) -> PreprocessedImage:
+        """Load an image already transformed by this pipeline without applying it again."""
+        image = self._load(source)
+        return PreprocessedImage(
+            image=image,
+            original_size=image.size,
+            scale=1.0,
+            scale_x=1.0,
+            scale_y=1.0,
+        )
+
     def materialize(self, source: str | Path) -> Path:
         source_path = Path(source).expanduser().resolve()
         if self.cache_dir is None:

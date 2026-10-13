@@ -29,7 +29,7 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.staticfiles import StaticFiles
 
-from .cancellation import WorkflowCancelled, check_cancellation, cancellation_requested
+from .cancellation import WorkflowCancelled, cancellation_requested, check_cancellation
 from .core import AmphiLensError, ProjectConfig, ProjectManifest, ProjectStore
 from .cvat_config import configured_cvat_server_url
 from .doctor import run_doctor
@@ -2264,7 +2264,8 @@ def run_cloud_training_job(
                 {
                     "phase": "submitted",
                     "message": (
-                        f"{request.provider} accepted the training job; waiting for its first update"
+                        f"{request.provider} accepted the training job; "
+                        "waiting for its first update"
                     ),
                     "gpu": request.gpu,
                     "progress": 0.0,

@@ -8,6 +8,8 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from PIL import Image
+
 from amphilens.cloud.modal_transport import ModalTransport
 from amphilens.cloud.models import CloudConsent, CloudJobRecord
 from amphilens.cloud.prediction import ModalPredictionDetector
@@ -233,7 +235,7 @@ class ProgressContractTests(unittest.TestCase):
     def test_modal_prediction_exposes_upload_remote_setup_and_completed_batch(self):
         with TemporaryDirectory() as directory:
             image = Path(directory) / "image.jpg"
-            image.write_bytes(b"image")
+            Image.new("RGB", (10, 10), color=(20, 30, 40)).save(image)
             events = []
             detector = ModalPredictionDetector(
                 ProgressModalTransport(),

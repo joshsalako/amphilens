@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from amphilens.cloud.prediction import (
     ModalPredictionDetector,
@@ -13,6 +14,8 @@ from amphilens.cloud.prediction import (
     run_remote_prediction_batch,
 )
 from amphilens.core import DetectionRecord, InferenceConfig
+from amphilens.models.backends import _inference_image
+from amphilens.preprocessing import PreprocessingService
 from amphilens.runs import run_resumable_inference
 
 
@@ -20,11 +23,17 @@ class FakeTransport:
     def __init__(self, result=None):
         self.result = result or {"state": "finished", "records": []}
         self.uploaded = []
+        self.uploaded_image_metadata = []
         self.cleaned = []
         self.payload = None
 
     def upload_prediction_batch(self, job_key, batch_id, sources):
         self.uploaded.append((job_key, batch_id, list(sources)))
+        for path in sources:
+            with Image.open(path) as image:
+                self.uploaded_image_metadata.append(
+                    {"size": image.size, "pixel": image.getpixel((0, 0)), "suffix": path.suffix}
+                )
         return [
             {
                 "image_id": f"local-{index}",
@@ -52,11 +61,16 @@ class FakeTransport:
         self.cleaned.append((job_key, batch_id))
 
 
+def _save_test_image(path: Path, *, size=(10, 10), color=(20, 30, 40)) -> Path:
+    Image.new("RGB", size, color=color).save(path)
+    return path
+
+
 def test_modal_prediction_detector_maps_local_ids_and_cleans_batch(tmp_path):
     first = tmp_path / "a.jpg"
     second = tmp_path / "b.jpg"
-    first.write_bytes(b"one")
-    second.write_bytes(b"two")
+    _save_test_image(first)
+    _save_test_image(second)
     paths = [first, second]
     result = {
         "state": "finished",
@@ -96,6 +110,66 @@ def test_modal_prediction_detector_maps_local_ids_and_cleans_batch(tmp_path):
     assert "image_path" not in json.dumps(transport.payload)
     assert transport.cleaned == [("job123", transport.uploaded[0][1])]
     assert (tmp_path / "run" / "cloud-cost.json").is_file()
+
+
+def test_modal_prediction_uploads_locally_preprocessed_images_and_restores_boxes(tmp_path):
+    source = tmp_path / "original.jpg"
+    Image.new("RGB", (120, 60), color=(240, 20, 10)).save(source)
+    original_bytes = source.read_bytes()
+    result = {
+        "state": "finished",
+        "records": [
+            {
+                "local_image_id": "local-0",
+                "class_id": 0,
+                "class_name": "toad",
+                "confidence": 0.9,
+                "bbox_xyxy": [12, 6, 60, 30],
+                "image_width": 120,
+                "image_height": 60,
+            }
+        ],
+        "elapsed_seconds": 1.0,
+    }
+    transport = FakeTransport(result)
+    detector = ModalPredictionDetector(
+        transport,
+        job_key="job123",
+        gpu="L4",
+        model_spec={"source": "hosted", "model_id": "fine-tuned"},
+        timeout_seconds=100,
+        max_cost_usd=1.0,
+        output_dir=tmp_path / "run",
+    )
+    config = InferenceConfig(
+        model_id="fine-tuned",
+        run_id="run-1",
+        preprocessing={"short_side_dimension": 30, "grayscale_enabled": True},
+    )
+
+    records = list(detector.predict([source], config))
+
+    uploaded = transport.uploaded[0][2][0]
+    uploaded_image = transport.uploaded_image_metadata[0]
+    assert uploaded_image["size"] == (60, 30)
+    red, green, blue = uploaded_image["pixel"]
+    assert red == green == blue
+    assert uploaded_image["suffix"] == ".png"
+    assert transport.payload["inputs_preprocessed_locally"] is True
+    assert transport.payload["preprocessing_mappings"]["local-0"] == {
+        "original_width": 120,
+        "original_height": 60,
+        "processed_width": 60,
+        "processed_height": 30,
+        "scale_x": 0.5,
+        "scale_y": 0.5,
+    }
+    assert records[0].image_path == str(source.resolve())
+    assert records[0].bbox_xyxy == [12.0, 6.0, 60.0, 30.0]
+    assert records[0].image_width == 120
+    assert records[0].image_height == 60
+    assert source.read_bytes() == original_bytes
+    assert not uploaded.exists()
 
 
 def test_remote_prediction_verifies_hash_maps_ids_and_removes_batch(tmp_path):
@@ -167,10 +241,108 @@ def test_remote_prediction_verifies_hash_maps_ids_and_removes_batch(tmp_path):
         volume_commit=lambda: None,
     )
 
-    assert result["state"] == "finished"
+    assert result["state"] == "finished", result
     assert result["records"][0]["local_image_id"] == "local-7"
     assert "image_path" not in result["records"][0]
     assert not image_root.exists()
+
+
+def test_remote_prediction_skips_duplicate_preprocessing_and_restores_source_coordinates(
+    tmp_path,
+):
+    image_root = tmp_path / "prediction-jobs" / "job123" / "batch1" / "images"
+    image_root.mkdir(parents=True)
+    image = image_root / "local-7.png"
+    Image.new("RGB", (60, 30), color=(100, 100, 100)).save(image)
+    digest = hashlib.sha256(image.read_bytes()).hexdigest()
+    manifest_images = [
+        {
+            "image_id": "local-7",
+            "remote_path": str(image.relative_to(tmp_path)),
+            "sha256": digest,
+        }
+    ]
+    (image_root.parent / "manifest.json").write_text(
+        json.dumps({"schema_version": 1, "images": manifest_images}), encoding="utf-8"
+    )
+    Path(f"{image}.sha256").write_text(digest + "\n", encoding="ascii")
+    payload = {
+        "job_key": "job123",
+        "batch_id": "batch1",
+        "images": manifest_images,
+        "inputs_preprocessed_locally": True,
+        "preprocessing_mappings": {
+            "local-7": {
+                "original_width": 120,
+                "original_height": 60,
+                "processed_width": 60,
+                "processed_height": 30,
+                "scale_x": 0.5,
+                "scale_y": 0.5,
+            }
+        },
+        "config": {
+            "model_id": "model-a",
+            "image_size": 640,
+            "confidence": 0.3,
+            "run_id": "run1",
+            "preprocessing": {"short_side_dimension": 640, "grayscale_enabled": True},
+        },
+    }
+
+    class Detector:
+        def predict(self, paths, config):
+            assert config.metadata["_amphilens_inputs_preprocessed_locally"] is True
+            loaded = PreprocessingService(config.preprocessing_config).load_processed(paths[0])
+            assert loaded.processed_size == (60, 30)
+            return [
+                DetectionRecord(
+                    str(paths[0]),
+                    paths[0].stem,
+                    0,
+                    "toad",
+                    0.8,
+                    [6, 3, 30, 15],
+                    60,
+                    30,
+                    "model-a",
+                    "run1",
+                )
+            ]
+
+    result = run_remote_prediction_batch(
+        payload,
+        volume_root=tmp_path,
+        model_cache_root=tmp_path / "model-cache",
+        detector=Detector(),
+        volume_reload=lambda: None,
+        volume_commit=lambda: None,
+    )
+
+    assert result["state"] == "finished", result
+    record = result["records"][0]
+    assert record["bbox_xyxy"] == [12.0, 6.0, 60.0, 30.0]
+    assert record["image_width"] == 120
+    assert record["image_height"] == 60
+    assert not image_root.exists()
+
+
+def test_model_backend_skips_preprocessing_for_locally_prepared_cloud_images(tmp_path):
+    image = tmp_path / "prepared.png"
+    Image.new("RGB", (60, 30), color=(100, 100, 100)).save(image)
+    config = InferenceConfig(
+        model_id="model-a",
+        run_id="run1",
+        preprocessing={"short_side_dimension": 640, "grayscale_enabled": True},
+        metadata={"_amphilens_inputs_preprocessed_locally": True},
+    )
+
+    prepared = _inference_image(image, config)
+    transformed_again = PreprocessingService(config.preprocessing_config).transform(image)
+
+    assert prepared.processed_size == (60, 30)
+    assert prepared.scale_x == prepared.scale_y == 1.0
+    assert transformed_again.processed_size == (1280, 640)
 
 
 def test_remote_prediction_rejects_checksum_mismatch_and_cleans(tmp_path):
@@ -325,8 +497,8 @@ def test_hosted_checkpoint_download_supports_hub_versions_without_progress_hook(
 def test_modal_prediction_spending_limit_stops_scheduling_after_observed_batch_cost(tmp_path):
     first = tmp_path / "first.jpg"
     second = tmp_path / "second.jpg"
-    first.write_bytes(b"first")
-    second.write_bytes(b"second")
+    _save_test_image(first)
+    _save_test_image(second)
     transport = FakeTransport(
         {
             "state": "finished",
@@ -361,7 +533,7 @@ def test_modal_batches_are_sequential_and_resume_from_local_progress(tmp_path):
     paths = []
     for index in range(5):
         path = image_root / f"{index}.jpg"
-        path.write_bytes(f"image-{index}".encode())
+        _save_test_image(path)
         paths.append(path)
     output = tmp_path / "run"
 

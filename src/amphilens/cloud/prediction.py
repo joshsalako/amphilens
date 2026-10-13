@@ -7,12 +7,14 @@ import json
 import math
 import re
 import shutil
+import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ..core import DetectionRecord, InferenceConfig, ValidationError, atomic_write_json
+from ..preprocessing import PreprocessingService
 from ..runs import InferenceInterruption
 from .constants import PREDICTION_MOUNT
 from .estimate import (
@@ -40,6 +42,102 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _prepare_local_prediction_batch(
+    paths: list[Path],
+    config: InferenceConfig,
+    destination: Path,
+    *,
+    cancellation_requested=None,
+    progress_callback=None,
+) -> tuple[list[Path], list[dict[str, Any]]]:
+    """Prepare lossless local copies of a prediction batch for cloud upload."""
+    prepared_paths: list[Path] = []
+    mappings: list[dict[str, Any]] = []
+    service = PreprocessingService(config.preprocessing_config)
+    for index, source in enumerate(paths):
+        if cancellation_requested is not None and cancellation_requested():
+            raise PredictionCancelled(
+                "Prediction canceled during local image preprocessing."
+            )
+        transformed = service.transform(source)
+        prepared = destination / f"image-{index:08d}.png"
+        transformed.image.save(prepared, format="PNG", optimize=True)
+        scale_x = transformed.scale_x if transformed.scale_x is not None else transformed.scale
+        scale_y = transformed.scale_y if transformed.scale_y is not None else transformed.scale
+        prepared_paths.append(prepared)
+        mappings.append(
+            {
+                "original_width": transformed.original_size[0],
+                "original_height": transformed.original_size[1],
+                "processed_width": transformed.processed_size[0],
+                "processed_height": transformed.processed_size[1],
+                "scale_x": scale_x,
+                "scale_y": scale_y,
+            }
+        )
+        if progress_callback is not None:
+            progress_callback(index + 1, len(paths))
+    return prepared_paths, mappings
+
+
+def _validated_preprocessing_mapping(image_path: Path, value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValidationError("Local preprocessing metadata is missing or invalid")
+    integer_fields = ("original_width", "original_height", "processed_width", "processed_height")
+    dimensions: dict[str, int] = {}
+    for field in integer_fields:
+        item = value.get(field)
+        if type(item) is not int or item <= 0:
+            raise ValidationError("Local preprocessing dimensions are invalid")
+        dimensions[field] = item
+    scales: dict[str, float] = {}
+    for field in ("scale_x", "scale_y"):
+        try:
+            scale = float(value[field])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValidationError("Local preprocessing scale is invalid") from exc
+        if not math.isfinite(scale) or scale <= 0:
+            raise ValidationError("Local preprocessing scale is invalid")
+        scales[field] = scale
+    try:
+        from PIL import Image
+
+        with Image.open(image_path) as image:
+            actual_size = image.size
+    except Exception as exc:  # noqa: BLE001 - normalize malformed prepared images
+        raise ValidationError("Locally preprocessed image cannot be decoded") from exc
+    expected_size = (dimensions["processed_width"], dimensions["processed_height"])
+    if actual_size != expected_size:
+        raise ValidationError("Local preprocessing dimensions do not match the uploaded image")
+    expected_scales = (
+        dimensions["processed_width"] / dimensions["original_width"],
+        dimensions["processed_height"] / dimensions["original_height"],
+    )
+    if not math.isclose(scales["scale_x"], expected_scales[0], rel_tol=1e-9) or not math.isclose(
+        scales["scale_y"], expected_scales[1], rel_tol=1e-9
+    ):
+        raise ValidationError("Local preprocessing scale does not match the image dimensions")
+    return {**dimensions, **scales}
+
+
+def _map_record_to_source(row: dict[str, Any], mapping: dict[str, Any]) -> None:
+    box = row.get("bbox_xyxy")
+    if not isinstance(box, list) or len(box) != 4:
+        raise ValidationError("Prediction returned an invalid bounding box")
+    width = mapping["original_width"]
+    height = mapping["original_height"]
+    scale_x = mapping["scale_x"]
+    scale_y = mapping["scale_y"]
+    row["bbox_xyxy"] = [
+        max(0.0, min(round(float(box[0]) / scale_x, 6), float(width))),
+        max(0.0, min(round(float(box[1]) / scale_y, 6), float(height))),
+        max(0.0, min(round(float(box[2]) / scale_x, 6), float(width))),
+        max(0.0, min(round(float(box[3]) / scale_y, 6), float(height))),
+    ]
+    row["image_width"] = width
+    row["image_height"] = height
 
 
 def download_verified_hosted_checkpoint(
@@ -146,9 +244,18 @@ def run_remote_prediction_batch(
         config_data = payload.get("config")
         if not isinstance(config_data, dict):
             raise ValidationError("Prediction configuration is invalid")
+        inputs_preprocessed_locally = payload.get("inputs_preprocessed_locally", False)
+        if not isinstance(inputs_preprocessed_locally, bool):
+            raise ValidationError("Local preprocessing flag is invalid")
+        raw_mappings = payload.get("preprocessing_mappings", {})
+        if not isinstance(raw_mappings, dict):
+            raise ValidationError("Local preprocessing metadata is invalid")
+        if not inputs_preprocessed_locally and raw_mappings:
+            raise ValidationError("Unexpected local preprocessing metadata")
         paths: list[Path] = []
         id_by_path: dict[str, str] = {}
         seen_ids: set[str] = set()
+        preprocessing_mappings: dict[str, dict[str, Any]] = {}
         image_directory = (batch_root / "images").resolve()
         for item in images:
             if not isinstance(item, dict):
@@ -179,7 +286,16 @@ def run_remote_prediction_batch(
             seen_ids.add(image_id)
             paths.append(image_path)
             id_by_path[str(image_path)] = image_id
+            if inputs_preprocessed_locally:
+                preprocessing_mappings[image_id] = _validated_preprocessing_mapping(
+                    image_path, raw_mappings.get(image_id)
+                )
+        if inputs_preprocessed_locally and set(raw_mappings) != seen_ids:
+            raise ValidationError("Local preprocessing metadata does not match the image batch")
 
+        config_metadata = dict(config_data.get("metadata", {}))
+        if inputs_preprocessed_locally:
+            config_metadata["_amphilens_inputs_preprocessed_locally"] = True
         config = InferenceConfig(
             model_id=str(config_data["model_id"]),
             image_size=int(config_data["image_size"]),
@@ -188,7 +304,7 @@ def run_remote_prediction_batch(
             batch_size=len(images),
             device="cuda",
             run_id=str(config_data["run_id"]),
-            metadata=dict(config_data.get("metadata", {})),
+            metadata=config_metadata,
         )
 
         if progress_callback is not None:
@@ -207,6 +323,8 @@ def run_remote_prediction_batch(
             row = record.to_dict()
             row.pop("image_path", None)
             row.pop("image_id", None)
+            if inputs_preprocessed_locally:
+                _map_record_to_source(row, preprocessing_mappings[image_id])
             records.append({"local_image_id": image_id, **row})
         if progress_callback is not None:
             progress_callback(
@@ -390,7 +508,7 @@ class CloudPredictionDetector:
             self.progress_callback(
                 {
                     "phase": "image_transfer",
-                    "message": f"Uploading batch {self._batch_number} to {self.provider_label}",
+                    "message": f"Preparing batch {self._batch_number} locally for upload",
                     "completed": self._uploaded_images,
                     "failed": 0,
                     "total": self.image_count,
@@ -400,8 +518,55 @@ class CloudPredictionDetector:
                     "device": self.device_name,
                 }
             )
+        prepared_temp = tempfile.TemporaryDirectory(prefix="amphilens-cloud-prediction-")
         try:
-            uploaded = self.transport.upload_prediction_batch(self.job_key, batch_id, paths)
+            upload_paths, mappings = _prepare_local_prediction_batch(
+                paths,
+                config,
+                Path(prepared_temp.name),
+                cancellation_requested=self.cancellation_requested,
+                progress_callback=(
+                    lambda completed, total: self.progress_callback(
+                        {
+                            "phase": "image_transfer",
+                            "message": (
+                                f"Preprocessing batch {self._batch_number} locally: "
+                                f"{completed} of {total} images"
+                            ),
+                            "completed": self._uploaded_images,
+                            "failed": 0,
+                            "total": self.image_count,
+                            "remaining": max(0, self.image_count - self._uploaded_images),
+                            "phase_progress": completed / total if total else 1.0,
+                            "batch": self._batch_number,
+                            "gpu": self.gpu,
+                            "device": self.device_name,
+                        }
+                    )
+                    if self.progress_callback
+                    else None
+                ),
+            )
+            if self.progress_callback:
+                self.progress_callback(
+                    {
+                        "phase": "image_transfer",
+                        "message": (
+                            f"Uploading locally preprocessed batch {self._batch_number} "
+                            f"to {self.provider_label}"
+                        ),
+                        "completed": self._uploaded_images,
+                        "failed": 0,
+                        "total": self.image_count,
+                        "remaining": max(0, self.image_count - self._uploaded_images),
+                        "batch": self._batch_number,
+                        "gpu": self.gpu,
+                        "device": self.device_name,
+                    }
+                )
+            uploaded = self.transport.upload_prediction_batch(
+                self.job_key, batch_id, upload_paths
+            )
             for item, path in zip(uploaded, paths, strict=True):
                 local_paths[str(item["image_id"])] = path
             payload = {
@@ -413,6 +578,11 @@ class CloudPredictionDetector:
                 "images": uploaded,
                 "config": config.to_dict(),
                 "first_batch": self._uploaded_images == 0,
+            }
+            payload["inputs_preprocessed_locally"] = True
+            payload["preprocessing_mappings"] = {
+                str(item["image_id"]): mapping
+                for item, mapping in zip(uploaded, mappings, strict=True)
             }
             if self.progress_callback:
                 self.progress_callback(
@@ -467,7 +637,10 @@ class CloudPredictionDetector:
                 job_id_callback=self._record_remote_job_id,
             )
         finally:
-            self.transport.cleanup_prediction_batch(self.job_key, batch_id)
+            try:
+                self.transport.cleanup_prediction_batch(self.job_key, batch_id)
+            finally:
+                prepared_temp.cleanup()
         if not isinstance(result, dict) or result.get("state") != "finished":
             elapsed = float(result.get("elapsed_seconds", 0.0)) if isinstance(result, dict) else 0.0
             setup = float(result.get("setup_seconds", 0.0)) if isinstance(result, dict) else 0.0

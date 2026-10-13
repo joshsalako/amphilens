@@ -157,6 +157,13 @@ def _image_size(path: Path) -> tuple[int, int]:
         return image.width, image.height
 
 
+def _inference_image(path: Path, config: InferenceConfig):
+    service = PreprocessingService(config.preprocessing_config)
+    if config.metadata.get("_amphilens_inputs_preprocessed_locally") is True:
+        return service.load_processed(path)
+    return service.transform(path)
+
+
 def _configure_faster_rcnn_transform(model, short_side_dimension: int) -> None:
     """Keep torchvision from rescaling images already prepared to the chosen short side."""
     model.transform.min_size = (short_side_dimension,)
@@ -265,10 +272,7 @@ class UltralyticsDetector:
         for offset in range(0, len(paths), batch_size):
             batch_paths = paths[offset : offset + batch_size]
             dimensions = [_image_size(path) for path in batch_paths]
-            transformed_images = [
-                PreprocessingService(config.preprocessing_config).transform(path)
-                for path in batch_paths
-            ]
+            transformed_images = [_inference_image(path, config) for path in batch_paths]
             target_width = (
                 math.ceil(max(item.processed_size[0] for item in transformed_images) / stride)
                 * stride
@@ -610,7 +614,7 @@ class FasterRCNNDetector:
             for path in batch_paths:
                 with Image.open(path) as image:
                     dimensions.append(image.size)
-                transformed = PreprocessingService(config.preprocessing_config).transform(path)
+                transformed = _inference_image(path, config)
                 transformed_images.append(transformed)
                 rgb = np.array(transformed.image, copy=True)
                 tensors.append(torch.from_numpy(rgb).permute(2, 0, 1).float().div(255).to(device))
