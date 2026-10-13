@@ -28,6 +28,7 @@
     cvatServerUrl: "",
     cloudEstimate: null,
     cloudJobs: [],
+    cloudActionResults: new Map(),
     cloudJobsExpanded: false,
     cloudRefreshTimer: null,
     cloudRefreshRunning: false,
@@ -953,16 +954,17 @@
       const error = job.error ? `<p class="job-detail">${escapeHtml(job.error)}</p>` : "";
       const dashboard = job.dashboard_url ? `<a class="button small" href="${escapeHtml(safeHref(job.dashboard_url))}" target="_blank" rel="noopener noreferrer">Open provider job</a>` : "";
       const deadline = job.deadline_at ? new Date(job.deadline_at).toLocaleString() : "";
-      return `<div class="cloud-job"><div class="cloud-job-copy"><strong>${escapeHtml(cloudJobTitle(job))}</strong><span>${escapeHtml(status)}${phase ? ` · ${escapeHtml(phase)}` : ""}${gpuDetail ? ` · ${escapeHtml(gpuDetail)}` : ""}${deadline ? ` · Deadline ${escapeHtml(deadline)}` : ""}</span>${job.progress != null ? `<span>Progress: ${escapeHtml(typeof job.progress === "object" ? job.progress.message || job.progress.percent || "In progress" : job.progress)}</span>` : ""}${consent ? `<span>${escapeHtml(consent)}</span>` : ""}${error}</div><div class="cloud-job-actions"><button class="button small" type="button" data-cloud-action="refresh" data-run-id="${escapeHtml(runId)}">Refresh</button>${dashboard}${busy ? `<button class="button small" type="button" data-cloud-action="cancel" data-run-id="${escapeHtml(runId)}">Cancel</button>` : ""}${terminal && !verified ? `<button class="button small" type="button" data-cloud-action="collect" data-run-id="${escapeHtml(runId)}">Collect checkpoint</button>` : ""}${job.cleanup_error || (terminal && job.cleanup_succeeded === false) ? `<button class="button small" type="button" data-cloud-action="cleanup" data-run-id="${escapeHtml(runId)}">Retry cleanup</button>` : ""}</div></div>`;
+      const actionResult = runId ? renderCloudActionResult(runId) : "";
+      return `<div class="cloud-job"><div class="cloud-job-copy"><strong>${escapeHtml(cloudJobTitle(job))}</strong><span>${escapeHtml(status)}${phase ? ` · ${escapeHtml(phase)}` : ""}${gpuDetail ? ` · ${escapeHtml(gpuDetail)}` : ""}${deadline ? ` · Deadline ${escapeHtml(deadline)}` : ""}</span>${job.progress != null ? `<span>Progress: ${escapeHtml(typeof job.progress === "object" ? job.progress.message || job.progress.percent || "In progress" : job.progress)}</span>` : ""}${consent ? `<span>${escapeHtml(consent)}</span>` : ""}${error}</div><div class="cloud-job-actions"><button class="button small" type="button" data-cloud-action="refresh" data-run-id="${escapeHtml(runId)}">Refresh</button>${dashboard}${busy ? `<button class="button small" type="button" data-cloud-action="cancel" data-run-id="${escapeHtml(runId)}">Cancel</button>` : ""}${terminal && !verified ? `<button class="button small" type="button" data-cloud-action="collect" data-run-id="${escapeHtml(runId)}">Collect checkpoint</button>` : ""}${job.cleanup_error || (terminal && job.cleanup_succeeded === false) ? `<button class="button small" type="button" data-cloud-action="cleanup" data-run-id="${escapeHtml(runId)}">Retry cleanup</button>` : ""}</div>${actionResult}</div>`;
     }).join("");
     const toggle = app.cloudJobs.length > previewCount
       ? `<button class="button small cloud-jobs-toggle" type="button" data-toggle-cloud-jobs aria-expanded="${app.cloudJobsExpanded}" aria-controls="cloud-jobs-list">${app.cloudJobsExpanded ? "Show fewer" : `Show all ${app.cloudJobs.length} jobs`}</button>`
       : "";
-    slot.innerHTML = `<div id="cloud-jobs-list">${rows || `<p class="empty-inline">No saved cloud jobs for this project yet.</p>`}</div>${hiddenCount > 0 || app.cloudJobsExpanded ? toggle : ""}${renderCloudActionResult()}`;
+    slot.innerHTML = `<div id="cloud-jobs-list">${rows || `<p class="empty-inline">No saved cloud jobs for this project yet.</p>`}</div>${hiddenCount > 0 || app.cloudJobsExpanded ? toggle : ""}`;
   }
 
-  function renderCloudActionResult() {
-    const response = app.cloudActionResult;
+  function renderCloudActionResult(runId) {
+    const response = app.cloudActionResults.get(runId);
     if (!response?.result || typeof response.result !== "object") return "";
     const result = response.result || {};
     const downloads = Array.isArray(result.downloads) ? result.downloads : [];
@@ -986,7 +988,7 @@
       }
     } catch (error) {
       const slot = document.getElementById("cloud-jobs-slot");
-      if (slot) slot.innerHTML = `<div class="notice warning"><span class="notice-mark" aria-hidden="true">!</span><p>Saved cloud jobs could not be loaded: ${escapeHtml(error.message)}</p></div>${renderCloudActionResult()}`;
+      if (slot) slot.innerHTML = `<div class="notice warning"><span class="notice-mark" aria-hidden="true">!</span><p>Saved cloud jobs could not be loaded: ${escapeHtml(error.message)}</p></div>`;
     }
   }
 
@@ -1024,7 +1026,10 @@
       const result = await api(`/api/cloud/jobs/${encodeURIComponent(runId)}/${action}`, { method: "POST", body: "{}" });
       const job = result.job || {};
       const message = job.message || (action === "collect" ? "Checkpoint collection finished." : action === "cleanup" ? "Cleanup retry finished." : action === "cancel" ? "Cancellation requested." : "Cloud job refreshed.");
-      app.cloudActionResult = result;
+      if (result.result && typeof result.result === "object") {
+        app.cloudActionResults.set(runId, result);
+        app.cloudJobsExpanded = true;
+      }
       if (job.run_id) upsertCloudJob(job);
       toast(message);
       await loadCloudJobs();
