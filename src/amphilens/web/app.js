@@ -725,7 +725,7 @@
       <form class="form-stack" data-form="training">
         <div class="field"><label for="training-data-mode">Dataset setup</label><select id="training-data-mode" name="data_mode"><option value="separate-snapshots" selected>Choose separate snapshots</option><option value="auto-split">Split one snapshot automatically</option><option value="training-monitor">Use training data for validation</option></select><span class="field-help" data-training-mode-help>Select training, validation, and test snapshots. Validation and test are optional.</span></div>
         <div class="field"><label for="training-snapshot" data-training-snapshot-label>Training snapshot</label><select id="training-snapshot" name="snapshot_path" required><option value="">Choose a dataset</option>${snapshotOptions}</select></div>
-        <p class="field-help" data-training-target-classes>Training uses this project’s selected classes: ${(app.project.classes || []).map(escapeHtml).join(", ")}. Fine-tuning can change the starting model’s labels; the saved checkpoint and its predictions use this target class list.</p>
+        <p class="field-help" data-training-target-classes>Training using: ${(app.project.classes || []).map(escapeHtml).join(", ")}.</p>
         <div class="field" data-training-validation hidden><label for="training-validation-snapshot">Validation snapshot <span class="optional">optional</span></label><select id="training-validation-snapshot" name="validation_snapshot_path"><option value="">Use training snapshot for validation</option>${snapshotOptions}</select></div>
         <div class="field" data-training-test hidden><label for="training-test-snapshot">Test snapshot <span class="optional">optional</span></label><select id="training-test-snapshot" name="test_snapshot_path"><option value="">Skip final evaluation</option>${snapshotOptions}</select></div>
         <label class="consent-row" data-training-image-split hidden><input type="checkbox" name="allow_image_level_split"><span>Allow an image-level split if source groups cannot be kept together.</span></label>
@@ -903,12 +903,17 @@
       const terminal = /complete|success|finish|verified/i.test(`${state} ${job.phase || ""}`);
       const busy = activeCloudJob(job);
       const verified = state === "verified" || job.phase === "artifacts-verified-and-registered";
-      const detail = job.gpu || job.training_config?.gpu || "";
+      const requestedGpu = job.gpu || job.training_config?.gpu || "";
+      const actualGpu = job.progress_details?.environment?.gpu || job.environment?.gpu || "";
+      const gpuDetail = [
+        requestedGpu ? `Requested ${requestedGpu}` : "",
+        actualGpu ? `Runtime ${actualGpu}` : "",
+      ].filter(Boolean).join(" · ");
       const consent = job.consent && typeof job.consent === "object" ? [job.consent.uploads_dataset ? "dataset upload approved" : "", job.consent.acknowledged ? "estimate acknowledged" : ""].filter(Boolean).join(" · ") : "";
       const error = job.error ? `<p class="job-detail">${escapeHtml(job.error)}</p>` : "";
       const dashboard = job.dashboard_url ? `<a class="button small" href="${escapeHtml(safeHref(job.dashboard_url))}" target="_blank" rel="noopener noreferrer">Open provider job</a>` : "";
       const deadline = job.deadline_at ? new Date(job.deadline_at).toLocaleString() : "";
-      return `<div class="cloud-job"><div class="cloud-job-copy"><strong>${escapeHtml(cloudJobTitle(job))}</strong><span>${escapeHtml(status)}${phase ? ` · ${escapeHtml(phase)}` : ""}${detail ? ` · ${escapeHtml(detail)}` : ""}${deadline ? ` · Deadline ${escapeHtml(deadline)}` : ""}</span>${job.progress != null ? `<span>Progress: ${escapeHtml(typeof job.progress === "object" ? job.progress.message || job.progress.percent || "In progress" : job.progress)}</span>` : ""}${consent ? `<span>${escapeHtml(consent)}</span>` : ""}${error}</div><div class="cloud-job-actions"><button class="button small" type="button" data-cloud-action="refresh" data-run-id="${escapeHtml(runId)}">Refresh</button>${dashboard}${busy ? `<button class="button small" type="button" data-cloud-action="cancel" data-run-id="${escapeHtml(runId)}">Cancel</button>` : ""}${terminal && !verified ? `<button class="button small" type="button" data-cloud-action="collect" data-run-id="${escapeHtml(runId)}">Collect checkpoint</button>` : ""}${job.cleanup_error || (terminal && job.cleanup_succeeded === false) ? `<button class="button small" type="button" data-cloud-action="cleanup" data-run-id="${escapeHtml(runId)}">Retry cleanup</button>` : ""}</div></div>`;
+      return `<div class="cloud-job"><div class="cloud-job-copy"><strong>${escapeHtml(cloudJobTitle(job))}</strong><span>${escapeHtml(status)}${phase ? ` · ${escapeHtml(phase)}` : ""}${gpuDetail ? ` · ${escapeHtml(gpuDetail)}` : ""}${deadline ? ` · Deadline ${escapeHtml(deadline)}` : ""}</span>${job.progress != null ? `<span>Progress: ${escapeHtml(typeof job.progress === "object" ? job.progress.message || job.progress.percent || "In progress" : job.progress)}</span>` : ""}${consent ? `<span>${escapeHtml(consent)}</span>` : ""}${error}</div><div class="cloud-job-actions"><button class="button small" type="button" data-cloud-action="refresh" data-run-id="${escapeHtml(runId)}">Refresh</button>${dashboard}${busy ? `<button class="button small" type="button" data-cloud-action="cancel" data-run-id="${escapeHtml(runId)}">Cancel</button>` : ""}${terminal && !verified ? `<button class="button small" type="button" data-cloud-action="collect" data-run-id="${escapeHtml(runId)}">Collect checkpoint</button>` : ""}${job.cleanup_error || (terminal && job.cleanup_succeeded === false) ? `<button class="button small" type="button" data-cloud-action="cleanup" data-run-id="${escapeHtml(runId)}">Retry cleanup</button>` : ""}</div></div>`;
     }).join("");
     const toggle = app.cloudJobs.length > previewCount
       ? `<button class="button small cloud-jobs-toggle" type="button" data-toggle-cloud-jobs aria-expanded="${app.cloudJobsExpanded}" aria-controls="cloud-jobs-list">${app.cloudJobsExpanded ? "Show fewer" : `Show all ${app.cloudJobs.length} jobs`}</button>`
@@ -918,11 +923,12 @@
 
   function renderCloudActionResult() {
     const response = app.cloudActionResult;
-    if (!response) return "";
+    if (!response?.result || typeof response.result !== "object") return "";
     const result = response.result || {};
     const downloads = Array.isArray(result.downloads) ? result.downloads : [];
     const paths = result.paths && typeof result.paths === "object" ? Object.entries(result.paths) : [];
-    return `<div class="cloud-collection-result"><strong>${escapeHtml(result.message || response.job?.state || "Cloud job updated")}</strong>${paths.length ? `<ul class="path-list">${paths.map(([label, value]) => `<li><span>${escapeHtml(label)}</span><span>${escapeHtml(value)}</span></li>`).join("")}</ul>` : ""}${downloads.length ? `<div class="download-list">${downloads.map((item) => `<a class="download-link" href="${escapeHtml(safeHref(item.url))}" download="${escapeHtml(item.filename || "")}">${escapeHtml(item.label || item.filename || "Download file")}</a>`).join("")}</div>` : ""}</div>`;
+    if (!result.message && !paths.length && !downloads.length) return "";
+    return `<div class="cloud-collection-result">${result.message ? `<strong>${escapeHtml(result.message)}</strong>` : ""}${paths.length ? `<ul class="path-list">${paths.map(([label, value]) => `<li><span>${escapeHtml(label)}</span><span>${escapeHtml(value)}</span></li>`).join("")}</ul>` : ""}${downloads.length ? `<div class="download-list">${downloads.map((item) => `<a class="download-link" href="${escapeHtml(safeHref(item.url))}" download="${escapeHtml(item.filename || "")}">${escapeHtml(item.label || item.filename || "Download file")}</a>`).join("")}</div>` : ""}</div>`;
   }
 
   async function loadCloudJobs() {

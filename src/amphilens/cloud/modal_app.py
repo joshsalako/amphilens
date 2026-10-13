@@ -58,9 +58,9 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+# The selected GPU is applied per invocation by ModalTransport.submit.
 @app.function(
     image=training_image,
-    gpu="L4",
     timeout=MAX_FUNCTION_TIMEOUT_SECONDS,
     retries=0,
     max_containers=1,

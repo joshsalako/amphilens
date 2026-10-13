@@ -172,6 +172,36 @@ def _environment() -> dict[str, str]:
     return versions
 
 
+def _verify_modal_gpu(requested: str, actual: str) -> None:
+    """Fail before training if Modal allocated hardware unlike the selected GPU."""
+    requested = str(requested or "").strip().upper()
+    actual_name = str(actual or "").strip()
+    actual = re.sub(r"[^A-Z0-9]", "", actual_name.upper())
+    if not requested:
+        raise ValidationError("The Modal job did not specify a GPU selection")
+    if not actual:
+        raise ValidationError(
+            f"Modal did not report an allocated GPU for requested {requested}"
+        )
+
+    requested_compact = re.sub(r"[^A-Z0-9]", "", requested)
+    matches = requested_compact in actual
+    if requested.startswith("A100-"):
+        matches = "A100" in actual
+        requested_memory = "40GB" if "40GB" in requested else "80GB"
+        other_memory = "80GB" if requested_memory == "40GB" else "40GB"
+        if other_memory in actual:
+            matches = False
+    elif requested == "H100":
+        # Modal may transparently upgrade H100 requests to H200 at no extra GPU charge.
+        matches = "H100" in actual or "H200" in actual
+
+    if not matches:
+        raise ValidationError(
+            f"Modal allocated {actual_name}; this job requested {requested}. Training was stopped."
+        )
+
+
 def _remote_result(payload: dict[str, Any], state: str, **fields) -> dict[str, Any]:
     return {
         "state": state,
@@ -288,6 +318,9 @@ def run_remote_training(
     if not payload_path.is_relative_to(Path(volume_root).expanduser().resolve()):
         return _remote_result(payload, "failed", error="Cloud payload path is unsafe")
     try:
+        environment = _environment()
+        if provider == "modal":
+            _verify_modal_gpu(str(payload.get("gpu", "")), environment.get("gpu", ""))
         if payload.get("payload_remote_path") != f"{prefix}/payload.zip":
             raise ValidationError("Cloud payload path identity does not match")
         safe_extract_payload(
@@ -373,6 +406,8 @@ def run_remote_training(
             progress=0.0,
             phase_progress=None,
             gpu=str(payload.get("gpu", "")),
+            device=environment.get("gpu", "CUDA"),
+            environment=environment,
         )
         if base_path.is_file():
             detector = load_detector(
@@ -407,6 +442,8 @@ def run_remote_training(
                         else None
                     ),
                     gpu=str(payload.get("gpu", "")),
+                    device=environment.get("gpu", "CUDA"),
+                    environment=environment,
                 )
 
             detector = _load_training_detector(
@@ -424,6 +461,8 @@ def run_remote_training(
             progress=0.0,
             phase_progress=1.0,
             gpu=str(payload.get("gpu", "")),
+            device=environment.get("gpu", "CUDA"),
+            environment=environment,
         )
 
         training = TrainingConfig(
@@ -451,7 +490,6 @@ def run_remote_training(
         if submitted_config.get("val", True) is not True:
             raise ValidationError("Cloud training requires validation data for early stopping")
 
-        environment = _environment()
         logs = _TailBuffer(8000)
         output_root = Path(tempfile.mkdtemp(prefix="amphilens-cloud-training-"))
         result_root = root / "results"
@@ -617,6 +655,7 @@ def run_remote_training(
                 phase="validation-failed",
                 progress=None,
                 error=safe_error[-2000:],
+                environment=environment if "environment" in locals() else {},
             )
         except Exception:
             pass

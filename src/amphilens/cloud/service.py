@@ -533,6 +533,9 @@ class CloudTrainingService:
                 )
                 if key in result
             }
+        environment = details.get("environment")
+        if not isinstance(environment, dict):
+            environment = result.get("environment")
         progress_keys = {
             "updated_at",
             "phase",
@@ -598,9 +601,10 @@ class CloudTrainingService:
             if event_key != prior_key:
                 record.progress_events.append(event)
                 del record.progress_events[:-100]
-        record.environment = {
-            str(key): str(value) for key, value in dict(result.get("environment", {})).items()
-        }
+        if isinstance(environment, dict):
+            record.environment = {
+                str(key): str(value) for key, value in environment.items()
+            }
         if result.get("state") in {"finished", "success", "completed"}:
             record.state, record.phase = "finished", "remote-finished"
             record.remote_result = result
