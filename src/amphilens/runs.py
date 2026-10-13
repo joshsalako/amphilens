@@ -8,6 +8,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from .cancellation import cancellation_requested
 from .core import (
     DetectionRecord,
     InferenceConfig,
@@ -164,6 +165,9 @@ def run_resumable_inference(
 
     interruption_reason = None
     for offset in range(0, len(pending), batch_size):
+        if cancellation_requested(progress_callback):
+            interruption_reason = "Prediction canceled at a batch boundary."
+            break
         requested_paths = pending[offset : offset + batch_size]
         try:
             results = _predict_resiliently(detector, requested_paths, config)

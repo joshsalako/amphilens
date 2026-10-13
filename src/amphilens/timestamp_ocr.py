@@ -13,6 +13,7 @@ from datetime import time as clock_time
 from pathlib import Path
 from typing import Any
 
+from .cancellation import check_cancellation
 from .core import AmphiLensError
 
 OCR_INSTALL_MESSAGE = (
@@ -401,6 +402,7 @@ def process_prediction_csv(
     recognized_count = 0
     total = len(unique_images)
     for completed, image_path in enumerate(unique_images, start=1):
+        check_cancellation(progress_callback, "Timestamp OCR canceled between images.")
         timestamp = read_timestamp_from_image(image_path, ocr_engine=engine, device=device)
         timestamps[image_path] = timestamp
         if timestamp[0] and timestamp[1]:
@@ -419,6 +421,7 @@ def process_prediction_csv(
                 }
             )
 
+    check_cancellation(progress_callback, "Timestamp OCR canceled before updating the CSV.")
     for row, image_path in zip(rows, row_images, strict=True):
         row["date"], row["time"] = timestamps[image_path]
 

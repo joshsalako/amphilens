@@ -157,21 +157,28 @@
     return window.AmphiLensActivityView?.renderTimeline(job, cloud) || "";
   }
 
-  function activityCard(job, { cloud = false, id = "", title = "Run", kind = "" } = {}) {
+  function activityCard(job, { cloud = false, id = "", title = "Run" } = {}) {
     const progress = activityProgress(job, cloud);
     const state = String(cloud ? job.state || job.phase || "saved" : job.state || "queued").replace(/[_-]+/g, " ");
     const active = cloud ? activeCloudJob(job) : activeLocalJob(job);
     const phase = humanize(progress.details.phase || job.phase || state);
-    const message = progress.details.message || job.error || job.result?.message || job.message || (active ? "Working in the background" : state);
+    const message = !cloud && state === "canceled"
+      ? job.result?.message || "Run canceled."
+      : progress.details.message || job.error || job.result?.message || job.message || (active ? "Working in the background" : state);
     const statusClass = /failed|incomplete|timed out/.test(state) ? "is-failed" : /finished|verified|completed/.test(state) ? "is-completed" : "";
     const shownPercent = progress.phasePercent ?? progress.percent;
     const bar = shownPercent == null
       ? (active ? `<div class="progress-track" aria-label="Progress"><div class="progress-fill indeterminate"></div></div>` : "")
       : `<div class="progress-track" role="progressbar" aria-label="${escapeHtml(title)} progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(shownPercent)}"><div class="progress-fill" style="width:${shownPercent}%"></div></div>`;
-    const context = [cloud || app.jobMeta.get(id)?.execution === "modal" ? "Modal" : "This computer", progress.device, phase, progress.phasePercent != null ? `Step ${Math.round(progress.phasePercent)}%` : "", progress.epochText, progress.counts, progress.metrics, progress.eta ? `About ${progress.eta} left` : ""].filter(Boolean).join(" · ");
+    const meta = app.jobMeta.get(id) || {};
+    const providerLabels = { modal: "Modal", azure_ml: "Azure ML", vertex_ai: "Vertex AI" };
+    const context = [cloud ? "Cloud" : (providerLabels[meta.execution] || "This computer"), progress.device, phase, progress.phasePercent != null ? `Step ${Math.round(progress.phasePercent)}%` : "", progress.epochText, progress.counts, progress.metrics, progress.eta ? `About ${progress.eta} left` : ""].filter(Boolean).join(" · ");
     const error = job.error ? `<p class="activity-error">${escapeHtml(job.error)}</p>` : "";
-    const cancel = !cloud && active && kind === "predict" && app.jobMeta.get(id)?.execution === "modal"
-      ? `<button class="button small" type="button" data-cancel-job="${escapeHtml(id)}">Cancel after current batch</button>` : "";
+    const cancel = cloud && active
+      ? `<button class="button small" type="button" data-cloud-action="cancel" data-run-id="${escapeHtml(id)}">Cancel cloud job</button>`
+      : !cloud && active && meta.cancelable
+        ? `<button class="button small" type="button" data-cancel-job="${escapeHtml(id)}" ${job.cancel_requested ? "disabled" : ""}>${job.cancel_requested ? "Canceling…" : "Cancel run"}</button>`
+        : "";
     return `<article class="activity-card" data-activity-id="${cloud ? "cloud" : "local"}:${escapeHtml(id)}"><div class="activity-card-head"><div><strong>${escapeHtml(title)}</strong><span class="activity-state ${statusClass}">${escapeHtml(state)}</span></div></div><p class="activity-message">${escapeHtml(message)}</p><p class="activity-context">${escapeHtml(context)}</p>${bar}${error}${cancel}${activityTimeline(job, cloud)}</article>`;
   }
 
@@ -884,7 +891,7 @@
       const status = humanize(state);
       const phase = humanize(job.phase || "");
       const terminal = /complete|success|finish|verified/i.test(`${state} ${job.phase || ""}`);
-      const busy = /running|queued|pending/i.test(String(state));
+      const busy = activeCloudJob(job);
       const verified = state === "verified" || job.phase === "artifacts-verified-and-registered";
       const detail = job.gpu || job.training_config?.gpu || "";
       const consent = job.consent && typeof job.consent === "object" ? [job.consent.uploads_dataset ? "dataset upload approved" : "", job.consent.acknowledged ? "estimate acknowledged" : ""].filter(Boolean).join(" · ") : "";
@@ -956,6 +963,7 @@
     const action = button.dataset.cloudAction;
     if (!runId) { toast("This cloud job has no run ID.", true); return; }
     button.disabled = true;
+    if (action === "cancel") button.textContent = "Requesting cancellation…";
     try {
       const result = await api(`/api/cloud/jobs/${encodeURIComponent(runId)}/${action}`, { method: "POST", body: "{}" });
       const job = result.job || {};
@@ -1335,8 +1343,9 @@
         app.activeJob = { id: result.job_id, kind: form.dataset.form, execution: values.execution };
         app.jobMeta.set(result.job_id, {
           kind: form.dataset.form,
-          execution: values.execution || "local",
-          title: form.dataset.form === "predict" ? "Wildlife prediction" : form.dataset.form === "training" ? "Model training" : "Workspace task",
+          execution: values.execution === "cloud" ? values.provider || "modal" : values.execution || "local",
+          cancelable: ["predict", "training", "import", "initial-cvat", "review"].includes(form.dataset.form),
+          title: form.dataset.form === "predict" ? "Wildlife prediction" : form.dataset.form === "training" ? "Model training" : form.dataset.form === "review" ? "Annotation queue selection" : "Workspace task",
         });
         app.jobs.set(result.job_id, { ...result });
         renderJobSlot();
@@ -1389,18 +1398,18 @@
       : "";
     const progressText = typeof job.progress === "object" ? job.progress.message || job.progress.label || "" : "";
     const progressContext = [activity.device, humanize(details.phase), activity.phasePercent != null ? `Step ${Math.round(activity.phasePercent)}%` : "", activity.epochText, activity.counts, activity.metrics, activity.eta ? `About ${activity.eta} left` : ""].filter(Boolean).join(" · ");
-    return `<section class="job-card" aria-label="Job status"><div class="job-head"><div class="job-title"><span class="status-dot" aria-hidden="true"></span>${failed ? "This run needs attention" : canceled ? "Prediction canceled" : completed ? "Run complete" : "Working on your request"}</div><span class="job-state ${completed ? "is-completed" : failed ? "is-failed" : ""}"><span class="status-dot" aria-hidden="true"></span>${escapeHtml(state)}</span></div>
-      ${result.message ? `<p class="job-description">${escapeHtml(result.message)}</p>` : progressText ? `<p class="job-description">${escapeHtml(progressText)}</p>` : `<p class="job-description">${failed ? "The job could not be completed." : completed ? "Your files are ready in the project." : "You can continue using AmphiLens while this runs."}</p>`}
+    return `<section class="job-card" aria-label="Job status"><div class="job-head"><div class="job-title"><span class="status-dot" aria-hidden="true"></span>${failed ? "This run needs attention" : canceled ? "Run canceled" : completed ? "Run complete" : "Working on your request"}</div><span class="job-state ${completed ? "is-completed" : failed ? "is-failed" : ""}"><span class="status-dot" aria-hidden="true"></span>${escapeHtml(state)}</span></div>
+      ${result.message ? `<p class="job-description">${escapeHtml(result.message)}</p>` : progressText ? `<p class="job-description">${escapeHtml(progressText)}</p>` : `<p class="job-description">${failed ? "The job could not be completed." : canceled ? "Cancellation completed." : completed ? "Your files are ready in the project." : "You can continue using AmphiLens while this runs."}</p>`}
       ${prediction?.run_name ? `<p class="job-description">Prediction run: <strong>${escapeHtml(prediction.run_name)}</strong></p>` : ""}
       ${progressContext ? `<p class="job-description">${escapeHtml(progressContext)}</p>` : ""}
       ${!completed && !failed && !canceled ? `<div class="progress-track" role="progressbar" aria-label="Job progress" aria-valuemin="0" aria-valuemax="100"${hasProgress ? ` aria-valuenow="${Math.round(progress)}"` : ""}><div class="progress-fill${hasProgress ? "" : " indeterminate"}" ${hasProgress ? `style="width:${progress}%"` : ""}></div></div>` : ""}
-      ${!completed && !failed && !canceled && app.activeJob?.kind === "predict" && app.jobMeta.get(app.activeJob.id)?.execution === "modal" ? `<button class="button small" type="button" data-cancel-job="${escapeHtml(job.job_id || "")}">Cancel after current batch</button>` : ""}
+      ${!completed && !failed && !canceled && app.jobMeta.get(job.job_id || "")?.cancelable ? `<button class="button small" type="button" data-cancel-job="${escapeHtml(job.job_id || "")}" ${job.cancel_requested ? "disabled" : ""}>${job.cancel_requested ? "Canceling…" : "Cancel run"}</button>` : ""}
       ${job.error ? `<p class="job-detail">${escapeHtml(job.error)}</p>` : ""}
       ${activityTimeline(job)}
       ${paths.length ? `<ul class="path-list">${paths.map(([label, value]) => `<li><span>${escapeHtml(String(label).replace(/[_-]+/g, " "))}</span><span>${escapeHtml(value)}</span></li>`).join("")}</ul>` : ""}
       ${downloads.length ? `<div class="download-list">${downloads.map((item) => `<a class="download-link" href="${escapeHtml(safeHref(item.url))}" download="${escapeHtml(item.filename || "")}">${escapeHtml(item.label || item.filename || "Download file")}</a>`).join("")}</div>` : ""}
       ${completed && app.activeJob?.kind === "predict" && prediction ? `<div class="collection-actions"><button class="button small" type="button" data-collect-images="${escapeHtml(job.job_id || "")}" ${detectionCount <= 0 ? "disabled" : ""}>Collect detected images</button>${detectionCount <= 0 ? `<p class="job-description">There are no detected images to collect.</p>` : ""}${collection ? `<p class="job-description">Copied ${formatNumber(collection.copied_count)} image${Number(collection.copied_count) === 1 ? "" : "s"} to <code>${escapeHtml(collection.folder || "")}</code>. ${formatNumber(collection.already_present_count)} already collected; ${formatNumber(collection.missing_count)} source image${Number(collection.missing_count) === 1 ? " was" : "s were"} missing.</p>` : ""}</div>` : ""}
-      ${completed && app.activeJob?.kind === "predict" && prediction ? `<div class="collection-actions timestamp-actions"><button class="button small" type="button" data-ocr-timestamps="${escapeHtml(job.job_id || "")}" ${detectionCount <= 0 || timestampActive ? "disabled" : ""}>${timestampActive ? "Running timestamp OCR…" : "Run OCR to extract date and time"}</button>${detectionCount <= 0 ? `<p class="job-description">There are no detections to process.</p>` : ""}${timestampActive ? `<p class="job-description" role="status">${escapeHtml(timestampProgressText)}</p><div class="progress-track" role="progressbar" aria-label="Timestamp OCR progress" aria-valuemin="0" aria-valuemax="100"${timestampProgress.total ? ` aria-valuenow="${Math.round((timestampProgress.completed || 0) * 100 / timestampProgress.total)}"` : ""}><div class="progress-fill${timestampProgress.total ? "" : " indeterminate"}"${timestampProgress.total ? ` style="width:${Math.round((timestampProgress.completed || 0) * 100 / timestampProgress.total)}%"` : ""}></div></div>` : ""}${timestampJob?.error ? `<p class="job-detail" role="alert">${escapeHtml(timestampJob.error)}</p>` : ""}${timestampState === "completed" ? `<p class="job-description" role="status">${escapeHtml(timestampJob.result?.message || `Recognized ${formatNumber(timestampJob.result?.recognized_count)} images; ${formatNumber(timestampJob.result?.unparsed_count)} unresolved.`)}</p>${timestampDownloads.length ? `<div class="download-list">${timestampDownloads.map((item) => `<a class="download-link" href="${escapeHtml(safeHref(item.url))}" download="${escapeHtml(item.filename || "")}">${escapeHtml(item.label || "Download updated predictions CSV")}</a>`).join("")}</div>` : ""}` : ""}</div>` : ""}
+      ${completed && app.activeJob?.kind === "predict" && prediction ? `<div class="collection-actions timestamp-actions"><button class="button small" type="button" data-ocr-timestamps="${escapeHtml(job.job_id || "")}" ${detectionCount <= 0 || timestampActive ? "disabled" : ""}>${timestampActive ? "Running timestamp OCR…" : "Run OCR to extract date and time"}</button>${detectionCount <= 0 ? `<p class="job-description">There are no detections to process.</p>` : ""}${timestampActive ? `<p class="job-description" role="status">${escapeHtml(timestampProgressText)}</p><div class="progress-track" role="progressbar" aria-label="Timestamp OCR progress" aria-valuemin="0" aria-valuemax="100"${timestampProgress.total ? ` aria-valuenow="${Math.round((timestampProgress.completed || 0) * 100 / timestampProgress.total)}"` : ""}><div class="progress-fill${timestampProgress.total ? "" : " indeterminate"}"${timestampProgress.total ? ` style="width:${Math.round((timestampProgress.completed || 0) * 100 / timestampProgress.total)}%"` : ""}></div></div>${timestampJob?.cancel_requested ? `<button class="button small" type="button" disabled>Canceling OCR…</button>` : `<button class="button small" type="button" data-cancel-job="${escapeHtml(timestampJobId || "")}">Cancel OCR</button>`}` : ""}${timestampJob?.error ? `<p class="job-detail" role="alert">${escapeHtml(timestampJob.error)}</p>` : ""}${timestampState === "completed" ? `<p class="job-description" role="status">${escapeHtml(timestampJob.result?.message || `Recognized ${formatNumber(timestampJob.result?.recognized_count)} images; ${formatNumber(timestampJob.result?.unparsed_count)} unresolved.`)}</p>${timestampDownloads.length ? `<div class="download-list">${timestampDownloads.map((item) => `<a class="download-link" href="${escapeHtml(safeHref(item.url))}" download="${escapeHtml(item.filename || "")}">${escapeHtml(item.label || "Download updated predictions CSV")}</a>`).join("")}</div>` : ""}` : timestampState === "canceled" ? `<p class="job-description" role="status">Timestamp OCR canceled.</p>` : ""}</div>` : ""}
       ${app.activeJob?.kind === "cvat" && (job.result?.task_url || job.result?.cvat_url || job.result?.server_url || app.managedCvatUrl) ? `<div class="download-list"><a class="download-link" href="${escapeHtml(safeHref(job.result?.task_url || job.result?.cvat_url || job.result?.server_url || app.managedCvatUrl))}" target="_blank" rel="noopener noreferrer">Open CVAT</a></div>` : ""}
       ${job.status_offline ? `<button class="button small" type="button" data-poll-job-id="${escapeHtml(job.job_id || "")}">Check status again</button>` : ""}
     </section>`;
@@ -1430,7 +1439,13 @@
         if (app.activeJob?.id === jobId) renderJobSlot();
         renderActivity();
         if (["completed", "failed", "canceled"].includes(String(job.state).toLowerCase())) {
-          if (job.state === "completed") await refreshProjectDetails(jobId);
+          if (job.state === "completed") {
+            await refreshProjectDetails(jobId);
+          }
+          const meta = app.jobMeta.get(jobId) || {};
+          if (meta.kind === "training" && ["modal", "azure_ml", "vertex_ai"].includes(meta.execution)) {
+            await loadCloudJobs();
+          }
           return;
         }
       } catch (error) {
@@ -1595,6 +1610,12 @@
           body: JSON.stringify({ acknowledged: Boolean(cloudOcr) }),
         });
         app.timestampJobs.set(predictionJobId, result.job_id);
+        app.jobMeta.set(result.job_id, {
+          kind: "timestamp-ocr",
+          execution: cloudOcr ? prediction.execution : "local",
+          cancelable: true,
+          title: "Timestamp OCR",
+        });
         app.jobs.set(result.job_id, {
           job_id: result.job_id,
           state: "queued",
@@ -1714,16 +1735,18 @@
     if (event.target.closest("[data-cancel-job]")) {
       const button = event.target.closest("[data-cancel-job]");
       button.disabled = true;
-      button.textContent = "Stopping after active batch…";
+      button.textContent = "Requesting cancellation…";
       try {
         const result = await api(`/api/jobs/${encodeURIComponent(button.dataset.cancelJob)}/cancel`, { method: "POST", body: "{}" });
         const job = app.jobs.get(button.dataset.cancelJob);
         if (job) job.cancel_requested = result.cancel_requested;
-        toast("Cancellation requested. The active batch will be cleaned up before stopping.");
+        renderJobSlot();
+        renderActivity();
+        toast("Cancellation requested. The active step will stop at a safe point.");
       } catch (error) {
         toast(error.message, true);
         button.disabled = false;
-        button.textContent = "Cancel after current batch";
+        button.textContent = app.jobMeta.get(button.dataset.cancelJob)?.kind === "timestamp-ocr" ? "Cancel OCR" : "Cancel run";
       }
       return;
     }

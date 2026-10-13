@@ -11,6 +11,7 @@ from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from ..cancellation import check_cancellation
 from ..core import ValidationError
 from ..timestamp_ocr import (
     TimestampOCRSummary,
@@ -119,6 +120,7 @@ def run_cloud_timestamp_ocr(
                 timestamps[sources_by_id[image_id]] = parsed
             if seen != set(sources_by_id):
                 raise RuntimeError("Cloud OCR did not return a result for every uploaded crop")
+        check_cancellation(progress_callback, "Timestamp OCR canceled before updating the CSV.")
         return apply_timestamp_results(predictions_csv, image_root, timestamps)
     finally:
         cleanup = getattr(transport, "cleanup_timestamp_ocr", None)

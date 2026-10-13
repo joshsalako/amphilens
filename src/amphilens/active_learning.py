@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
+from .cancellation import WorkflowCancelled
 from .core import DetectionRecord, ValidationError
 
 
@@ -155,19 +156,37 @@ class HybridPPALStrategy:
         calibration: PPALCalibration,
         *,
         features: dict[str, list[float]],
+        cancellation_requested: Callable[[], bool] | None = None,
     ) -> list[SelectedImage]:
-        records = list(predictions)
+        def check_cancellation() -> None:
+            if cancellation_requested is not None and cancellation_requested():
+                raise WorkflowCancelled("Active learning selection canceled at a safe point.")
+
+        records = []
+        for index, record in enumerate(predictions):
+            if index % 256 == 0:
+                check_cancellation()
+            records.append(record)
         if not records:
             return []
         grouped: dict[str, list[DetectionRecord]] = defaultdict(list)
-        for record in records:
+        for index, record in enumerate(records):
+            if index % 256 == 0:
+                check_cancellation()
             grouped[record.image_path].append(record)
-        missing_features = [path for path in grouped if path not in features]
+        missing_features = []
+        for index, path in enumerate(grouped):
+            if index % 256 == 0:
+                check_cancellation()
+            if path not in features:
+                missing_features.append(path)
         if missing_features:
             raise FeatureRequiredError(f"Missing CCMS features for {missing_features[0]}")
 
         image_scores: list[tuple[str, str, float]] = []
-        for image_path, image_records in grouped.items():
+        for index, (image_path, image_records) in enumerate(grouped.items()):
+            if index % 128 == 0:
+                check_cancellation()
             best = max(image_records, key=lambda item: item.confidence or 0.0)
             score = sum(
                 calibration.weights.get(record.class_name, 1.0)
@@ -181,6 +200,7 @@ class HybridPPALStrategy:
             )
             image_scores.append((image_path, best.class_name, score))
         image_scores.sort(key=lambda row: (-row[2], row[0]))
+        check_cancellation()
         pool = image_scores[
             : min(len(image_scores), self.config.budget * self.config.pool_multiplier)
         ]
@@ -195,21 +215,28 @@ class HybridPPALStrategy:
         for candidate in sorted(
             available_by_class.values(), key=lambda row: (-row[2], row[1], row[0])
         ):
+            check_cancellation()
             if len(chosen) >= min(self.config.budget, len(pool)):
                 break
             chosen.append((*candidate, "hybrid_ppal:class_coverage+dcus_uncertainty"))
             remaining.remove(candidate)
         while remaining and len(chosen) < min(self.config.budget, len(pool)):
-            best_candidate = max(
-                remaining,
-                key=lambda candidate: (
+            check_cancellation()
+
+            def diversity_score(candidate):
+                check_cancellation()
+                return (
                     min(
                         _cosine_distance(features[candidate[0]], features[item[0]])
                         for item in chosen
                     ),
                     candidate[2],
                     candidate[0],
-                ),
+                )
+
+            best_candidate = max(
+                remaining,
+                key=diversity_score,
             )
             remaining.remove(best_candidate)
             chosen.append((*best_candidate, "hybrid_ppal:dcus_uncertainty+ccms_diversity"))

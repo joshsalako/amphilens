@@ -29,6 +29,7 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.staticfiles import StaticFiles
 
+from .cancellation import WorkflowCancelled, check_cancellation, cancellation_requested
 from .core import AmphiLensError, ProjectConfig, ProjectManifest, ProjectStore
 from .cvat_config import configured_cvat_server_url
 from .doctor import run_doctor
@@ -363,6 +364,11 @@ class JobManager:
                 job.result = result
                 job.downloads = download_map
                 job.state = "canceled" if result.get("cancelled") else "completed"
+        except WorkflowCancelled as exc:
+            with self._lock:
+                job = self._jobs[job_id]
+                job.result = {"message": str(exc), "cancelled": True}
+                job.state = "canceled"
         except Exception as exc:  # keep workflow failures inside the job status contract
             _LOG.error(
                 "Local job failed (%s): %s",
@@ -1688,9 +1694,14 @@ def run_prediction_job(
     markdown = Path(report["markdown"])
     json_report = Path(report["summary_json"])
     if summary.interruption_reason:
+        status = (
+            "canceled"
+            if "cancel" in summary.interruption_reason.lower()
+            else "paused"
+        )
         message = (
-            f"Prediction paused after {summary.completed_images} of {summary.image_count} images. "
-            f"{summary.interruption_reason}"
+            f"Prediction {status} after {summary.completed_images} of "
+            f"{summary.image_count} images. {summary.interruption_reason}"
         )
     elif request.execution != "local":
         provider_label = getattr(
@@ -1858,11 +1869,14 @@ def _phase_progress(
         return None
 
     def report(values: dict[str, Any]) -> None:
+        check_cancellation(callback)
         event = dict(values)
         if phase == "model_download" and "progress" in event:
             event["phase_progress"] = event.pop("progress")
         callback({"phase": phase, **event})
+        check_cancellation(callback)
 
+    report.cancel_requested = getattr(callback, "cancel_requested", None)
     return report
 
 
@@ -1876,6 +1890,7 @@ def run_training_job(
     from .models import load_detector, load_preset_detector
     from .training import TrainingConfig, train_snapshot_and_register
 
+    check_cancellation(progress_callback, "Training canceled before setup started.")
     project = store.load_manifest()
     snapshot, validation_snapshot, test_snapshot = _training_snapshots(store, request)
     if progress_callback is not None:
@@ -1890,6 +1905,7 @@ def run_training_job(
         request,
         progress_callback=_phase_progress(progress_callback, "model_download"),
     )
+    check_cancellation(progress_callback, "Training canceled after model preparation.")
     overrides: dict[str, Any] = {}
     if request.epochs is not None:
         overrides["epochs"] = request.epochs
@@ -1928,6 +1944,7 @@ def run_training_job(
             ModelCatalog().get(effective.model_preset), classes=list(effective.classes)
         )
     )
+    check_cancellation(progress_callback, "Training canceled before dataset preparation.")
     if progress_callback is not None:
         progress_callback(
             {
@@ -2003,11 +2020,21 @@ def run_training_job(
     )
 
 
-def run_active_learning_job(store: ProjectStore, request: ActiveLearningRequest) -> JobOutput:
+def run_active_learning_job(
+    store: ProjectStore,
+    request: ActiveLearningRequest,
+    *,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> JobOutput:
     from .active_learning import HybridPPALConfig, HybridPPALStrategy, PPALCalibration
     from .curation import write_selection_artifacts
     from .inference import read_predictions_csv
 
+    check_cancellation(progress_callback, "Active learning selection canceled before setup.")
+    if progress_callback is not None:
+        progress_callback(
+            {"phase": "selection", "message": "Loading calibration and prediction evidence"}
+        )
     calibration_path = Path(request.calibration).expanduser().resolve()
     features_path = Path(request.features).expanduser().resolve()
     if not calibration_path.is_file():
@@ -2023,11 +2050,22 @@ def run_active_learning_job(store: ProjectStore, request: ActiveLearningRequest)
         seed=request.seed,
         pool_multiplier=request.pool_multiplier,
     )
+    check_cancellation(progress_callback, "Active learning selection canceled before ranking.")
+    if progress_callback is not None:
+        progress_callback(
+            {"phase": "selection", "message": "Ranking images for annotation"}
+        )
     selected = HybridPPALStrategy(config).select(
         read_predictions_csv(predictions_path),
         calibration,
         features=json.loads(features_path.read_text(encoding="utf-8")),
+        cancellation_requested=getattr(progress_callback, "cancel_requested", None),
     )
+    check_cancellation(progress_callback, "Active learning selection canceled before saving.")
+    if progress_callback is not None:
+        progress_callback(
+            {"phase": "saving_results", "message": "Saving the annotation queue"}
+        )
     artifacts = write_selection_artifacts(selected, calibration, config, request.output)
     return JobOutput(
         result={
@@ -2125,6 +2163,7 @@ def run_cloud_training_job(
             "Modal credentials are not configured. Save credentials or set both "
             "Modal environment variables."
         )
+    check_cancellation(progress_callback, "Cloud training canceled before setup started.")
     snapshot, validation_snapshot, test_snapshot = _training_snapshots(store, request)
     if progress_callback is not None:
         progress_callback(
@@ -2197,6 +2236,7 @@ def run_cloud_training_job(
                 "gpu": request.gpu,
             }
         )
+    check_cancellation(progress_callback, "Cloud training canceled before provider submission.")
     job = service.submit(
         snapshot_path=request.snapshot_path,
         validation_snapshot_path=(str(validation_snapshot.root) if validation_snapshot else None),
@@ -2215,17 +2255,27 @@ def run_cloud_training_job(
         base_checkpoint=checkpoint or None,
         base_manifest=checkpoint_manifest,
     )
+    if cancellation_requested(progress_callback):
+        service.cancel(job.run_id)
+        raise WorkflowCancelled("Cloud training canceled and provider cancellation requested.")
     if progress_callback is not None:
-        progress_callback(
-            {
-                "phase": "submitted",
-                "message": (
-                    f"{request.provider} accepted the training job; waiting for its first update"
-                ),
-                "gpu": request.gpu,
-                "progress": 0.0,
-            }
-        )
+        try:
+            progress_callback(
+                {
+                    "phase": "submitted",
+                    "message": (
+                        f"{request.provider} accepted the training job; waiting for its first update"
+                    ),
+                    "gpu": request.gpu,
+                    "progress": 0.0,
+                }
+            )
+        except WorkflowCancelled:
+            service.cancel(job.run_id)
+            raise
+    if cancellation_requested(progress_callback):
+        service.cancel(job.run_id)
+        raise WorkflowCancelled("Cloud training canceled and provider cancellation requested.")
     return {"message": f"Cloud training submitted: {job.run_id}.", "job": _cloud_job_dict(job)}
 
 
@@ -2738,7 +2788,16 @@ def create_app(
         try:
             body = _request(ActiveLearningRequest, await _read_body(request))
             store = active_store()
-            return _json(submit(lambda: run_active_learning_job(store, body)))
+            return _json(
+                submit(
+                    lambda report: run_active_learning_job(
+                        store,
+                        body,
+                        progress_callback=report,
+                    ),
+                    with_progress=True,
+                )
+            )
         except Exception as exc:
             return _failure(exc)
 

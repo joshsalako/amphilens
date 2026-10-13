@@ -7,6 +7,7 @@ import math
 from collections.abc import Iterable
 from pathlib import Path
 
+from ..cancellation import cancellation_requested, check_cancellation
 from ..core import (
     CheckpointManifest,
     DetectionRecord,
@@ -338,6 +339,7 @@ class UltralyticsDetector:
         resume_from: CheckpointManifest | None = None,
         progress_callback=None,
     ) -> Path:
+        check_cancellation(progress_callback, "Training canceled before model initialization.")
         model = self._load()
         metadata = config.get("metadata", {})
         effective_configuration = (
@@ -457,9 +459,15 @@ class UltralyticsDetector:
                             "device": str(getattr(trainer, "device", "")),
                         }
                     )
+                    if cancellation_requested(progress_callback):
+                        trainer.stop = True
 
                 current_model.add_callback("on_fit_epoch_end", report_epoch)
             results = current_model.train(**train_config)
+            check_cancellation(
+                progress_callback,
+                f"Training canceled after the {phase_name} phase reached a safe point.",
+            )
             final_save_dir = (
                 Path(getattr(results, "save_dir", output / train_config["name"]))
                 .expanduser()
@@ -490,6 +498,7 @@ class UltralyticsDetector:
         config["freeze_strategy"] = "paper-phased" if paper_phased else "none"
         metrics_path = output / "metrics.json"
         if "test" in json.loads(Path(dataset_yaml).read_text(encoding="utf-8")):
+            check_cancellation(progress_callback, "Training canceled before test evaluation.")
             eval_result = current_model.val(
                 data=str(dataset_yaml),
                 split="test",
@@ -498,6 +507,7 @@ class UltralyticsDetector:
                 plots=False,
                 verbose=False,
             )
+            check_cancellation(progress_callback, "Training canceled after test evaluation.")
             result_metrics = getattr(eval_result, "results_dict", {})
             final_metrics = {}
             if isinstance(result_metrics, dict):

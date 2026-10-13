@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .cancellation import WorkflowCancelled, check_cancellation
 from .core import ValidationError, atomic_write_json, read_json
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
@@ -371,6 +372,7 @@ def prepare_yolo_training_dataset(
     seed: int = 42,
     allow_image_level_fallback: bool = False,
     preprocessing=None,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> Path:
     """Materialize role-specific, aspect-preserving images and labels for training."""
     from .preprocessing import PreprocessingConfig, PreprocessingService
@@ -454,9 +456,19 @@ def prepare_yolo_training_dataset(
         label_roots[role].mkdir(parents=True)
 
     role_counts: dict[str, int] = {}
+    total_images = sum(len(role_images) for _, role_images in partitions.values())
+    completed_images = 0
     for role, (snapshot, role_images) in partitions.items():
         used_names: set[str] = set()
         for item in role_images:
+            try:
+                check_cancellation(
+                    progress_callback,
+                    "Training canceled during dataset preparation.",
+                )
+            except WorkflowCancelled:
+                shutil.rmtree(target, ignore_errors=True)
+                raise
             source = snapshot.root / item.relative_path
             transformed = service.transform(source)
             if transformed.original_size != (item.width, item.height):
@@ -483,6 +495,18 @@ def prepare_yolo_training_dataset(
             (label_roots[role] / f"{Path(filename).stem}.txt").write_text(
                 "\n".join(lines) + ("\n" if lines else ""), encoding="utf-8"
             )
+            completed_images += 1
+            if progress_callback is not None:
+                progress_callback(
+                    {
+                        "phase": "dataset_preparation",
+                        "message": f"Prepared {completed_images} of {total_images} images",
+                        "role": role,
+                        "completed": completed_images,
+                        "total": total_images,
+                        "progress": completed_images / total_images if total_images else 1.0,
+                    }
+                )
         role_counts[role] = len(role_images)
 
     dataset_config: dict[str, Any] = {
@@ -569,7 +593,7 @@ class DatasetImporter:
                 phase="extracting-archive",
                 message="Extracting and checking dataset archive",
             )
-            self._extract(archive, extracted)
+            self._extract(archive, extracted, progress_callback=progress_callback)
             images = self._find_images(extracted)
             if not images:
                 raise ValidationError("Dataset archive must include image files")
@@ -585,11 +609,21 @@ class DatasetImporter:
                 phase="saving-snapshot",
                 message="Saving verified images and source archive",
             )
-            manifest_images = self._move_images(parsed, staging_root)
+            manifest_images = self._move_images(
+                parsed, staging_root, progress_callback=progress_callback
+            )
+            check_cancellation(
+                progress_callback,
+                "Dataset import canceled before archiving source.",
+            )
             shutil.rmtree(extracted)
             source_dir = staging_root / "source"
             source_dir.mkdir()
             shutil.copy2(archive, source_dir / archive.name)
+            check_cancellation(
+                progress_callback,
+                "Dataset import canceled before publication.",
+            )
             manifest = DatasetManifest(
                 snapshot_id=target_id,
                 source_format=source_format,
@@ -639,7 +673,12 @@ class DatasetImporter:
         callback(event)
 
     @staticmethod
-    def _extract(archive: Path, destination: Path) -> None:
+    def _extract(
+        archive: Path,
+        destination: Path,
+        *,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    ) -> None:
         with zipfile.ZipFile(archive) as handle:
             names = handle.namelist()
             if len(names) != len(set(names)):
@@ -648,7 +687,21 @@ class DatasetImporter:
                 path = Path(name)
                 if path.is_absolute() or ".." in path.parts:
                     raise ValidationError("Dataset archive contains an unsafe filename")
-            handle.extractall(destination)
+            for index, name in enumerate(names, start=1):
+                check_cancellation(
+                    progress_callback,
+                    "Dataset import canceled while extracting the archive.",
+                )
+                handle.extract(name, destination)
+                DatasetImporter._report_progress(
+                    progress_callback,
+                    phase="extracting-archive",
+                    message=f"Extracted {index} of {len(names)} archive entries",
+                    completed=index,
+                    total=len(names),
+                    progress=index / len(names) if names else 1.0,
+                    phase_progress=index / len(names) if names else 1.0,
+                )
 
     @staticmethod
     def _find_images(root: Path) -> list[Path]:
@@ -747,6 +800,10 @@ class DatasetImporter:
         image_nodes = tree.findall(".//image")
         total = len(image_nodes)
         for image_node in image_nodes:
+            check_cancellation(
+                progress_callback,
+                "Dataset import canceled while validating images.",
+            )
             source_name = image_node.attrib.get("name", "")
             image = self._resolve_image(source_name, lookup)
             width = self._positive_int(image_node.attrib.get("width"), "image width")
@@ -796,6 +853,10 @@ class DatasetImporter:
         parsed = []
         total = len(data["images"])
         for item in data["images"]:
+            check_cancellation(
+                progress_callback,
+                "Dataset import canceled while validating images.",
+            )
             image = self._resolve_image(str(item["file_name"]), lookup)
             width = self._positive_int(item.get("width"), "image width")
             height = self._positive_int(item.get("height"), "image height")
@@ -838,6 +899,10 @@ class DatasetImporter:
         }
         parsed = []
         for image in images:
+            check_cancellation(
+                progress_callback,
+                "Dataset import canceled while validating images.",
+            )
             width, height = self._actual_size(image)
             boxes = []
             label = label_files.get(image.stem)
@@ -995,14 +1060,24 @@ class DatasetImporter:
             raise ValidationError(f"Dataset image cannot be read: {path.name}") from exc
 
     @staticmethod
-    def _move_images(parsed: list[dict[str, Any]], target: Path) -> list[DatasetImage]:
+    def _move_images(
+        parsed: list[dict[str, Any]],
+        target: Path,
+        *,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    ) -> list[DatasetImage]:
         image_dir = target / "images"
         image_dir.mkdir(parents=True, exist_ok=True)
         used_names: set[str] = set()
         result: list[DatasetImage] = []
+        total = len(parsed)
         for index, item in enumerate(
             sorted(parsed, key=lambda value: value["source_name"]), start=1
         ):
+            check_cancellation(
+                progress_callback,
+                "Dataset import canceled while saving images.",
+            )
             source = item["source"]
             name = Path(item["source_name"]).name
             if name in used_names:
@@ -1028,6 +1103,15 @@ class DatasetImporter:
                     reviewed=True,
                     annotations=item["annotations"],
                 )
+            )
+            DatasetImporter._report_progress(
+                progress_callback,
+                phase="saving-snapshot",
+                message=f"Saved {index} of {total} images",
+                completed=index,
+                total=total,
+                progress=index / total if total else 1.0,
+                phase_progress=index / total if total else 1.0,
             )
         return result
 

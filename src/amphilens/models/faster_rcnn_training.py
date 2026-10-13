@@ -11,6 +11,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from ..cancellation import check_cancellation
 from ..core import ValidationError, atomic_write_json
 from .augmentation import PANEL_AUGMENTATION, DetectionSample, compose_detection_samples
 from .backends import (
@@ -424,6 +425,7 @@ class FasterRCNNTrainer:
         resume_from: str | Path | None = None,
         progress_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> Path:
+        check_cancellation(progress_callback, "Training canceled before model initialization.")
         try:
             import torch
             from torch.utils.data import DataLoader
@@ -468,6 +470,7 @@ class FasterRCNNTrainer:
 
             weights = FasterRCNN_ResNet50_FPN_V2_Weights.DEFAULT
         model = fasterrcnn_resnet50_fpn_v2(weights=weights, weights_backbone=None)
+        check_cancellation(progress_callback, "Training canceled after model initialization.")
         _configure_faster_rcnn_transform(
             model,
             spec.training_image_size or spec.short_side_dimension,
@@ -551,6 +554,10 @@ class FasterRCNNTrainer:
             context = torch.enable_grad() if training else torch.no_grad()
             with context:
                 for images, targets in loader:
+                    check_cancellation(
+                        progress_callback,
+                        "Training canceled after the current batch completed.",
+                    )
                     image_batch = [image.to(device) for image in images]
                     target_batch = [
                         {key: value.to(device) for key, value in target.items()}
@@ -564,6 +571,10 @@ class FasterRCNNTrainer:
                         optimizer.step()
                     total += float(loss.detach().cpu())
                     batches += 1
+                    check_cancellation(
+                        progress_callback,
+                        "Training canceled after the current batch completed.",
+                    )
             return total / max(1, batches)
 
         for phase_index, (phase_name, freeze_backbone, learning_rate) in enumerate(phase_specs, 1):
@@ -640,6 +651,10 @@ class FasterRCNNTrainer:
                             "device": str(device),
                         }
                     )
+                check_cancellation(
+                    progress_callback,
+                    "Training canceled after the current epoch completed.",
+                )
                 if patience > 0 and epochs_without_improvement >= patience:
                     break
             phase_history.append(
@@ -656,6 +671,7 @@ class FasterRCNNTrainer:
             )
         test_loss = None
         if test_loader is not None:
+            check_cancellation(progress_callback, "Training canceled before test evaluation.")
             best_state = torch.load(output / "best.pt", map_location="cpu", weights_only=False)
             model.load_state_dict(best_state["model_state_dict"])
             test_loss = run_loss(test_loader, training=False)

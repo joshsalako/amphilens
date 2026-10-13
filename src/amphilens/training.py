@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .cancellation import WorkflowCancelled, check_cancellation
 from .core import CheckpointManifest, ValidationError, atomic_write_json, read_json
 from .dataset import DatasetSnapshot, prepare_yolo_training_dataset, split_snapshot_images
 from .preprocessing import PreprocessingConfig
@@ -60,6 +61,7 @@ def train_and_register(
     extra_training_config: dict[str, Any] | None = None,
 ) -> TrainingResult:
     output = Path(output_dir).expanduser().resolve()
+    check_cancellation(progress_callback, "Training canceled before the model started.")
     output.mkdir(parents=True, exist_ok=True)
     training_config = config.to_dict()
     preprocessing_data = (
@@ -79,6 +81,7 @@ def train_and_register(
             return
         progress_callback({"phase": "training", **values})
 
+    report.cancel_requested = getattr(progress_callback, "cancel_requested", None)
     train_options = {"resume_from": resume_from}
     if progress_callback is not None:
         progress_callback(
@@ -91,12 +94,15 @@ def train_and_register(
             .expanduser()
             .resolve()
         )
+    except WorkflowCancelled:
+        raise
     except Exception as exc:
         if progress_callback is not None:
             progress_callback(
                 {"phase": "failed", "message": "Model training failed", "error": str(exc)}
             )
         raise
+    check_cancellation(progress_callback, "Training canceled before checkpoint registration.")
     if progress_callback is not None:
         progress_callback(
             {
@@ -180,6 +186,7 @@ def train_snapshot_and_register(
     extra_training_config: dict[str, Any] | None = None,
 ) -> TrainingResult:
     """Prepare immutable data roles and train through the detector adapter contract."""
+    check_cancellation(progress_callback, "Training canceled before dataset preparation.")
     output = Path(output_dir).expanduser().resolve()
     selected = PreprocessingConfig.from_any(preprocessing or config.preprocessing)
     if data_mode == "auto-split":
@@ -225,6 +232,7 @@ def train_snapshot_and_register(
             seed=config.seed,
             allow_image_level_fallback=allow_image_level_fallback,
             preprocessing=selected,
+            progress_callback=progress_callback,
         )
         dataset_metadata = read_json(dataset_yaml)
         config.evaluation = (
@@ -245,6 +253,8 @@ def train_snapshot_and_register(
                 "preprocessing",
             )
         }
+    except WorkflowCancelled:
+        raise
     except Exception as exc:
         if progress_callback is not None:
             progress_callback(
@@ -255,6 +265,7 @@ def train_snapshot_and_register(
                 }
             )
         raise
+    check_cancellation(progress_callback, "Training canceled after dataset preparation.")
     if progress_callback is not None:
         progress_callback(
             {

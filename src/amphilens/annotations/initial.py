@@ -9,6 +9,7 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
+from ..cancellation import check_cancellation
 from ..core import ProjectStore, ValidationError, atomic_write_json, read_json
 from ..dataset import DatasetImporter, DatasetSnapshot
 from .managed import CVATProjectSummary, CVATTransport
@@ -104,8 +105,16 @@ class CVATProjectImportService:
         progress_callback: Callable[[dict[str, object]], None] | None = None,
     ) -> list[DatasetSnapshot]:
         """Import each CVAT task as a separately selectable immutable snapshot."""
+        check_cancellation(
+            progress_callback,
+            "CVAT import canceled before export started.",
+        )
         mapping = dict(class_mapping or {})
         project = self.get_project(project_id)
+        check_cancellation(
+            progress_callback,
+            "CVAT import canceled after loading project tasks.",
+        )
         self._validate_project(project, mapping)
         empty_tasks = [task.name for task in project.tasks if task.size == 0]
         if empty_tasks:
@@ -126,6 +135,10 @@ class CVATProjectImportService:
             snapshot_parent = temporary_root / "snapshots"
             staged: list[tuple[DatasetSnapshot, str]] = []
             for task_index, task in enumerate(project.tasks, start=1):
+                check_cancellation(
+                    progress_callback,
+                    f"CVAT import canceled before exporting task {task.name}.",
+                )
                 task_identity = "\0".join(
                     (
                         str(getattr(self.transport, "server_url", "")),
@@ -151,6 +164,10 @@ class CVATProjectImportService:
                 exported = Path(
                     self.transport.export_task(task.task_id, archive)
                 ).expanduser().resolve()
+                check_cancellation(
+                    progress_callback,
+                    f"CVAT import canceled after exporting task {task.name}.",
+                )
                 if not exported.is_file():
                     raise ValidationError(
                         f"CVAT task {task.name!r} did not produce an export archive"
@@ -204,6 +221,9 @@ class CVATProjectImportService:
                     )
                     progress_callback(progress)
 
+                report_task_progress.cancel_requested = getattr(
+                    progress_callback, "cancel_requested", None
+                )
                 staged_snapshot = importer.import_archive(
                     exported,
                     snapshot_parent / "incoming",
@@ -221,6 +241,10 @@ class CVATProjectImportService:
             original_catalog = read_json(catalog_path) if catalog_path.is_file() else None
             try:
                 for staged_snapshot, task_display_name in staged:
+                    check_cancellation(
+                        progress_callback,
+                        "CVAT import canceled before publishing task snapshots.",
+                    )
                     destination = dataset_root / staged_snapshot.manifest.snapshot_id
                     if destination.is_dir():
                         snapshot = DatasetSnapshot.load(destination)
@@ -241,6 +265,10 @@ class CVATProjectImportService:
                         snapshot = DatasetSnapshot.load(destination)
                     self.store.set_dataset_display_name(snapshot.root, task_display_name)
                     snapshots.append(snapshot)
+                    check_cancellation(
+                        progress_callback,
+                        "CVAT import canceled while publishing task snapshots.",
+                    )
             except Exception:
                 for path in reversed(created_paths):
                     shutil.rmtree(path, ignore_errors=True)
