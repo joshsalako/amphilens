@@ -19,8 +19,12 @@ from .estimate import MAX_FUNCTION_TIMEOUT_SECONDS
 from .worker import run_remote_training
 
 base_image = (
-    modal.Image.debian_slim(python_version=IMAGE_PINS["python"])
-    .apt_install(*IMAGE_APT_PACKAGES)
+    modal.Image.from_registry(f"python:{IMAGE_PINS['python']}-slim-bookworm")
+    .run_commands(
+        "apt-get update && "
+        f"apt-get install -y --no-install-recommends {' '.join(IMAGE_APT_PACKAGES)} && "
+        "rm -rf /var/lib/apt/lists/*"
+    )
     .uv_pip_install(
         f"torch=={IMAGE_PINS['torch']}",
         f"torchvision=={IMAGE_PINS['torchvision']}",
