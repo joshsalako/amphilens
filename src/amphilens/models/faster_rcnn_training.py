@@ -7,6 +7,7 @@ import os
 import random
 import tempfile
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -389,6 +390,60 @@ def detection_collate(batch):
     return tuple(zip(*batch))
 
 
+def _faster_rcnn_loader_options(config: dict[str, Any], device) -> dict[str, Any]:
+    """Configure worker processes and host-to-device staging for training loaders."""
+    batch_size = int(config.get("batch_size", 16))
+    if batch_size <= 0:
+        raise ValidationError("batch_size must be positive")
+    num_workers = int(config.get("num_workers", 8))
+    if num_workers < 0:
+        raise ValidationError("num_workers must be non-negative")
+    options: dict[str, Any] = {
+        "batch_size": batch_size,
+        "num_workers": num_workers,
+        "collate_fn": detection_collate,
+        "pin_memory": device.type == "cuda",
+    }
+    if num_workers > 0:
+        options.update(persistent_workers=True, prefetch_factor=2)
+    return options
+
+
+def _faster_rcnn_amp_enabled(config: dict[str, Any], device) -> bool:
+    """Enable mixed precision by default on CUDA, with a config opt-out."""
+    return device.type == "cuda" and bool(config.get("amp", True))
+
+
+def _faster_rcnn_grad_scaler(torch, *, amp_enabled: bool):
+    scaler_type = getattr(getattr(torch, "amp", None), "GradScaler", None)
+    if scaler_type is not None:
+        return scaler_type("cuda", enabled=amp_enabled)
+    return torch.cuda.amp.GradScaler(enabled=amp_enabled)
+
+
+def _faster_rcnn_training_step(
+    torch,
+    model,
+    images,
+    targets,
+    *,
+    optimizer,
+    scaler,
+    training: bool,
+    amp_enabled: bool,
+):
+    context = torch.autocast("cuda", dtype=torch.float16) if amp_enabled else nullcontext()
+    with context:
+        losses = model(images, targets)
+        loss = sum(loss_value for loss_value in losses.values())
+    if training:
+        optimizer.zero_grad()
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+    return losses, loss
+
+
 def _save_torch_checkpoint(torch, path: Path, value: dict[str, Any]) -> None:
     temporary: Path | None = None
     try:
@@ -518,14 +573,11 @@ class FasterRCNNTrainer:
                 model.load_state_dict(state["model_state_dict"])
             else:
                 model.load_state_dict(state)
-        batch_size = int(config.get("batch_size", 16))
-        if batch_size <= 0:
-            raise ValidationError("batch_size must be positive")
-        loader_options = {
-            "batch_size": batch_size,
-            "num_workers": int(config.get("num_workers", 0)),
-            "collate_fn": detection_collate,
-        }
+        loader_options = _faster_rcnn_loader_options(config, device)
+        amp_enabled = _faster_rcnn_amp_enabled(config, device)
+        config["num_workers"] = loader_options["num_workers"]
+        config["amp_enabled"] = amp_enabled
+        scaler = _faster_rcnn_grad_scaler(torch, amp_enabled=amp_enabled)
         train_loader = DataLoader(dataset, shuffle=True, **loader_options)
         validation_loader = DataLoader(validation_dataset, shuffle=False, **loader_options)
         test_loader = (
@@ -560,17 +612,27 @@ class FasterRCNNTrainer:
                         progress_callback,
                         "Training canceled after the current batch completed.",
                     )
-                    image_batch = [image.to(device) for image in images]
+                    image_batch = [
+                        image.to(device, non_blocking=loader_options["pin_memory"])
+                        for image in images
+                    ]
                     target_batch = [
-                        {key: value.to(device) for key, value in target.items()}
+                        {
+                            key: value.to(device, non_blocking=loader_options["pin_memory"])
+                            for key, value in target.items()
+                        }
                         for target in targets
                     ]
-                    losses = model(image_batch, target_batch)
-                    loss = sum(loss_value for loss_value in losses.values())
-                    if training:
-                        optimizer.zero_grad()
-                        loss.backward()
-                        optimizer.step()
+                    losses, loss = _faster_rcnn_training_step(
+                        torch,
+                        model,
+                        image_batch,
+                        target_batch,
+                        optimizer=optimizer,
+                        scaler=scaler,
+                        training=training,
+                        amp_enabled=amp_enabled,
+                    )
                     total += float(loss.detach().cpu())
                     batches += 1
                     check_cancellation(
@@ -689,6 +751,12 @@ class FasterRCNNTrainer:
             "test_loss": test_loss,
             "classes": self.classes,
             "augmentation": config["augmentation"],
+            "training_runtime": {
+                "num_workers": loader_options["num_workers"],
+                "pin_memory": loader_options["pin_memory"],
+                "prefetch_factor": loader_options.get("prefetch_factor"),
+                "amp_enabled": amp_enabled,
+            },
         }
         atomic_write_json(
             output / "metrics.json",
