@@ -80,7 +80,7 @@
       "architecture": "faster_rcnn",
       "size": "resnet50",
       "artifact": "faster_rcnn_clahe.pt",
-      "sha256": "ef69bc0691dcb765ad2af36d84ff3d536f4efe5e02c298b8c359b43d197c265e",
+      "sha256": "e1483bb5d6fd878b3afdf6b6853ad54f92415cc2ee8e9deddb5bd6eb1b408963",
       "source_class_order": [
         "Other_Amphibian",
         "Small_Mammal",
