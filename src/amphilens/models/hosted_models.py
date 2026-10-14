@@ -14,7 +14,7 @@ from ..core import DetectionRecord
 from ..preprocessing import PreprocessingConfig
 
 # Pin weights independently of the mutable Hub branch. Update after model uploads.
-HF_MODEL_REVISION = "65a3bfcf1555b7af371004af354de464475a7e3d"
+HF_MODEL_REVISION = "7c556dad9256834f9c47ea3bd64156495172a07c"
 _MANIFEST_PATH = Path(__file__).with_name("amphilens-models.json")
 
 
