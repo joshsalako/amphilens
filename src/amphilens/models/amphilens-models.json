@@ -18,7 +18,7 @@
       "architecture": "yolo",
       "size": "medium",
       "artifact": "yolo_clahe.pt",
-      "sha256": "e4f8b3c4264b25482445506d0f495976f5af570ea50a4682a6d9ea247a8ea123",
+      "sha256": "b8f0247bb69345c8a2c32e80dd865748a9f852bea616f7c3e963be17db72bf5f",
       "source_class_order": [
         "Other_Amphibian",
         "Small_Mammal",
@@ -49,7 +49,7 @@
       "architecture": "rtdetr",
       "size": "large",
       "artifact": "rtdetr_clahe.pt",
-      "sha256": "91be4021b5f65017a3499651d45123475c7a3bc5776a313ebae18011732f42a9",
+      "sha256": "589851e70668ce00c2d0b9bf4b113f3e274e72a4b9bd30894a6d3ca52d70c2f0",
       "source_class_order": [
         "Other_Amphibian",
         "Small_Mammal",
