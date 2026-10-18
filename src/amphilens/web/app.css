@@ -59,6 +59,9 @@ a { color: inherit; }
 .sidebar-bottom { margin-top: auto; }
 .sidebar-note { display: flex; align-items: center; gap: 8px; padding: 14px 12px 3px; color: #77847a; font-size: 0.6875rem; }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 3px #d9e8dc; }
+.app-footer { padding: 14px clamp(26px, 4.2vw, 58px) 20px; border-top: 1px solid var(--line); color: var(--quiet); font-size: 0.6875rem; }
+.app-footer p { margin: 0; }
+.app-footer strong { color: var(--muted); font-weight: 600; }
 
 .main-column { min-width: 0; }
 .topbar { position: sticky; top: 0; z-index: 5; height: 66px; display: flex; align-items: center; gap: 18px; padding: 0 clamp(22px, 4vw, 56px); border-bottom: 1px solid var(--line); background: rgba(241,243,238,.94); backdrop-filter: blur(12px); }
@@ -350,6 +353,7 @@ select:not([multiple]) { appearance: none; -webkit-appearance: none; padding-rig
   .project-name { max-width: 42vw; font-size: 0.75rem; }
   .activity-panel { right: -88px; }
   .content { padding: 30px 19px 50px; }
+  .app-footer { padding: 12px 19px 18px; }
   .view-head { align-items: flex-start; flex-direction: column; gap: 14px; margin-bottom: 22px; }
   .hero-panel { grid-template-columns: minmax(0, 1fr) 190px; min-height: 218px; }
   .hero-copy { padding: 24px; }
@@ -368,6 +372,7 @@ select:not([multiple]) { appearance: none; -webkit-appearance: none; padding-rig
   .activity-toggle { gap: 6px; padding: 6px 7px; font-size: 0.6875rem; }
   .activity-panel { right: -110px; }
   .content { padding: 26px 14px 40px; }
+  .app-footer { padding-inline: 14px; }
   .hero-panel { display: block; min-height: 0; }
   .hero-copy { padding: 22px 20px 19px; }
   .hero-art { position: absolute; inset: auto 0 0 auto; width: 150px; height: 100px; min-height: 0; opacity: .35; pointer-events: none; }

@@ -79,3 +79,11 @@ Set `CVAT_URL` and `CVAT_TOKEN` for CVAT, or `MODAL_TOKEN_ID` and `MODAL_TOKEN_S
 ## License
 
 [AGPL-3.0-only](LICENSE)
+
+## Citation
+
+If you use AmphiLens in your research, please cite the software:
+
+> Salako, J. (n.d.). *AmphiLens* [Computer software]. GitHub. https://github.com/joshsalako/amphilens
+
+For the research behind the Western leopard toad detector, see the [associated paper](https://openreview.net/pdf?id=0YnE65NGna).
