@@ -241,6 +241,7 @@ cloud-gcp = [
 ]
 cloud-ocr = [
     { name = "opencv-python-headless" },
+    { name = "pillow" },
 ]
 cvat = [
     { name = "cvat-cli" },
@@ -312,6 +313,7 @@ ocr = [
     { name = "onnxruntime", version = "1.24.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-9-amphilens-local-cuda' and extra == 'extra-9-amphilens-local-mps')" },
     { name = "onnxruntime", version = "1.31.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-9-amphilens-local-cuda' and extra == 'extra-9-amphilens-local-mps')" },
     { name = "opencv-python-headless" },
+    { name = "pillow" },
     { name = "rapidocr" },
 ]
 release = [
@@ -363,7 +365,9 @@ requires-dist = [
     { name = "opencv-python-headless", marker = "extra == 'inference'", specifier = ">=4.10" },
     { name = "opencv-python-headless", marker = "extra == 'ocr'", specifier = ">=4.10" },
     { name = "pillow", marker = "extra == 'cloud'", specifier = ">=10.0" },
+    { name = "pillow", marker = "extra == 'cloud-ocr'", specifier = ">=10.0" },
     { name = "pillow", marker = "extra == 'inference'", specifier = ">=10.0" },
+    { name = "pillow", marker = "extra == 'ocr'", specifier = ">=10.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
     { name = "python-dotenv", marker = "extra == 'cloud'", specifier = ">=1.0" },

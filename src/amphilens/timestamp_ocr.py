@@ -1,14 +1,16 @@
-"""Optional local OCR for date and time overlays in camera-trap images."""
+"""Optional date and time extraction for camera-trap images, with OCR fallback."""
 
 from __future__ import annotations
 
 import csv
 import os
 import re
+import struct
 import tempfile
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import date as calendar_date
+from datetime import datetime as calendar_datetime
 from datetime import time as clock_time
 from pathlib import Path
 from typing import Any
@@ -17,7 +19,8 @@ from .cancellation import check_cancellation
 from .core import AmphiLensError
 
 OCR_INSTALL_MESSAGE = (
-    "Timestamp OCR is optional. For local OCR, install `uv sync --extra web --extra inference "
+    "Timestamp extraction is optional. For local extraction, install `uv sync --extra web "
+    "--extra inference "
     "--extra ocr` or `pip install 'amphilens[ocr]'`. For cloud OCR, add `--extra cloud-ocr` "
     "to your cloud setup command, then restart AmphiLens."
 )
@@ -142,6 +145,44 @@ def _ocr_text(result: Any) -> str:
     return " ".join(output)
 
 
+def _read_timestamp_from_exif(image_path: str | Path) -> tuple[str, str]:
+    """Read a valid capture timestamp from standard EXIF date/time fields."""
+    path = Path(image_path)
+    if not path.is_file():
+        return "", ""
+
+    try:
+        from PIL import ExifTags, Image
+    except ImportError as exc:
+        raise OCRDependencyError(OCR_INSTALL_MESSAGE) from exc
+
+    try:
+        with Image.open(path) as image:
+            exif = image.getexif()
+            exif_ifd = exif.get_ifd(ExifTags.IFD.Exif)
+            candidates = (
+                exif_ifd.get(ExifTags.Base.DateTimeOriginal),
+                exif_ifd.get(ExifTags.Base.DateTimeDigitized),
+                exif.get(ExifTags.Base.DateTime),
+            )
+            for value in candidates:
+                if not isinstance(value, str):
+                    continue
+                try:
+                    timestamp = calendar_datetime.strptime(
+                        value.strip(" \t\r\n\x00"), "%Y:%m:%d %H:%M:%S"
+                    )
+                except ValueError:
+                    continue
+                return (
+                    timestamp.date().isoformat(),
+                    timestamp.time().isoformat(timespec="seconds"),
+                )
+    except (ImportError, OSError, SyntaxError, TypeError, ValueError, struct.error):
+        return "", ""
+    return "", ""
+
+
 def _bottom_crops(image: Any, *, pre_cropped_region: bool = False) -> Iterator[Any]:
     """Yield progressively wider, preprocessed bottom crops only as needed."""
     try:
@@ -198,7 +239,22 @@ def read_timestamp_from_image(
     ocr_engine: Callable[[Any], Any] | None = None,
     device: str = "cpu",
 ) -> tuple[str, str]:
-    """Read a date and time overlay, giving RapidOCR only preprocessed bottom crops."""
+    """Prefer embedded EXIF time, then read an overlay using preprocessed bottom crops."""
+    timestamp = _read_timestamp_from_exif(image_path)
+    if timestamp[0] and timestamp[1]:
+        return timestamp
+
+    timestamp, _ = _read_timestamp_with_ocr(image_path, ocr_engine=ocr_engine, device=device)
+    return timestamp
+
+
+def _read_timestamp_with_ocr(
+    image_path: str | Path,
+    *,
+    ocr_engine: Callable[[Any], Any] | None = None,
+    device: str = "cpu",
+) -> tuple[tuple[str, str], Callable[[Any], Any] | None]:
+    """Read an overlay and return the engine for reuse by the batch processor."""
     try:
         import cv2
     except ImportError as exc:
@@ -207,13 +263,13 @@ def read_timestamp_from_image(
     path = Path(image_path)
     image = cv2.imread(str(path), cv2.IMREAD_COLOR)
     if image is None:
-        return "", ""
+        return ("", ""), ocr_engine
     engine = ocr_engine or create_rapidocr_engine(device=device)
     for crop in _bottom_crops(image):
         date_value, time_value = parse_timestamp_text(_ocr_text(engine(crop)))
         if date_value and time_value:
-            return date_value, time_value
-    return "", ""
+            return (date_value, time_value), engine
+    return ("", ""), engine
 
 
 def read_timestamp_from_cropped_region(
@@ -372,7 +428,7 @@ def process_prediction_csv(
     device: str = "cpu",
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> TimestampOCRSummary:
-    """OCR each unique prediction image, then atomically append/update date and time columns."""
+    """Extract EXIF timestamps first, OCR unresolved images, and update the CSV atomically."""
     csv_path = Path(predictions_csv).expanduser().resolve()
     source_root = Path(image_root).expanduser().resolve()
     if not csv_path.is_file():
@@ -397,13 +453,17 @@ def process_prediction_csv(
         row_images.append(image)
         unique_images.setdefault(image, None)
 
-    engine = ocr_engine or create_rapidocr_engine(device=device)
+    engine = ocr_engine
     timestamps: dict[Path, tuple[str, str]] = {}
     recognized_count = 0
     total = len(unique_images)
     for completed, image_path in enumerate(unique_images, start=1):
         check_cancellation(progress_callback, "Timestamp OCR canceled between images.")
-        timestamp = read_timestamp_from_image(image_path, ocr_engine=engine, device=device)
+        timestamp = _read_timestamp_from_exif(image_path)
+        if not (timestamp[0] and timestamp[1]):
+            timestamp, engine = _read_timestamp_with_ocr(
+                image_path, ocr_engine=engine, device=device
+            )
         timestamps[image_path] = timestamp
         if timestamp[0] and timestamp[1]:
             recognized_count += 1

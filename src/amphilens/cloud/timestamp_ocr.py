@@ -15,6 +15,7 @@ from ..cancellation import check_cancellation
 from ..core import ValidationError
 from ..timestamp_ocr import (
     TimestampOCRSummary,
+    _read_timestamp_from_exif,
     apply_timestamp_results,
     parse_timestamp_text,
     read_timestamp_from_cropped_region,
@@ -61,6 +62,10 @@ def run_cloud_timestamp_ocr(
                     from .prediction import PredictionCancelled
 
                     raise PredictionCancelled("Timestamp OCR canceled during local cropping.")
+                timestamp = _read_timestamp_from_exif(image_path)
+                if timestamp[0] and timestamp[1]:
+                    timestamps[image_path] = timestamp
+                    continue
                 image_id = "img-" + hashlib.sha256(str(image_path).encode("utf-8")).hexdigest()[:24]
                 crop_path = crop_root / f"{image_id}.jpg"
                 if save_timestamp_crop(image_path, crop_path):
