@@ -92,6 +92,14 @@ The run may produce:
 Boxes in exported results must be mapped back to the original image dimensions.
 Source images must never be modified.
 
+### Optional date and time extraction
+
+After prediction, **Extract date and time** fills the `date` and `time` fields
+for unique detected images. AmphiLens uses a valid EXIF capture timestamp when
+available and falls back to RapidOCR for images without usable EXIF time. Cloud
+processing checks metadata locally and uploads bottom crops only for images
+that need OCR.
+
 ### CVAT boundary
 
 CVAT is not required for prediction-only work. If the user wants to manually

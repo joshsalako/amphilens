@@ -65,10 +65,12 @@ cloud-gcp = [
 ocr = [
   "onnxruntime>=1.18",
   "opencv-python-headless>=4.10",
+  "pillow>=10.0",
   "rapidocr>=3.7.0",
 ]
 cloud-ocr = [
   "opencv-python-headless>=4.10",
+  "pillow>=10.0",
 ]
 dev = [
   "amphilens[cli,web,inference]",

@@ -72,8 +72,8 @@ cp .env.example .env
 Set `CVAT_URL` and `CVAT_TOKEN` for CVAT, or `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET` for Modal. `.env` is Git-ignored; keep credentials private.
 
 - **CVAT:** Add `--extra cvat` to your install command. This installs the AmphiLens client, not the CVAT server. [Install CVAT](https://docs.cvat.ai/docs/administration/community/basics/installation/) and start it with `docker compose up -d`.
-- **Local timestamp OCR:** Add `--extra ocr` to run OCR on your computer.
-- **Cloud timestamp OCR:** Add `--extra cloud-ocr` to crop timestamps locally and send only those crops to the selected cloud GPU. An extra provider charge may apply.
+- **Local date and time extraction:** Add `--extra ocr` to read capture timestamps from EXIF first, then use OCR when an image has no usable timestamp.
+- **Cloud date and time extraction:** Add `--extra cloud-ocr` to read EXIF locally and send bottom crops only for images that need OCR to the selected cloud GPU. An extra provider charge may apply.
 - **Cloud:** The `cloud` install uses Modal for remote GPU jobs. See the [cloud guide](docs/cloud-training.md); Azure and Google Cloud options are listed above.
 
 ## License

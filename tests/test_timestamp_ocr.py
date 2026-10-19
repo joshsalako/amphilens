@@ -6,6 +6,7 @@ import sys
 import cv2
 import numpy as np
 import pytest
+from PIL import ExifTags, Image
 
 from amphilens.timestamp_ocr import (
     OCRDependencyError,
@@ -23,11 +24,78 @@ def _image(path, *, width=800, height=600):
     return image
 
 
+def _image_with_exif(
+    path,
+    *,
+    original=None,
+    digitized=None,
+    generic=None,
+    width=800,
+    height=600,
+):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image = Image.new("RGB", (width, height))
+    exif = Image.Exif()
+    exif_ifd = {}
+    if original is not None:
+        exif_ifd[36867] = original
+    if digitized is not None:
+        exif_ifd[36868] = digitized
+    if exif_ifd:
+        exif[ExifTags.IFD.Exif] = exif_ifd
+    if generic is not None:
+        exif[306] = generic
+    image.save(path, format="JPEG", exif=exif)
+
+
 def test_parser_returns_iso_date_and_time_only_for_valid_pair():
     assert parse_timestamp_text("Date 09/10/2026 18:42:07") == ("2026-10-09", "18:42:07")
     assert parse_timestamp_text("2026-10-09 18:42") == ("2026-10-09", "18:42:00")
     assert parse_timestamp_text("31/02/2026 18:42:07") == ("", "")
     assert parse_timestamp_text("09/10/2026 no time") == ("", "")
+
+
+def test_exif_timestamp_prefers_original_then_digitized_then_generic_datetime(tmp_path):
+    original_path = tmp_path / "original.jpg"
+    _image_with_exif(
+        original_path,
+        original="2025:10:07 03:07:16",
+        digitized="2024:02:03 04:05:06",
+        generic="2023:01:02 01:02:03",
+    )
+    digitized_path = tmp_path / "digitized.jpg"
+    _image_with_exif(
+        digitized_path,
+        digitized="2024:02:03 04:05:06",
+        generic="2023:01:02 01:02:03",
+    )
+    generic_path = tmp_path / "generic.jpg"
+    _image_with_exif(generic_path, generic="2023:01:02 01:02:03")
+
+    def unexpected_ocr(_crop):
+        pytest.fail("RapidOCR should not run for usable EXIF")
+
+    assert read_timestamp_from_image(original_path, ocr_engine=unexpected_ocr) == (
+        "2025-10-07",
+        "03:07:16",
+    )
+    assert read_timestamp_from_image(digitized_path, ocr_engine=unexpected_ocr) == (
+        "2024-02-03",
+        "04:05:06",
+    )
+    assert read_timestamp_from_image(generic_path, ocr_engine=unexpected_ocr) == (
+        "2023-01-02",
+        "01:02:03",
+    )
+
+
+def test_malformed_exif_timestamp_falls_back_to_ocr(tmp_path):
+    image_path = tmp_path / "malformed.jpg"
+    _image_with_exif(image_path, original="not a timestamp")
+
+    result = read_timestamp_from_image(image_path, ocr_engine=lambda _crop: "09/10/2026 18:42:07")
+
+    assert result == ("2026-10-09", "18:42:07")
 
 
 def test_missing_optional_runtime_has_install_guidance(monkeypatch):
@@ -226,6 +294,72 @@ def test_prediction_csv_processes_unique_images_and_repeats_values(tmp_path):
         ("2026-10-10", "01:02:03"),
         ("2026-10-10", "01:02:03"),
     ]
+
+
+def test_prediction_csv_uses_exif_and_ocr_only_for_unique_images_without_it(tmp_path, monkeypatch):
+    import amphilens.timestamp_ocr as timestamp_ocr
+
+    image_root = tmp_path / "images"
+    _image_with_exif(
+        image_root / "camera" / "metadata.jpg",
+        original="2025:10:07 03:07:16",
+    )
+    _image(image_root / "camera" / "ocr.jpg")
+    csv_path = tmp_path / "results.csv"
+    csv_path.write_text(
+        "image_path\ncamera/metadata.jpg\ncamera/metadata.jpg\ncamera/ocr.jpg\n",
+        encoding="utf-8",
+    )
+    ocr_calls = []
+    engine_factories = []
+
+    def engine(_crop):
+        ocr_calls.append(True)
+        return "09/10/2026 18:42:07"
+
+    def create_engine(**kwargs):
+        engine_factories.append(kwargs)
+        return engine
+
+    monkeypatch.setattr(
+        timestamp_ocr,
+        "create_rapidocr_engine",
+        create_engine,
+    )
+    summary = process_prediction_csv(csv_path, image_root)
+
+    with csv_path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert summary.image_count == 2
+    assert summary.recognized_count == 2
+    assert summary.unparsed_count == 0
+    assert engine_factories == [{"device": "cpu"}]
+    assert len(ocr_calls) == 1
+    assert [(row["date"], row["time"]) for row in rows] == [
+        ("2025-10-07", "03:07:16"),
+        ("2025-10-07", "03:07:16"),
+        ("2026-10-09", "18:42:07"),
+    ]
+
+
+def test_prediction_csv_does_not_create_rapidocr_engine_when_all_images_have_exif(
+    tmp_path, monkeypatch
+):
+    import amphilens.timestamp_ocr as timestamp_ocr
+
+    image_root = tmp_path / "images"
+    _image_with_exif(image_root / "metadata.jpg", original="2025:10:07 03:07:16")
+    csv_path = tmp_path / "results.csv"
+    csv_path.write_text("image_path\nmetadata.jpg\n", encoding="utf-8")
+    monkeypatch.setattr(
+        timestamp_ocr,
+        "create_rapidocr_engine",
+        lambda **_kwargs: pytest.fail("RapidOCR engine should not be created"),
+    )
+
+    summary = process_prediction_csv(csv_path, image_root)
+
+    assert summary.recognized_count == 1
 
 
 def test_prediction_csv_passes_local_device_to_ocr_engine(tmp_path, monkeypatch):

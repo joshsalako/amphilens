@@ -84,7 +84,7 @@ def test_static_frontend_and_assets_are_served(client):
     assert "Prediction run:" in script
     assert "Collect detected images" in script
     assert "/collect-images" in script
-    assert "Run OCR to extract date and time" in script
+    assert "Extract date and time" in script
     assert "/ocr-timestamps" in script
     assert 'data-ocr-timestamps="' in script
     assert 'detectionCount <= 0 || timestampActive ? "disabled" : ""' in script

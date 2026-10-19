@@ -7,6 +7,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from PIL import ExifTags, Image
 
 from amphilens.cloud.timestamp_ocr import run_cloud_timestamp_ocr
 
@@ -14,6 +15,13 @@ from amphilens.cloud.timestamp_ocr import run_cloud_timestamp_ocr
 def _image(path, *, width=800, height=600):
     path.parent.mkdir(parents=True, exist_ok=True)
     assert cv2.imwrite(str(path), np.zeros((height, width, 3), dtype=np.uint8))
+
+
+def _image_with_exif(path, *, original, width=800, height=600):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    exif = Image.Exif()
+    exif[ExifTags.IFD.Exif] = {36867: original}
+    Image.new("RGB", (width, height)).save(path, format="JPEG", exif=exif)
 
 
 def test_cloud_ocr_uploads_unique_bottom_crops_and_updates_local_csv(tmp_path):
@@ -92,6 +100,94 @@ def test_cloud_ocr_uploads_unique_bottom_crops_and_updates_local_csv(tmp_path):
     assert [(row["date"], row["time"]) for row in rows] == [
         ("2026-10-09", "18:42:07"),
         ("2026-10-09", "18:42:07"),
+        ("2026-10-09", "18:42:07"),
+    ]
+
+
+def test_cloud_ocr_skips_remote_job_when_all_images_have_exif(tmp_path):
+    image_root = tmp_path / "images"
+    image_path = image_root / "camera" / "metadata.jpg"
+    _image_with_exif(image_path, original="2025:10:07 03:07:16")
+    csv_path = tmp_path / "predictions.csv"
+    csv_path.write_text("image_path\ncamera/metadata.jpg\n", encoding="utf-8")
+
+    class NoOCRTransport:
+        def run_timestamp_ocr(self, **_kwargs):
+            raise AssertionError("remote OCR should be skipped when EXIF is usable")
+
+    summary = run_cloud_timestamp_ocr(
+        csv_path,
+        image_root,
+        transport=NoOCRTransport(),
+        gpu="L4",
+    )
+
+    with csv_path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert summary.image_count == 1
+    assert summary.recognized_count == 1
+    assert summary.unparsed_count == 0
+    assert [(row["date"], row["time"]) for row in rows] == [("2025-10-07", "03:07:16")]
+
+
+def test_cloud_ocr_uploads_only_images_without_usable_exif(tmp_path):
+    image_root = tmp_path / "images"
+    metadata_image = image_root / "camera" / "metadata.jpg"
+    ocr_image = image_root / "camera" / "ocr.jpg"
+    _image_with_exif(metadata_image, original="2025:10:07 03:07:16")
+    _image(ocr_image)
+    csv_path = tmp_path / "predictions.csv"
+    csv_path.write_text(
+        "image_path\ncamera/metadata.jpg\ncamera/metadata.jpg\ncamera/ocr.jpg\n",
+        encoding="utf-8",
+    )
+
+    class OneImageOCRTransport:
+        uploaded = None
+
+        def run_timestamp_ocr(
+            self,
+            *,
+            job_key,
+            gpu,
+            crops,
+            progress_callback=None,
+            cancellation_requested=None,
+            job_id_callback=None,
+        ):
+            del progress_callback, cancellation_requested, job_id_callback
+            assert gpu == "L4"
+            assert len(crops) == 1
+            self.uploaded = (job_key, dict(crops))
+            (image_id,) = crops
+            return {
+                "state": "finished",
+                "records": [
+                    {
+                        "image_id": image_id,
+                        "date": "2026-10-09",
+                        "time": "18:42:07",
+                    }
+                ],
+            }
+
+    transport = OneImageOCRTransport()
+    summary = run_cloud_timestamp_ocr(
+        csv_path,
+        image_root,
+        transport=transport,
+        gpu="L4",
+    )
+
+    with csv_path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert transport.uploaded is not None
+    assert summary.image_count == 2
+    assert summary.recognized_count == 2
+    assert summary.unparsed_count == 0
+    assert [(row["date"], row["time"]) for row in rows] == [
+        ("2025-10-07", "03:07:16"),
+        ("2025-10-07", "03:07:16"),
         ("2026-10-09", "18:42:07"),
     ]
 
