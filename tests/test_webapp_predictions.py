@@ -140,7 +140,7 @@ def test_prediction_job_can_collect_unique_images_into_its_project_run_folder(
     response = client.post(f"/api/jobs/{job_id}/collect-images")
     assert response.status_code == 200, response.text
     result = response.json()
-    destination = project_root / "runs" / "predict-yolo26-l-test123" / "images"
+    destination = project_root / "runs" / "Field Camera Survey" / "images"
     assert result["folder"] == str(destination)
     assert result["copied_count"] == 1
     assert result["already_present_count"] == 0
