@@ -2951,9 +2951,13 @@ def create_app(
             if not isinstance(project_root, str) or not isinstance(run_id, str) or not run_id:
                 raise ValueError("Prediction project or run information is missing")
             _validate_run_id(run_id)
+            run_name = prediction.get("run_name")
+            run_folder_name = (
+                _prediction_run_name(run_name) if isinstance(run_name, str) else run_id
+            )
             store = ProjectStore(project_root)
             store.load_manifest()
-            destination = store.root / "runs" / run_id / "images"
+            destination = store.root / "runs" / run_folder_name / "images"
             if not destination.is_relative_to(store.root):
                 raise ValueError("Prediction run folder is outside the project")
             summary = collect_prediction_images(

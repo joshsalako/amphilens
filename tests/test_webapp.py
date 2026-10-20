@@ -89,7 +89,7 @@ def test_static_frontend_and_assets_are_served(client):
     assert 'data-ocr-timestamps="' in script
     assert 'detectionCount <= 0 || timestampActive ? "disabled" : ""' in script
     assert 'detectionCount <= 0 ? "disabled" : ""' in script
-    assert "There are no detected images to collect." in script
+    assert "There are no detected images to collect or process." in script
     assert 'name="training_source"' in script
     assert 'data-required-when-cloud' in script
     assert "window.AmphiLensRequiredFields.start(document)" in script
@@ -496,6 +496,7 @@ def test_prediction_job_can_collect_unique_images_into_its_project_run_folder(
                     "image_root": str(image_root),
                     "project_root": str(project_root),
                     "detection_count": 2,
+                    "run_name": "Field Camera Survey",
                 }
             }
         )
@@ -505,7 +506,7 @@ def test_prediction_job_can_collect_unique_images_into_its_project_run_folder(
     response = client.post(f"/api/jobs/{job_id}/collect-images")
     assert response.status_code == 200, response.text
     result = response.json()
-    destination = project_root / "runs" / "predict-yolo26-l-test123" / "images"
+    destination = project_root / "runs" / "Field Camera Survey" / "images"
     assert result["folder"] == str(destination)
     assert result["copied_count"] == 1
     assert result["already_present_count"] == 0
@@ -789,6 +790,7 @@ def test_prediction_preflight_reports_bytes_and_only_uses_matching_timing_histor
         gpu="L4",
         max_cost_usd=2.0,
         model_preset="yolo26-l",
+        run_name="Cloud cost estimate",
     )
 
     preview = webapp.prediction_preflight(store, request)
