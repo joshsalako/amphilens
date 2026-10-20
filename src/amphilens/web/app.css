@@ -281,6 +281,14 @@ select:not([multiple]) { appearance: none; -webkit-appearance: none; padding-rig
 .download-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 13px; }
 .download-link { display: inline-flex; align-items: center; gap: 6px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 5px; background: white; color: var(--marsh-deep); font-size: 0.75rem; font-weight: 640; text-decoration: none; }
 .download-link:hover { border-color: #9db3a0; background: #f3f7f2; }
+.prediction-action-group { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.prediction-action-heading { margin: 0 0 7px; color: var(--muted); font-size: 0.6875rem; line-height: 1.4; font-weight: 650; }
+.prediction-downloads .download-list { margin-top: 0; }
+.prediction-downloads .download-link { min-height: 34px; padding: 7px 10px; }
+.prediction-tool-buttons { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+.prediction-tool-status { margin: 7px 0 0; color: var(--muted); font-size: 0.75rem; line-height: 1.5; overflow-wrap: anywhere; }
+.prediction-tools .progress-track { max-width: 560px; margin-top: 8px; }
+.prediction-tools .job-detail { margin-top: 8px; }
 .path-list { display: grid; gap: 7px; margin: 12px 0 0; padding: 11px 13px; border-radius: 5px; background: #eef1eb; list-style: none; }
 .path-list li { display: grid; grid-template-columns: 105px minmax(0, 1fr); gap: 10px; color: var(--muted); font-size: 0.6875rem; }
 .path-list span:last-child { overflow-wrap: anywhere; color: #435248; }
@@ -382,6 +390,8 @@ select:not([multiple]) { appearance: none; -webkit-appearance: none; padding-rig
   .field-row { grid-template-columns: minmax(0, 1fr); }
   .empty-state { margin-top: 18px; padding: 25px 20px; }
   .project-dialog { padding: 20px 18px 14px; }
+  .prediction-tool-buttons { gap: 6px; }
+  .prediction-tool-buttons > .button { max-width: 100%; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
