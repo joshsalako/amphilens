@@ -15,6 +15,7 @@ import subprocess
 import sys
 import threading
 import time
+import unicodedata
 import uuid
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -720,7 +721,63 @@ def _prediction_run_name(value: str) -> str:
         raise ValueError("run_name is required")
     if len(name) > 120:
         raise ValueError("run_name must be 120 characters or fewer")
+    invalid_characters = '<>:/\\|?*"'
+    reserved_windows_names = {
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        *(f"COM{number}" for number in range(1, 10)),
+        *(f"LPT{number}" for number in range(1, 10)),
+    }
+    if (
+        name in {".", ".."}
+        or name.endswith((".", " "))
+        or any(character in invalid_characters or ord(character) < 32 for character in name)
+        or name.split(".", 1)[0].upper() in reserved_windows_names
+    ):
+        raise ValueError("run_name must be a valid folder name")
     return name
+
+
+def _prediction_run_name_key(value: str) -> str:
+    return unicodedata.normalize("NFC", value).casefold()
+
+
+def _ensure_prediction_run_name_is_unique(store: ProjectStore, run_name: str) -> None:
+    """Reject prediction names already used in this project's run history."""
+    key = _prediction_run_name_key(_prediction_run_name(run_name))
+    runs_root = store.root / "runs"
+    if not runs_root.is_dir():
+        return
+    try:
+        run_directories = sorted(path for path in runs_root.iterdir() if path.is_dir())
+    except OSError as exc:
+        raise ValueError("Could not check whether this prediction run name is unique") from exc
+
+    for run_directory in run_directories:
+        if _prediction_run_name_key(run_directory.name) == key:
+            raise ValueError(
+                f"Prediction run name '{run_name}' has already been used in this project. "
+                "Choose a unique name."
+            )
+        manifest_path = run_directory / "run.json"
+        if not manifest_path.is_file():
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(manifest, dict) or manifest.get("kind") != "inference":
+            continue
+        config = manifest.get("config")
+        metadata = config.get("metadata") if isinstance(config, dict) else None
+        existing_name = metadata.get("run_name") if isinstance(metadata, dict) else None
+        if isinstance(existing_name, str) and _prediction_run_name_key(existing_name) == key:
+            raise ValueError(
+                f"Prediction run name '{run_name}' has already been used in this project. "
+                "Choose a unique name."
+            )
 
 
 def _integer(
@@ -1270,6 +1327,7 @@ def prediction_preflight(
     from .core import iter_images
 
     project = store.load_manifest()
+    _ensure_prediction_run_name_is_unique(store, request.run_name)
     image_root_path = _resolve_prediction_image_root(project, request)
     if not image_root_path.is_dir():
         raise ValueError(f"Image folder was not found: {image_root_path}")
@@ -1409,6 +1467,7 @@ def run_prediction_job(
 
     run_name = _prediction_run_name(request.run_name)
     project = store.load_manifest()
+    _ensure_prediction_run_name_is_unique(store, run_name)
     image_root_path = _resolve_prediction_image_root(project, request)
     if not image_root_path.is_dir():
         raise ValueError(f"Image folder was not found: {image_root_path}")
@@ -1542,7 +1601,8 @@ def run_prediction_job(
         json.dumps(run_metadata, ensure_ascii=False, sort_keys=True).encode("utf-8")
     ).hexdigest()[:12]
     run_id = f"predict-{effective.model_id}-{run_signature}"
-    output_dir = request.output_dir or str(store.root / "runs" / run_id)
+    output_dir = request.output_dir or str(store.root / "runs" / run_name)
+    output_path = Path(output_dir).expanduser().resolve()
     provider_rate = None
     rate_per_second = None
     price_source = ""
@@ -1645,6 +1705,16 @@ def run_prediction_job(
             region=region,
             price_source=price_source,
         )
+    run_directory_reserved = False
+    if request.output_dir is None:
+        try:
+            output_path.mkdir(parents=True, exist_ok=False)
+        except FileExistsError as exc:
+            raise ValueError(
+                f"Prediction run name '{run_name}' has already been used in this project. "
+                "Choose a unique name."
+            ) from exc
+        run_directory_reserved = True
     try:
         summary = run_resumable_inference(
             detector,
@@ -1676,6 +1746,11 @@ def run_prediction_job(
                             "error": redact_sensitive_text(str(exc))[:240],
                         }
                     )
+        if run_directory_reserved and not (output_path / "run.json").exists():
+            try:
+                output_path.rmdir()
+            except OSError:
+                pass
     if progress_callback is not None:
         progress_callback(
             {
@@ -2641,7 +2716,7 @@ def create_app(
         try:
             body = _request(PredictionsRequest, await _read_body(request))
             store = active_store()
-            # Snapshot availability is deliberately not checked: prediction-only works alone.
+            _ensure_prediction_run_name_is_unique(store, body.run_name)
             if body.execution != "local":
                 if not body.acknowledged or not body.uploads_dataset:
                     raise ValueError(
