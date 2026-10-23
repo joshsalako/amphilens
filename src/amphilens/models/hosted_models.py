@@ -7,19 +7,65 @@ import inspect
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ..core import DetectionRecord
 from ..preprocessing import PreprocessingConfig
 
 # Pin weights independently of the mutable Hub branch. Update after model uploads.
-HF_MODEL_REVISION = "7c556dad9256834f9c47ea3bd64156495172a07c"
+HF_MODEL_REVISION = "99a18b1d6ba5e91fca86b5e131b44223c60369ae"
 _MANIFEST_PATH = Path(__file__).with_name("amphilens-models.json")
+_NCNN_ADAPTERS = {"yolo": "ultralytics-yolo-raw-detect-v1"}
 
 
 class HuggingFaceAccessError(ValueError):
     """A public Hub checkpoint could not be downloaded from Hugging Face."""
+
+
+@dataclass(frozen=True, slots=True)
+class NCNNArtifactFile:
+    filename: str
+    sha256: str
+
+    def to_dict(self) -> dict[str, str]:
+        return {"filename": self.filename, "sha256": self.sha256}
+
+
+@dataclass(frozen=True, slots=True)
+class NCNNArtifactManifest:
+    status: str
+    adapter: str
+    precision: str
+    input_width: int
+    input_height: int
+    input_name: str
+    output_name: str
+    files: tuple[NCNNArtifactFile, ...]
+
+    def is_compatible(self, architecture: str) -> bool:
+        return self.status == "verified" and _NCNN_ADAPTERS.get(architecture) == self.adapter
+
+    def to_dict(self, *, available: bool) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "adapter": self.adapter,
+            "precision": self.precision,
+            "input_width": self.input_width,
+            "input_height": self.input_height,
+            "input_name": self.input_name,
+            "output_name": self.output_name,
+            "files": [item.to_dict() for item in self.files],
+            "available": available,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class DownloadedNCNNArtifact:
+    param_path: Path
+    bin_path: Path
+    revision: str
+    manifest: NCNNArtifactManifest
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +82,21 @@ class HostedModel:
     inference_image_size: int
     preprocessing: PreprocessingConfig
     license: str
+    ncnn: NCNNArtifactManifest | None = None
+
+    @property
+    def ncnn_available(self) -> bool:
+        return self.ncnn is not None and self.ncnn.is_compatible(self.architecture)
+
+    @property
+    def ncnn_unavailable_reason(self) -> str:
+        if self.ncnn is None:
+            return "No NCNN package has been published for this model."
+        if self.ncnn.status != "verified":
+            return "An NCNN package is listed, but its inference adapter has not been verified."
+        if not self.ncnn.is_compatible(self.architecture):
+            return f"NCNN inference is not verified for the {self.architecture} model family."
+        return ""
 
     def to_summary(self) -> dict[str, Any]:
         return {
@@ -52,11 +113,88 @@ class HostedModel:
             "preprocessing": self.preprocessing.to_dict(),
             "training_provenance": dict(self.training_provenance),
             "license": self.license,
+            "ncnn_artifact": self.ncnn.to_dict(available=self.ncnn_available)
+            if self.ncnn is not None
+            else None,
+            "ncnn_available": self.ncnn_available,
+            "ncnn_unavailable_reason": self.ncnn_unavailable_reason,
         }
 
 
 def _read_manifest() -> dict[str, Any]:
     return json.loads(_MANIFEST_PATH.read_text(encoding="utf-8"))
+
+
+def _manifest_sha256(value: Any, context: str) -> str:
+    digest = str(value)
+    if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+        raise ValueError(f"Invalid SHA-256 for {context}")
+    return digest
+
+
+def _ncnn_manifest(value: Any, model_id: str) -> NCNNArtifactManifest | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError(f"Invalid NCNN artifact metadata for {model_id}")
+    status = str(value.get("status", ""))
+    if status not in {"uploaded", "verified"}:
+        raise ValueError(f"Invalid NCNN artifact status for {model_id}")
+    adapter = str(value.get("adapter", ""))
+    if not adapter:
+        raise ValueError(f"NCNN output adapter is required for {model_id}")
+    precision = str(value.get("precision", ""))
+    if precision not in {"fp32", "fp16", "int8"}:
+        raise ValueError(f"Invalid NCNN precision for {model_id}")
+    input_width = value.get("input_width")
+    input_height = value.get("input_height")
+    if (
+        isinstance(input_width, bool)
+        or not isinstance(input_width, int)
+        or input_width < 32
+        or input_width > 8192
+        or isinstance(input_height, bool)
+        or not isinstance(input_height, int)
+        or input_height < 32
+        or input_height > 8192
+    ):
+        raise ValueError(f"Invalid NCNN input dimensions for {model_id}")
+    input_name = str(value.get("input_name", ""))
+    output_name = str(value.get("output_name", ""))
+    if not input_name or not output_name:
+        raise ValueError(f"NCNN input and output names are required for {model_id}")
+    raw_files = value.get("files")
+    if not isinstance(raw_files, list) or len(raw_files) != 2:
+        raise ValueError(f"NCNN artifacts must contain one .param and one .bin file for {model_id}")
+    files = []
+    for raw_file in raw_files:
+        if not isinstance(raw_file, dict):
+            raise ValueError(f"Invalid NCNN file metadata for {model_id}")
+        filename = str(raw_file.get("filename", ""))
+        path = PurePosixPath(filename)
+        if (
+            not filename
+            or path.is_absolute()
+            or "\\" in filename
+            or any(part in {"", ".", ".."} for part in path.parts)
+            or path.suffix not in {".param", ".bin"}
+        ):
+            raise ValueError(f"Unsafe NCNN artifact filename for {model_id}")
+        files.append(NCNNArtifactFile(filename, _manifest_sha256(raw_file.get("sha256"), filename)))
+    if {PurePosixPath(item.filename).suffix for item in files} != {".param", ".bin"}:
+        raise ValueError(f"NCNN artifacts must contain one .param and one .bin file for {model_id}")
+    if PurePosixPath(files[0].filename).parent != PurePosixPath(files[1].filename).parent:
+        raise ValueError(f"NCNN .param and .bin files must share a directory for {model_id}")
+    return NCNNArtifactManifest(
+        status=status,
+        adapter=adapter,
+        precision=precision,
+        input_width=input_width,
+        input_height=input_height,
+        input_name=input_name,
+        output_name=output_name,
+        files=tuple(files),
+    )
 
 
 def list_hosted_models() -> list[HostedModel]:
@@ -69,15 +207,14 @@ def list_hosted_models() -> list[HostedModel]:
         classes = tuple(str(item) for item in value["source_class_order"])
         if len(classes) != len(set(classes)) or not classes:
             raise ValueError(f"Invalid source class order for {value['model_id']}")
-        digest = str(value["sha256"])
-        if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
-            raise ValueError(f"Invalid SHA-256 for {value['model_id']}")
+        digest = _manifest_sha256(value["sha256"], str(value["model_id"]))
+        architecture = str(value["architecture"])
         models.append(
             HostedModel(
                 model_id=str(value["model_id"]),
                 name=str(value["name"]),
                 repo_id=repo_id,
-                architecture=str(value["architecture"]),
+                architecture=architecture,
                 size=str(value["size"]),
                 artifact=str(value["artifact"]),
                 sha256=digest,
@@ -86,6 +223,7 @@ def list_hosted_models() -> list[HostedModel]:
                 inference_image_size=int(value["inference_image_size"]),
                 preprocessing=PreprocessingConfig.from_dict(value["preprocessing"]),
                 license=str(value["license"]),
+                ncnn=_ncnn_manifest(value.get("ncnn"), str(value["model_id"])),
             )
         )
     return models
@@ -203,8 +341,7 @@ def _supports_tqdm_class(hf_hub_download) -> bool:
     except (TypeError, ValueError):
         return False
     return any(
-        parameter.name == "tqdm_class"
-        or parameter.kind is inspect.Parameter.VAR_KEYWORD
+        parameter.name == "tqdm_class" or parameter.kind is inspect.Parameter.VAR_KEYWORD
         for parameter in parameters
     )
 
@@ -236,9 +373,7 @@ def download_hosted_checkpoint(
             "token": True if authenticated else False,
         }
         if _supports_tqdm_class(hf_hub_download):
-            download_options["tqdm_class"] = _progress_tqdm_class(
-                progress_callback, model.name
-            )
+            download_options["tqdm_class"] = _progress_tqdm_class(progress_callback, model.name)
         path = Path(hf_hub_download(**download_options))
     except Exception as exc:
         try:
@@ -264,3 +399,62 @@ def download_hosted_checkpoint(
     # Keep the snapshot alias: resolving its symlink can erase the `.pt` suffix
     # that model loaders use to identify PyTorch checkpoints.
     return path
+
+
+def download_hosted_ncnn_artifact(
+    model_id: str,
+    *,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> DownloadedNCNNArtifact:
+    """Download a pinned NCNN pair and verify each file before inference."""
+    model = get_hosted_model(model_id)
+    if not model.ncnn_available or model.ncnn is None:
+        raise ValueError(model.ncnn_unavailable_reason or "No verified NCNN artifact is available.")
+    hf_hub_download, get_token = _hub_runtime()
+    authenticated = bool(get_token())
+    if progress_callback is not None:
+        progress_callback(
+            {"message": f"Checking access to {model.name} NCNN model…", "progress": None}
+        )
+    downloaded: dict[str, Path] = {}
+    for file in model.ncnn.files:
+        try:
+            options = {
+                "repo_id": model.repo_id,
+                "filename": file.filename,
+                "repo_type": "model",
+                "revision": HF_MODEL_REVISION,
+                "token": True if authenticated else False,
+            }
+            if _supports_tqdm_class(hf_hub_download):
+                options["tqdm_class"] = _progress_tqdm_class(progress_callback, model.name)
+            path = Path(hf_hub_download(**options))
+        except Exception as exc:
+            try:
+                from huggingface_hub.errors import HfHubHTTPError
+            except ImportError:
+                HfHubHTTPError = ()
+            if HfHubHTTPError and isinstance(exc, HfHubHTTPError):
+                raise HuggingFaceAccessError(
+                    f"Could not download the NCNN files for {model.name} from {model.repo_id}. "
+                    "Check the network connection and confirm the files exist at the "
+                    "pinned revision."
+                ) from exc
+            raise
+        if not path.is_file():
+            raise FileNotFoundError(f"Hugging Face did not return {file.filename} for {model.name}")
+        if _sha256_file(path) != file.sha256:
+            raise ValueError(
+                f"The {file.filename} file for {model.name} failed its SHA-256 integrity check. "
+                "Clear the model from the Hugging Face cache and download it again."
+            )
+        downloaded[file.filename] = path
+    param_file = next(item for item in model.ncnn.files if item.filename.endswith(".param"))
+    bin_file = next(item for item in model.ncnn.files if item.filename.endswith(".bin"))
+    param_path = downloaded[param_file.filename]
+    bin_path = downloaded[bin_file.filename]
+    if param_path.parent != bin_path.parent:
+        raise ValueError("Downloaded NCNN .param and .bin files are not in the same Hub snapshot")
+    if progress_callback is not None:
+        progress_callback({"message": f"Verified {model.name} NCNN files", "progress": 1.0})
+    return DownloadedNCNNArtifact(param_path, bin_path, HF_MODEL_REVISION, model.ncnn)

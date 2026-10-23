@@ -34,6 +34,7 @@ inference = [
   "torchvision>=0.17",
   "ultralytics>=8.2",
 ]
+edge-ncnn = ["amphilens[inference-base]", "ncnn"]
 local-cuda = [
   "amphilens[inference-base]",
   "torch>=2.2",

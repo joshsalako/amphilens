@@ -18,6 +18,7 @@ from amphilens.models.faster_rcnn_training import (
     _selected_checkpoint_name,
     parse_yolo_label_lines,
 )
+from amphilens.models.ncnn_backend import NCNNYoloDetector, _ncnn_yolo_detections
 from amphilens.preprocessing import PreprocessingConfig
 
 
@@ -632,3 +633,118 @@ def test_faster_rcnn_training_rejects_missing_base_checkpoint(tmp_path: Path):
     detector = FasterRCNNDetector(tmp_path / "missing.pt", ["toad"])
     with pytest.raises(UnsupportedCheckpointError, match="missing"):
         detector.train(tmp_path / "dataset.yaml", tmp_path / "output", {"epochs": 1})
+
+
+def test_ncnn_yolo_decoder_filters_by_confidence_and_applies_class_aware_nms():
+    import numpy as np
+
+    output = np.array(
+        [
+            [100, 102, 100],
+            [100, 101, 100],
+            [40, 40, 40],
+            [40, 40, 40],
+            [0.9, 0.8, 0.7],
+            [0.0, 0.0, 0.95],
+        ],
+        dtype=np.float32,
+    )
+
+    detections = _ncnn_yolo_detections(output, class_count=2, confidence_threshold=0.5)
+
+    assert len(detections) == 2
+    assert {row[0] for row in detections} == {0, 1}
+    assert sorted(row[1] for row in detections) == [pytest.approx(0.9), pytest.approx(0.95)]
+
+
+def test_ncnn_detector_runs_preprocessing_and_prediction_without_torch(tmp_path, monkeypatch):
+    import builtins
+    import sys
+
+    import numpy as np
+
+    from amphilens.models.hosted_models import (
+        DownloadedNCNNArtifact,
+        NCNNArtifactFile,
+        NCNNArtifactManifest,
+    )
+
+    class FakeExtractor:
+        def input(self, name, value):
+            assert name == "in0"
+            assert value.shape == (3, 640, 640)
+            return 0
+
+        def extract(self, name):
+            assert name == "out0"
+            values = np.array(
+                [[320.0, 320.0], [320.0, 320.0], [100.0, 100.0], [80.0, 80.0], [0.9, 0.8]],
+                dtype=np.float32,
+            )
+            return 0, values
+
+    class FakeNet:
+        def __init__(self):
+            self.opt = SimpleNamespace(use_vulkan_compute=True)
+
+        def load_param(self, path):
+            return 0
+
+        def load_model(self, path):
+            return 0
+
+        def input_names(self):
+            return ["in0"]
+
+        def output_names(self):
+            return ["out0"]
+
+        def create_extractor(self):
+            return FakeExtractor()
+
+    fake_ncnn = ModuleType("ncnn")
+    fake_ncnn.Net = FakeNet
+    fake_ncnn.Mat = lambda array: array
+    monkeypatch.setitem(sys.modules, "ncnn", fake_ncnn)
+    real_import = builtins.__import__
+
+    def import_without_torch(name, *args, **kwargs):
+        if name.split(".", 1)[0] == "torch":
+            raise AssertionError("NCNN inference must not import PyTorch")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", import_without_torch)
+    image = tmp_path / "frame.png"
+    Image.new("RGB", (100, 80), (30, 40, 50)).save(image)
+    param = tmp_path / "model.param"
+    binary = tmp_path / "model.bin"
+    descriptor = NCNNArtifactManifest(
+        status="verified",
+        adapter="ultralytics-yolo-raw-detect-v1",
+        precision="fp16",
+        input_width=640,
+        input_height=640,
+        input_name="in0",
+        output_name="out0",
+        files=(
+            NCNNArtifactFile("model.param", "a" * 64),
+            NCNNArtifactFile("model.bin", "b" * 64),
+        ),
+    )
+    artifact = DownloadedNCNNArtifact(param, binary, "revision-1", descriptor)
+    detector = NCNNYoloDetector(artifact, ["toad"], "hosted-yolo")
+
+    records = list(
+        detector.predict(
+            [image],
+            InferenceConfig(model_id="hosted-yolo", confidence=0.5, device="cpu"),
+        )
+    )
+
+    assert detector._net.opt.use_vulkan_compute is False
+    assert len(records) == 1
+    assert records[0].class_name == "toad"
+    assert records[0].image_width == 100
+    assert records[0].image_height == 80
+    assert records[0].bbox_xyxy[0] < 50 < records[0].bbox_xyxy[2]
+    assert records[0].bbox_xyxy[1] < 40 < records[0].bbox_xyxy[3]

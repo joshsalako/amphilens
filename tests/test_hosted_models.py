@@ -41,6 +41,44 @@ def test_hosted_catalog_contains_exact_architectures_classes_and_artifact_hashes
     assert all(len(model.sha256) == 64 for model in models.values())
 
 
+def test_catalog_registers_only_the_two_verified_amphilens_yolo_ncnn_packages():
+    models = {model.model_id: model for model in list_hosted_models()}
+    expected = {
+        "amphilens-yolo26-m": {
+            "size": 1152,
+            "files": {
+                "ncnn/amphilens-yolo26-m/model.ncnn.param": (
+                    "4cd78a2737891036898b469fc7ea50d8a5ca468ccec52567c4eff295c903c42b"
+                ),
+                "ncnn/amphilens-yolo26-m/model.ncnn.bin": (
+                    "08b69cc94511475425ee4fe44b1f148c4b296d1bbc35fae3f43b97b932fce831"
+                ),
+            },
+        },
+        "amphilens-yolo26-m-domain": {
+            "size": 640,
+            "files": {
+                "ncnn/amphilens-yolo26-m-domain/model.ncnn.param": (
+                    "e98e804ba92c4412ae9bce92458fac7be619b0cf7182b7bf8705df825877f171"
+                ),
+                "ncnn/amphilens-yolo26-m-domain/model.ncnn.bin": (
+                    "3ef28e8ef6d243acd845f4d2b683a9550cb469efb01cf618daeececed638f73c"
+                ),
+            },
+        },
+    }
+
+    assert {model.model_id for model in models.values() if model.ncnn_available} == set(expected)
+    for model_id, item in expected.items():
+        artifact = models[model_id].ncnn
+        assert artifact is not None
+        assert artifact.status == "verified"
+        assert artifact.adapter == "ultralytics-yolo-raw-detect-v1"
+        assert artifact.precision == "fp16"
+        assert (artifact.input_width, artifact.input_height) == (item["size"], item["size"])
+        assert {file.filename: file.sha256 for file in artifact.files} == item["files"]
+
+
 def test_class_mapping_prefills_exact_matches_and_requires_every_other_source_label():
     model = get_hosted_model("amphilens-yolo26-m")
 
@@ -186,6 +224,132 @@ def test_public_checkpoint_can_download_without_a_hugging_face_login(
 
     assert download_hosted_checkpoint(model.model_id) == artifact
     assert captured["token"] is False
+
+
+def test_hosted_manifest_accepts_verified_yolo_ncnn_pair_and_exposes_integrity_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import json
+
+    import amphilens.models.hosted_models as hosted
+
+    manifest = json.loads(hosted._MANIFEST_PATH.read_text(encoding="utf-8"))
+    model = manifest["models"][0]
+    model["ncnn"] = {
+        "status": "verified",
+        "adapter": "ultralytics-yolo-raw-detect-v1",
+        "precision": "fp16",
+        "input_width": 640,
+        "input_height": 640,
+        "input_name": "in0",
+        "output_name": "out0",
+        "files": [
+            {"filename": "yolo_ncnn_model/model.ncnn.param", "sha256": "a" * 64},
+            {"filename": "yolo_ncnn_model/model.ncnn.bin", "sha256": "b" * 64},
+        ],
+    }
+    path = tmp_path / "models.json"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    monkeypatch.setattr(hosted, "_MANIFEST_PATH", path)
+
+    listed = hosted.get_hosted_model("amphilens-yolo26-m")
+    summary = listed.to_summary()
+
+    assert listed.ncnn_available is True
+    assert summary["ncnn_available"] is True
+    assert summary["ncnn_artifact"]["precision"] == "fp16"
+    assert summary["ncnn_artifact"]["files"][0]["sha256"] == "a" * 64
+    assert summary["revision"] == hosted.HF_MODEL_REVISION
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda item: item.pop("input_name"),
+        lambda item: item.update(files=[]),
+        lambda item: item["files"][0].update(filename="../escape.param"),
+        lambda item: item["files"][0].update(sha256="not-a-hash"),
+    ],
+    ids=["missing-descriptor-fields", "missing-pair", "unsafe-path", "invalid-hash"],
+)
+def test_hosted_ncnn_manifest_rejects_incomplete_or_unsafe_artifact_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutate
+):
+    import json
+
+    import amphilens.models.hosted_models as hosted
+
+    manifest = json.loads(hosted._MANIFEST_PATH.read_text(encoding="utf-8"))
+    model = manifest["models"][0]
+    model["ncnn"] = {
+        "status": "verified",
+        "adapter": "ultralytics-yolo-raw-detect-v1",
+        "precision": "fp16",
+        "input_width": 640,
+        "input_height": 640,
+        "input_name": "in0",
+        "output_name": "out0",
+        "files": [
+            {"filename": "model.ncnn.param", "sha256": "a" * 64},
+            {"filename": "model.ncnn.bin", "sha256": "b" * 64},
+        ],
+    }
+    mutate(model["ncnn"])
+    path = tmp_path / "models.json"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    monkeypatch.setattr(hosted, "_MANIFEST_PATH", path)
+
+    with pytest.raises(ValueError):
+        hosted.list_hosted_models()
+
+
+def test_download_ncnn_pair_uses_pinned_revision_and_checks_each_file_hash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import amphilens.models.hosted_models as hosted
+
+    model = get_hosted_model("amphilens-yolo26-m")
+    param = tmp_path / "model.ncnn.param"
+    binary = tmp_path / "model.ncnn.bin"
+    param.write_bytes(b"param fixture")
+    binary.write_bytes(b"binary fixture")
+    descriptor = hosted.NCNNArtifactManifest(
+        status="verified",
+        adapter="ultralytics-yolo-raw-detect-v1",
+        precision="fp16",
+        input_width=640,
+        input_height=640,
+        input_name="in0",
+        output_name="out0",
+        files=(
+            hosted.NCNNArtifactFile(
+                "model.ncnn.param", hashlib.sha256(param.read_bytes()).hexdigest()
+            ),
+            hosted.NCNNArtifactFile(
+                "model.ncnn.bin", hashlib.sha256(binary.read_bytes()).hexdigest()
+            ),
+        ),
+    )
+    model = replace(model, ncnn=descriptor)
+    monkeypatch.setattr(hosted, "get_hosted_model", lambda _: model)
+    captured = []
+
+    def download(**kwargs):
+        captured.append(kwargs)
+        return str(param if kwargs["filename"].endswith(".param") else binary)
+
+    monkeypatch.setattr(hosted, "_hub_runtime", lambda: (download, lambda: None))
+
+    artifact = hosted.download_hosted_ncnn_artifact(model.model_id)
+
+    assert artifact.param_path == param
+    assert artifact.bin_path == binary
+    assert artifact.revision == hosted.HF_MODEL_REVISION
+    assert [item["filename"] for item in captured] == [
+        "model.ncnn.param",
+        "model.ncnn.bin",
+    ]
+    assert all(item["revision"] == hosted.HF_MODEL_REVISION for item in captured)
 
 
 def test_private_repository_access_error_is_actionable_without_leaking_token(

@@ -79,6 +79,90 @@ def test_prediction_request_parses_local_gpu_batching_and_modal_execution():
     assert cloud.uploads_dataset is True
 
 
+def test_prediction_request_parses_ncnn_but_rejects_ncnn_for_cloud():
+    local = webapp._request(
+        webapp.PredictionsRequest,
+        {
+            "run_name": "Embedded inference",
+            "hosted_model_id": "amphilens-yolo26-m",
+            "runtime": "ncnn",
+            "device": "cpu",
+        },
+    )
+
+    assert local.runtime == "ncnn"
+    with pytest.raises(ValueError, match="local CPU"):
+        webapp._request(
+            webapp.PredictionsRequest,
+            {
+                "run_name": "Cloud inference",
+                "execution": "modal",
+                "runtime": "ncnn",
+                "max_cost_usd": 5,
+            },
+        )
+
+
+def test_prediction_request_rejects_unknown_runtime():
+    with pytest.raises(ValueError, match="runtime must be pytorch or ncnn"):
+        webapp._request(
+            webapp.PredictionsRequest,
+            {"run_name": "Bad runtime", "runtime": "openvino"},
+        )
+
+
+def test_ncnn_prediction_never_falls_back_to_pt_when_hosted_artifact_is_missing(
+    client, tmp_path, monkeypatch
+):
+    import importlib.util
+
+    from PIL import Image
+
+    import amphilens.doctor as doctor
+    import amphilens.models.hosted_models as hosted
+    from amphilens.webapp import PredictionsRequest, run_prediction_job
+
+    image_root = tmp_path / "images"
+    image_root.mkdir()
+    Image.new("RGB", (24, 20), color="gray").save(image_root / "frame.png")
+    project_path = tmp_path / "project"
+    response = client.post(
+        "/api/projects/create",
+        json={
+            "name": "Embedded prediction",
+            "path": str(project_path),
+            "image_root": str(image_root),
+            "classes": ["Other_Amphibian", "Small_Mammal", "Western_Leopard_Toad"],
+        },
+    )
+    assert response.status_code == 200, response.text
+    store = webapp.open_project(project_path)
+    monkeypatch.setattr(doctor, "is_arm_linux", lambda: True)
+    original_find_spec = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util,
+        "find_spec",
+        lambda name: object() if name == "ncnn" else original_find_spec(name),
+    )
+
+    def unexpected_pt_download(*args, **kwargs):
+        raise AssertionError("NCNN selection must not download or load the .pt artifact")
+
+    monkeypatch.setattr(hosted, "download_hosted_checkpoint", unexpected_pt_download)
+
+    with pytest.raises(ValueError, match="No NCNN package has been published"):
+        run_prediction_job(
+            store,
+            PredictionsRequest(
+                run_name="No fallback",
+                image_root=str(image_root),
+                hosted_model_id="amphilens-rtdetr-l",
+                runtime="ncnn",
+                device="cpu",
+            ),
+        )
+
+
 def test_prediction_request_requires_a_trimmed_run_name_of_at_most_120_characters():
     with pytest.raises(ValueError, match="run_name is required"):
         webapp._request(webapp.PredictionsRequest, {})
@@ -281,6 +365,12 @@ def test_hosted_prediction_maps_labels_and_records_revision(client, tmp_path, mo
     assert observed["image_size"] == 1152
     assert ",toad," in predictions
     assert run_manifest["config"]["metadata"]["run_name"] == "Hosted model traceability"
+    assert run_manifest["config"]["metadata"]["runtime"] == "pytorch"
+    assert run_manifest["config"]["metadata"]["runtime_artifact"]["format"] == "pytorch"
+    assert (
+        run_manifest["config"]["metadata"]["runtime_artifact"]["sha256"]
+        == hosted.get_hosted_model("amphilens-yolo26-m").sha256
+    )
     assert run_manifest["config"]["metadata"]["class_mapping"]["Other_Amphibian"] is None
     assert run_manifest["config"]["metadata"]["effective_configuration"]["hosted_model"]["revision"]
     effective_preprocessing = run_manifest["config"]["metadata"]["effective_configuration"][

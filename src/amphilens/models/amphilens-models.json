@@ -19,6 +19,25 @@
       "size": "medium",
       "artifact": "yolo_clahe.pt",
       "sha256": "b8f0247bb69345c8a2c32e80dd865748a9f852bea616f7c3e963be17db72bf5f",
+      "ncnn": {
+        "status": "verified",
+        "adapter": "ultralytics-yolo-raw-detect-v1",
+        "precision": "fp16",
+        "input_width": 1152,
+        "input_height": 1152,
+        "input_name": "in0",
+        "output_name": "out0",
+        "files": [
+          {
+            "filename": "ncnn/amphilens-yolo26-m/model.ncnn.param",
+            "sha256": "4cd78a2737891036898b469fc7ea50d8a5ca468ccec52567c4eff295c903c42b"
+          },
+          {
+            "filename": "ncnn/amphilens-yolo26-m/model.ncnn.bin",
+            "sha256": "08b69cc94511475425ee4fe44b1f148c4b296d1bbc35fae3f43b97b932fce831"
+          }
+        ]
+      },
       "source_class_order": [
         "Other_Amphibian",
         "Small_Mammal",
@@ -112,6 +131,25 @@
       "size": "medium",
       "artifact": "yolo_domain.pt",
       "sha256": "52b3a456db74b4ea6f310cf5ce7ea829d574854d79081de67ca8c9eb6d3c07c0",
+      "ncnn": {
+        "status": "verified",
+        "adapter": "ultralytics-yolo-raw-detect-v1",
+        "precision": "fp16",
+        "input_width": 640,
+        "input_height": 640,
+        "input_name": "in0",
+        "output_name": "out0",
+        "files": [
+          {
+            "filename": "ncnn/amphilens-yolo26-m-domain/model.ncnn.param",
+            "sha256": "e98e804ba92c4412ae9bce92458fac7be619b0cf7182b7bf8705df825877f171"
+          },
+          {
+            "filename": "ncnn/amphilens-yolo26-m-domain/model.ncnn.bin",
+            "sha256": "3ef28e8ef6d243acd845f4d2b683a9550cb469efb01cf618daeececed638f73c"
+          }
+        ]
+      },
       "source_class_order": ["Frog", "Mouse", "Snail"],
       "training_provenance": {
         "phase": "Initial domain pretraining",

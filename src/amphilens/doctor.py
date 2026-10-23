@@ -30,28 +30,48 @@ class DoctorReport:
     cvat_sdk_installed: bool = False
     modal_token_present: bool = False
     modal_connectivity: str = "not checked"
+    ncnn_installed: bool = False
+    arm_linux: bool = False
 
     def to_dict(self):
         report = asdict(self)
-        local_inference_available = self.torch_installed and self.ultralytics_installed
-        local_training_available = local_inference_available and self.yaml_installed
+        pytorch_inference_available = self.torch_installed and self.ultralytics_installed
+        local_ncnn_available = self.ncnn_installed and self.arm_linux
+        local_inference_available = pytorch_inference_available or local_ncnn_available
+        local_training_available = pytorch_inference_available and self.yaml_installed
         report.update(
             local_inference_available=local_inference_available,
             local_training_available=local_training_available,
-            local_devices=self._local_devices(local_inference_available),
-            local_training_devices=self._local_devices(local_training_available),
+            local_ncnn_available=local_ncnn_available,
+            local_devices=self._local_devices(
+                local_inference_available, pytorch_inference_available
+            ),
+            local_training_devices=self._local_devices(
+                local_training_available, pytorch_inference_available
+            ),
         )
         return report
 
-    def _local_devices(self, available: bool) -> list[str]:
+    def _local_devices(self, available: bool, pytorch_available: bool) -> list[str]:
         if not available:
             return []
         devices = ["auto", "cpu"]
-        if self.cuda_available:
+        if pytorch_available and self.cuda_available:
             devices.append("cuda")
-        if self.mps_available:
+        if pytorch_available and self.mps_available:
             devices.append("mps")
         return devices
+
+
+def is_arm_linux(system: str | None = None, machine: str | None = None) -> bool:
+    selected_system = (system or platform.system()).lower()
+    selected_machine = (machine or platform.machine()).lower()
+    return selected_system == "linux" and selected_machine in {
+        "aarch64",
+        "arm64",
+        "armv7l",
+        "armv8l",
+    }
 
 
 def run_doctor(path: str | Path = ".", *, check_cloud: bool = False) -> DoctorReport:
@@ -107,4 +127,6 @@ def run_doctor(path: str | Path = ".", *, check_cloud: bool = False) -> DoctorRe
         cvat_sdk_installed=importlib.util.find_spec("cvat_sdk") is not None,
         modal_token_present=modal_credentials is not None,
         modal_connectivity=modal_connectivity,
+        ncnn_installed=importlib.util.find_spec("ncnn") is not None,
+        arm_linux=is_arm_linux(),
     )

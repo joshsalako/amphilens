@@ -50,10 +50,17 @@ def test_static_frontend_and_assets_are_served(client):
     assert 'app.cvatServerUrl = data.cvat_server_url || app.cvatServerUrl || "";' in script
     assert 'value="${escapeHtml(app.cvatServerUrl)}"' in script
     assert "__ignore__" in script
-    assert 'localDeviceOptionsMarkup(app.doctor?.local_devices)' in script
-    assert 'localDeviceOptionsMarkup(app.doctor?.local_training_devices)' in script
-    assert 'app.doctor?.local_inference_available === true' in script
-    assert 'app.doctor?.local_training_available === true' in script
+    assert "localDeviceOptionsMarkup(app.doctor?.local_devices)" in script
+    assert "localDeviceOptionsMarkup(app.doctor?.local_training_devices)" in script
+    assert "app.doctor?.local_inference_available === true" in script
+    assert "app.doctor?.local_ncnn_available === true" in script
+    assert "app.doctor?.arm_linux === true" in script
+    assert "Use NCNN for this ARM device" in script
+    assert 'runtime: form.elements.use_ncnn?.checked ? "ncnn" : "pytorch"' in script
+    assert (
+        "NCNN is available only for AmphiLens hosted models with a verified NCNN package." in script
+    )
+    assert "app.doctor?.local_training_available === true" in script
     assert 'localInferenceAvailable ? "" : " disabled"' in script
     assert 'localInferenceAvailable ? "" : " selected"' in script
     assert 'localTrainingAvailable ? "" : " selected"' in script

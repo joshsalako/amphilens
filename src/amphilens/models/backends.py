@@ -393,9 +393,7 @@ class UltralyticsDetector:
                     )
                 ),
                 allow_class_override=bool(
-                    (config.get("metadata") or {}).get(
-                        "allow_checkpoint_class_override", False
-                    )
+                    (config.get("metadata") or {}).get("allow_checkpoint_class_override", False)
                 ),
             )
         cloud_provenance = config.get("cloud")
@@ -678,18 +676,14 @@ class FasterRCNNDetector:
                     )
                 ),
                 allow_class_override=bool(
-                    (config.get("metadata") or {}).get(
-                        "allow_checkpoint_class_override", False
-                    )
+                    (config.get("metadata") or {}).get("allow_checkpoint_class_override", False)
                 ),
             )
             # Load the source weights through the class-aware state-dict adapter when
             # the output labels differ. A strict resume would try to restore the old
             # classifier dimensions instead of fine-tuning the new head.
             resume_checkpoint = (
-                None
-                if list(resume_from.classes) != self.classes
-                else resume_from.checkpoint_path
+                None if list(resume_from.classes) != self.classes else resume_from.checkpoint_path
             )
         else:
             resume_checkpoint = None

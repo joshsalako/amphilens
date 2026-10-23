@@ -33,6 +33,37 @@ Do not combine the CPU, CUDA, and MPS profiles. The app offers Auto and CPU for
 local inference, and lists CUDA or MPS only when the installed PyTorch build
 reports that device available.
 
+For an ARM Linux device such as a Raspberry Pi that will only run predictions,
+use the lightweight NCNN profile instead:
+
+```bash
+uv sync --locked --python 3.11 --extra cli --extra web --extra edge-ncnn
+uv run --locked amphilens doctor
+uv run --locked amphilens app
+```
+
+This profile installs the NCNN Python runtime and shared image dependencies,
+without PyTorch or TorchVision. The prediction page offers **Use NCNN for this
+ARM device** only on ARM Linux, for local CPU predictions, and when the chosen
+hosted model has a verified NCNN package. If the package or supported output
+adapter is missing, the checkbox stays unavailable and prediction does not
+switch runtimes implicitly. Training continues to use a PyTorch profile and
+`.pt` checkpoints.
+
+NCNN packages are published as a `.param`/`.bin` pair at the same Hugging Face
+revision as the hosted `.pt` checkpoint. Add the two filenames and SHA-256
+hashes, precision, fixed input width and height, NCNN input/output blob names,
+and adapter status to that model's `ncnn` entry in
+`src/amphilens/models/amphilens-models.json`. Set `status` to `verified` only
+after confirming output decoding and comparing predictions with the `.pt`
+model. The built-in adapter supports raw Ultralytics YOLO detection tensors
+with box coordinates and per-class scores; other output schemas remain
+unavailable until an adapter is verified. The two hosted YOLO26-M variants
+have verified NCNN packages. RT-DETR and Faster R-CNN remain disabled until
+their NCNN output adapters are verified. AmphiLens does not perform
+conversion. NCNN precision is fixed by the uploaded package; there is no
+generic precision switch during inference.
+
 ## 3. Store projects outside the source checkout
 
 The source checkout is for AmphiLens code. Project folders contain generated

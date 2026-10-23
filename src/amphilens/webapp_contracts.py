@@ -38,6 +38,7 @@ class PredictionsRequest:
     confidence: float | None = None
     device: Literal["auto", "cpu", "cuda", "mps"] | None = None
     execution: Literal["local", "modal", "azure_ml", "vertex_ai"] = "local"
+    runtime: Literal["pytorch", "ncnn"] = "pytorch"
     batch_size: int | None = None
     gpu: str = "L4"
     max_cost_usd: float = 5.0
@@ -389,6 +390,11 @@ def _request(cls, payload: dict[str, Any]):
         execution = _string(payload, "execution", required=False, default="local")
         if execution not in {"local", "modal", "azure_ml", "vertex_ai"}:
             raise ValueError("execution must be local, modal, azure_ml, or vertex_ai")
+        runtime = _string(payload, "runtime", required=False, default="pytorch")
+        if runtime not in {"pytorch", "ncnn"}:
+            raise ValueError("runtime must be pytorch or ncnn")
+        if runtime == "ncnn" and (execution != "local" or device != "cpu"):
+            raise ValueError("NCNN is available for local CPU prediction only")
         raw_batch_size = payload.get("batch_size", "auto")
         batch_size = None
         if raw_batch_size != "auto":
@@ -413,6 +419,7 @@ def _request(cls, payload: dict[str, Any]):
             confidence=confidence,
             device=device,
             execution=execution,
+            runtime=runtime,
             batch_size=batch_size,
             gpu=gpu,
             max_cost_usd=max_cost_usd,

@@ -485,6 +485,35 @@
     mapping.innerHTML = `<div><span class="field-title">Map model labels to project classes</span><p class="field-help">Exact label matches are preselected. Map every other label or choose Ignore.</p></div><div class="cvat-label-list">${rows}</div>`;
   }
 
+  function syncNcnnControls(form) {
+    if (!form) return;
+    const field = form.querySelector("[data-ncnn-setting]");
+    const checkbox = form.elements.use_ncnn;
+    const help = form.querySelector("[data-ncnn-help]");
+    if (!field || !checkbox || !help) return;
+    const armLinux = app.doctor?.arm_linux === true;
+    const local = (form.elements.execution?.value || "local") === "local";
+    field.hidden = !armLinux || !local;
+    if (field.hidden) return;
+    const device = form.elements.device?.value || "auto";
+    const [, kind, selected] = String(form.elements.model_choice?.value || "").match(/^(preset|checkpoint|hosted):(.*)$/s) || [];
+    const model = kind === "hosted" ? hostedModelById(selected) : null;
+    const hasArtifact = model?.ncnn_available === true;
+    const runtimeAvailable = app.doctor?.local_ncnn_available === true;
+    checkbox.disabled = !runtimeAvailable || !hasArtifact || device !== "cpu";
+    if (device !== "cpu") {
+      help.textContent = "Choose CPU as the local device to use NCNN.";
+    } else if (!model) {
+      help.textContent = "NCNN is available only for AmphiLens hosted models with a verified NCNN package.";
+    } else if (!hasArtifact) {
+      help.textContent = model.ncnn_unavailable_reason || "No verified NCNN package is available for this model.";
+    } else if (!runtimeAvailable) {
+      help.textContent = "Install the optional edge-ncnn profile on ARM Linux to enable this runtime.";
+    } else {
+      help.textContent = `Runs the verified ${model.ncnn_artifact.precision.toUpperCase()} NCNN package at the same pinned model revision. Fine-tuning continues to use PyTorch.`;
+    }
+  }
+
   function workflowPreferenceScope() {
     return app.project?.path || app.project?.name || "";
   }
@@ -513,6 +542,7 @@
     form.querySelector("[data-local-prediction-settings]")?.toggleAttribute("hidden", cloud);
     const gpu = form.elements.gpu;
     if (gpu && cloud) gpu.innerHTML = cloudGpuOptions(provider, gpu.value);
+    syncNcnnControls(form);
   }
 
   function cloudGpuOptions(provider, selected = "") {
@@ -549,6 +579,7 @@
             <div class="field"><label for="confidence">Confidence threshold</label><div class="range-field"><input id="confidence" name="confidence" type="range" min="0.05" max="0.95" step="0.01" value="0.25"><output class="range-value" for="confidence">0.25</output></div><span class="field-help">Higher values keep only more confident detections.</span></div>
             <div class="field"><label for="prediction-output">Save results in <span class="optional">optional</span></label>${pathPickerControl("prediction-output", "output_dir", "directory", "Use the project runs folder", { label: "a results folder" })}</div>
             <div class="field" data-local-prediction-settings><label for="prediction-device">Local device</label><select id="prediction-device" name="device"${localInferenceAvailable ? "" : " disabled"}>${localDeviceOptionsMarkup(app.doctor?.local_devices)}</select></div>
+            <div class="field" data-ncnn-setting hidden><label class="check-row" for="prediction-use-ncnn"><input id="prediction-use-ncnn" name="use_ncnn" type="checkbox" value="true"><span>Use NCNN for this ARM device</span></label><span class="field-help" data-ncnn-help></span></div>
             <div class="field"><label for="prediction-batch-size">Batch size</label><select id="prediction-batch-size" name="batch_size"><option value="auto" selected>Auto</option>${Array.from({ length: 32 }, (_, index) => `<option value="${index + 1}">${index + 1}</option>`).join("")}</select></div>
             <div class="cloud-prediction-settings" data-cloud-prediction-settings hidden><div class="field"><label for="prediction-gpu">Cloud GPU</label><select id="prediction-gpu" name="gpu">${cloudGpuOptions("modal", "L4")}</select><span class="field-help">The current full VM rate is checked for the selected provider and region before transfer.</span></div><div class="field"><label for="prediction-max-cost">Spending limit (USD)</label><input id="prediction-max-cost" name="max_cost_usd" type="number" min="0.01" step="0.01" value="5.00" required><span class="field-help">AmphiLens stops scheduling batches when its runtime estimate reaches this amount. This is not a billing cap.</span></div></div>
           </div></details>
@@ -1332,6 +1363,7 @@
           confidence: numberOrUndefined(values.confidence),
           device: values.device || undefined,
           execution: values.execution || "local",
+          runtime: form.elements.use_ncnn?.checked ? "ncnn" : "pytorch",
           batch_size: values.batch_size === "auto" ? "auto" : numberOrUndefined(values.batch_size),
           gpu: values.gpu || "L4",
           max_cost_usd: numberOrUndefined(values.max_cost_usd) ?? 5,
@@ -1895,9 +1927,13 @@
     if (event.target.id === "prediction-model") {
       syncModelSettings(event.target.form, "predict");
       renderPredictionModelSelection();
+      syncPredictionExecutionControls(event.target.form);
       restoreWorkflowViewState("predict", "hosted_mapping:");
     }
     if (event.target.id === "prediction-execution") {
+      syncPredictionExecutionControls(event.target.form);
+    }
+    if (event.target.id === "prediction-device") {
       syncPredictionExecutionControls(event.target.form);
     }
     if (["training-source", "training-hosted-model", "training-model", "training-checkpoint"].includes(event.target.id)) {
