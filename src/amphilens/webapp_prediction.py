@@ -153,6 +153,7 @@ def run_prediction_job(
     from .models.hosted_models import (
         HostedClassMappedDetector,
         download_hosted_checkpoint,
+        download_hosted_ncnn_artifact,
         get_hosted_model,
         resolve_class_mapping,
     )
@@ -199,12 +200,39 @@ def run_prediction_job(
         raise ValueError("Class mappings are only used with an AmphiLens pretrained model")
     hosted_model = get_hosted_model(request.hosted_model_id) if request.hosted_model_id else None
     checkpoint_manifest = discover_checkpoint_manifest(checkpoint) if checkpoint else None
+    runtime = request.runtime
+    runtime_fallback_reason = None
+    if runtime == "ncnn" and (hosted_model is None or hosted_model.architecture != "yolo"):
+        runtime = "pytorch"
+        runtime_fallback_reason = (
+            "NCNN is only available for verified hosted YOLO models; using PyTorch on CPU."
+        )
+    if runtime == "ncnn":
+        import importlib.util
+
+        from .doctor import is_arm_linux
+
+        if request.execution != "local" or request.device != "cpu":
+            raise ValueError("NCNN is available for local CPU prediction only")
+        if not is_arm_linux():
+            raise ValueError("NCNN prediction is supported on ARM Linux devices only")
+        if hosted_model is None:
+            raise ValueError("NCNN prediction requires an AmphiLens hosted model")
+        if not hosted_model.ncnn_available:
+            raise ValueError(hosted_model.ncnn_unavailable_reason)
+        if importlib.util.find_spec("ncnn") is None:
+            raise ValueError(
+                "NCNN is not installed. Install the `edge-ncnn` profile on ARM Linux first."
+            )
     overrides: dict[str, Any] = {}
     if request.confidence is not None:
         overrides["confidence"] = request.confidence
     if request.execution != "local":
         actual_device = "cuda"
         requested_batch_size = request.batch_size or 8
+    elif runtime == "ncnn":
+        actual_device = "cpu"
+        requested_batch_size = 1
     else:
         actual_device = resolve_device_name(request.device or project.project_config.device)
         requested_batch_size = request.batch_size or (
@@ -232,19 +260,33 @@ def run_prediction_job(
             overrides=overrides,
         )
         if request.execution == "local":
-            checkpoint = str(
-                download_hosted_checkpoint(
+            if runtime == "ncnn":
+                from .models.ncnn_backend import load_ncnn_detector
+
+                artifact = download_hosted_ncnn_artifact(
                     hosted_model.model_id,
                     progress_callback=_phase_progress(progress_callback, "model_download"),
                 )
-            )
-            detector = load_detector(
-                checkpoint,
-                architecture=effective.architecture,
-                classes=list(effective.classes),
-                model_id=effective.model_id,
-                preprocessing=effective.preprocessing.to_dict(),
-            )
+                detector = load_ncnn_detector(
+                    artifact,
+                    architecture=effective.architecture,
+                    classes=list(effective.classes),
+                    model_id=effective.model_id,
+                )
+            else:
+                checkpoint = str(
+                    download_hosted_checkpoint(
+                        hosted_model.model_id,
+                        progress_callback=_phase_progress(progress_callback, "model_download"),
+                    )
+                )
+                detector = load_detector(
+                    checkpoint,
+                    architecture=effective.architecture,
+                    classes=list(effective.classes),
+                    model_id=effective.model_id,
+                    preprocessing=effective.preprocessing.to_dict(),
+                )
             detector = HostedClassMappedDetector(detector, class_mapping, project.classes)
     else:
         effective = resolve_effective_configuration(
@@ -285,9 +327,36 @@ def run_prediction_job(
         "effective_configuration": effective.to_dict(),
         "class_mapping": class_mapping,
         "execution": request.execution,
+        "runtime": runtime,
+        "runtime_artifact": (
+            {
+                "format": "ncnn",
+                "revision": artifact.revision,
+                "adapter": artifact.manifest.adapter,
+                "precision": artifact.manifest.precision,
+                "files": [item.to_dict() for item in artifact.manifest.files],
+            }
+            if runtime == "ncnn"
+            else (
+                {
+                    "format": "pytorch",
+                    "revision": hosted_model.to_summary()["revision"],
+                    "filename": hosted_model.artifact,
+                    "sha256": hosted_model.sha256,
+                }
+                if hosted_model is not None
+                else {
+                    "format": "pytorch",
+                    "checkpoint": checkpoint or effective.model_preset,
+                }
+            )
+        ),
         "gpu": request.gpu if request.execution != "local" else None,
         "requested_batch_size": request.batch_size or "auto",
     }
+    if runtime_fallback_reason is not None:
+        run_metadata["requested_runtime"] = request.runtime
+        run_metadata["runtime_fallback_reason"] = runtime_fallback_reason
     import hashlib
     import json
 

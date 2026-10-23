@@ -43,14 +43,22 @@ uv sync --locked --python 3.11 --extra cli --extra web --extra local-cuda
 
 # Mac with Apple Silicon / MPS (macOS 14+)
 uv sync --locked --python 3.11 --extra cli --extra web --extra local-mps
+
+# ARM Linux embedded CPU inference with a verified NCNN model
+uv sync --locked --python 3.11 --extra cli --extra web --extra edge-ncnn
 ```
 
 `inference` installs the CPU PyTorch build. For local training, add
 `--extra training` to your chosen local profile; for example, add it to the
 CPU command above. Use only one of `inference`, `local-cuda`, or `local-mps`.
+Choose `edge-ncnn` instead of those profiles for ARM Linux NCNN-only prediction.
 The CUDA and MPS options appear in the app only when the installed PyTorch
 build reports them available. Cloud-only installs keep local inference and
 training disabled while offering remote cloud execution.
+The `edge-ncnn` profile installs the NCNN runtime without PyTorch or
+TorchVision; the app offers it on ARM Linux only for hosted models whose NCNN
+artifact and output adapter are verified. Local fine-tuning still requires a
+PyTorch profile.
 
 The MPS profile is for Apple Silicon Macs running macOS 14 or newer. On other
 platforms its local inference dependencies are omitted, and the app keeps local

@@ -79,6 +79,189 @@ def test_prediction_request_parses_local_gpu_batching_and_modal_execution():
     assert cloud.uploads_dataset is True
 
 
+def test_prediction_request_parses_ncnn_but_rejects_ncnn_for_cloud():
+    local = webapp._request(
+        webapp.PredictionsRequest,
+        {
+            "run_name": "Embedded inference",
+            "hosted_model_id": "amphilens-yolo26-m",
+            "runtime": "ncnn",
+            "device": "cpu",
+        },
+    )
+
+    assert local.runtime == "ncnn"
+    with pytest.raises(ValueError, match="local CPU"):
+        webapp._request(
+            webapp.PredictionsRequest,
+            {
+                "run_name": "Cloud inference",
+                "execution": "modal",
+                "runtime": "ncnn",
+                "max_cost_usd": 5,
+            },
+        )
+
+
+def test_prediction_request_rejects_unknown_runtime():
+    with pytest.raises(ValueError, match="runtime must be pytorch or ncnn"):
+        webapp._request(
+            webapp.PredictionsRequest,
+            {"run_name": "Bad runtime", "runtime": "openvino"},
+        )
+
+
+def test_ncnn_prediction_does_not_fall_back_to_pt_for_yolo_without_artifact(
+    client, tmp_path, monkeypatch
+):
+    import importlib.util
+    from dataclasses import replace
+
+    from PIL import Image
+
+    import amphilens.doctor as doctor
+    import amphilens.models.hosted_models as hosted
+    from amphilens.webapp import PredictionsRequest, run_prediction_job
+
+    image_root = tmp_path / "images"
+    image_root.mkdir()
+    Image.new("RGB", (24, 20), color="gray").save(image_root / "frame.png")
+    project_path = tmp_path / "project"
+    response = client.post(
+        "/api/projects/create",
+        json={
+            "name": "Embedded prediction",
+            "path": str(project_path),
+            "image_root": str(image_root),
+            "classes": ["Other_Amphibian", "Small_Mammal", "Western_Leopard_Toad"],
+        },
+    )
+    assert response.status_code == 200, response.text
+    store = webapp.open_project(project_path)
+    monkeypatch.setattr(doctor, "is_arm_linux", lambda: True)
+    model = hosted.get_hosted_model("amphilens-yolo26-m")
+    monkeypatch.setattr(hosted, "get_hosted_model", lambda _: replace(model, ncnn=None))
+    original_find_spec = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util,
+        "find_spec",
+        lambda name: object() if name == "ncnn" else original_find_spec(name),
+    )
+
+    def unexpected_pt_download(*args, **kwargs):
+        raise AssertionError("NCNN selection must not download or load the .pt artifact")
+
+    monkeypatch.setattr(hosted, "download_hosted_checkpoint", unexpected_pt_download)
+
+    with pytest.raises(ValueError, match="No NCNN package has been published"):
+        run_prediction_job(
+            store,
+            PredictionsRequest(
+                run_name="No fallback",
+                image_root=str(image_root),
+                hosted_model_id="amphilens-yolo26-m",
+                runtime="ncnn",
+                device="cpu",
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("model_id", "architecture"),
+    [
+        ("amphilens-rtdetr-l", "rtdetr"),
+        ("amphilens-faster-rcnn-resnet50", "faster_rcnn"),
+    ],
+)
+def test_ncnn_request_uses_pytorch_cpu_for_non_yolo_hosted_models(
+    client, tmp_path, monkeypatch, model_id, architecture
+):
+    import importlib.util
+    import json
+
+    from PIL import Image
+
+    import amphilens.doctor as doctor
+    import amphilens.models as models
+    import amphilens.models.backends as backends
+    import amphilens.models.hosted_models as hosted
+    from amphilens.webapp import PredictionsRequest, run_prediction_job
+
+    image_root = tmp_path / "images"
+    image_root.mkdir()
+    Image.new("RGB", (24, 20), color="gray").save(image_root / "frame.png")
+    project_path = tmp_path / "project"
+    response = client.post(
+        "/api/projects/create",
+        json={
+            "name": "CPU fallback",
+            "path": str(project_path),
+            "image_root": str(image_root),
+            "classes": ["Other_Amphibian", "Small_Mammal", "Western_Leopard_Toad"],
+        },
+    )
+    assert response.status_code == 200, response.text
+    store = webapp.open_project(project_path)
+    checkpoint = tmp_path / f"{model_id}.pt"
+    checkpoint.write_bytes(b"fixture")
+    observed = {}
+
+    class FakeDetector:
+        def __init__(self):
+            self.model_id = model_id
+
+        def predict(self, paths, config):
+            observed["device"] = str(config.device)
+            return iter(())
+
+    monkeypatch.setattr(doctor, "is_arm_linux", lambda: False)
+    original_find_spec = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util,
+        "find_spec",
+        lambda name: None if name == "ncnn" else original_find_spec(name),
+    )
+    monkeypatch.setattr(hosted, "download_hosted_checkpoint", lambda *args, **kwargs: checkpoint)
+    monkeypatch.setattr(backends, "resolve_device_name", lambda requested: "cpu")
+    monkeypatch.setattr(backends, "describe_device_name", lambda device: "CPU")
+
+    def unexpected_ncnn_download(*args, **kwargs):
+        raise AssertionError("Non-YOLO hosted models must use the PyTorch checkpoint")
+
+    def load_detector(path, **kwargs):
+        observed["checkpoint"] = path
+        observed["architecture"] = kwargs["architecture"]
+        return FakeDetector()
+
+    monkeypatch.setattr(hosted, "download_hosted_ncnn_artifact", unexpected_ncnn_download)
+    monkeypatch.setattr(models, "load_detector", load_detector)
+    output_dir = tmp_path / "output"
+
+    output = run_prediction_job(
+        store,
+        PredictionsRequest(
+            run_name="CPU fallback",
+            image_root=str(image_root),
+            output_dir=str(output_dir),
+            hosted_model_id=model_id,
+            runtime="ncnn",
+            device="cpu",
+        ),
+    )
+
+    metadata = json.loads((output_dir / "run.json").read_text())["config"]["metadata"]
+    assert observed["checkpoint"] == str(checkpoint)
+    assert observed["architecture"] == architecture
+    assert observed["device"] == "cpu"
+    assert output.result["device"] == "CPU"
+    assert metadata["runtime"] == "pytorch"
+    assert metadata["requested_runtime"] == "ncnn"
+    assert metadata["runtime_fallback_reason"] == (
+        "NCNN is only available for verified hosted YOLO models; using PyTorch on CPU."
+    )
+    assert metadata["runtime_artifact"]["format"] == "pytorch"
+
+
 def test_prediction_request_requires_a_trimmed_run_name_of_at_most_120_characters():
     with pytest.raises(ValueError, match="run_name is required"):
         webapp._request(webapp.PredictionsRequest, {})
@@ -281,6 +464,12 @@ def test_hosted_prediction_maps_labels_and_records_revision(client, tmp_path, mo
     assert observed["image_size"] == 1152
     assert ",toad," in predictions
     assert run_manifest["config"]["metadata"]["run_name"] == "Hosted model traceability"
+    assert run_manifest["config"]["metadata"]["runtime"] == "pytorch"
+    assert run_manifest["config"]["metadata"]["runtime_artifact"]["format"] == "pytorch"
+    assert (
+        run_manifest["config"]["metadata"]["runtime_artifact"]["sha256"]
+        == hosted.get_hosted_model("amphilens-yolo26-m").sha256
+    )
     assert run_manifest["config"]["metadata"]["class_mapping"]["Other_Amphibian"] is None
     assert run_manifest["config"]["metadata"]["effective_configuration"]["hosted_model"]["revision"]
     effective_preprocessing = run_manifest["config"]["metadata"]["effective_configuration"][

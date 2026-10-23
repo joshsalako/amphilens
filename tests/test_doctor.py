@@ -91,3 +91,27 @@ def test_doctor_reports_runtime_and_disk_information(tmp_path):
     assert report.modal_connectivity == "not checked"
     assert isinstance(report.modal_token_present, bool)
     assert isinstance(report.browser_app_installed, bool)
+
+
+def test_ncnn_runtime_is_available_on_arm_linux_without_torch_or_ultralytics():
+    report = DoctorReport(
+        python="3.11.0",
+        platform="Linux-6.1-aarch64",
+        cpu_count=4,
+        free_disk_gb=1.0,
+        torch_installed=False,
+        cuda_available=False,
+        mps_available=False,
+        ultralytics_installed=False,
+        browser_app_installed=True,
+        ncnn_installed=True,
+        arm_linux=True,
+    )
+
+    capabilities = report.to_dict()
+
+    assert capabilities["local_inference_available"] is True
+    assert capabilities["local_training_available"] is False
+    assert capabilities["local_devices"] == ["auto", "cpu"]
+    assert capabilities["arm_linux"] is True
+    assert capabilities["local_ncnn_available"] is True
