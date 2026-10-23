@@ -183,6 +183,7 @@ def test_ncnn_request_uses_pytorch_cpu_for_non_yolo_hosted_models(
 
     import amphilens.doctor as doctor
     import amphilens.models as models
+    import amphilens.models.backends as backends
     import amphilens.models.hosted_models as hosted
     from amphilens.webapp import PredictionsRequest, run_prediction_job
 
@@ -221,6 +222,8 @@ def test_ncnn_request_uses_pytorch_cpu_for_non_yolo_hosted_models(
         lambda name: None if name == "ncnn" else original_find_spec(name),
     )
     monkeypatch.setattr(hosted, "download_hosted_checkpoint", lambda *args, **kwargs: checkpoint)
+    monkeypatch.setattr(backends, "resolve_device_name", lambda requested: "cpu")
+    monkeypatch.setattr(backends, "describe_device_name", lambda device: "CPU")
 
     def unexpected_ncnn_download(*args, **kwargs):
         raise AssertionError("Non-YOLO hosted models must use the PyTorch checkpoint")
