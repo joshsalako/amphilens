@@ -19,10 +19,11 @@ from .cancellation import check_cancellation
 from .core import AmphiLensError
 
 OCR_INSTALL_MESSAGE = (
-    "Timestamp extraction is optional. For local extraction, install `uv sync --extra web "
-    "--extra inference "
-    "--extra ocr` or `pip install 'amphilens[ocr]'`. For cloud OCR, add `--extra cloud-ocr` "
-    "to your cloud setup command, then restart AmphiLens."
+    "Timestamp extraction is optional. For local extraction, add `--extra ocr` to your "
+    "existing `uv sync` command. For a new CPU setup, use `uv sync --locked --python 3.11 "
+    "--extra cli --extra web --extra inference --extra ocr`; replace `inference` with "
+    "`local-cuda` or `local-mps` for those devices. For cloud OCR, add `--extra cloud-ocr` "
+    "to your provider setup command, then restart AmphiLens."
 )
 _MAX_OCR_SIDE = 4096
 

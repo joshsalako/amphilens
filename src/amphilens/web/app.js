@@ -37,6 +37,15 @@
   const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   })[char]);
+  function localDeviceOptionsMarkup(devices) {
+    const labels = { auto: "Auto", cpu: "CPU", cuda: "CUDA GPU", mps: "Apple MPS GPU" };
+    const options = (Array.isArray(devices) ? devices : [])
+      .filter((device) => Object.prototype.hasOwnProperty.call(labels, device))
+      .map((device) => `<option value="${device}">${labels[device]}</option>`);
+    return options.length
+      ? options.join("")
+      : '<option value="" disabled selected>Install a local profile to enable</option>';
+  }
   const safeHref = (value) => {
     try {
       const parsed = new URL(String(value), window.location.href);
@@ -494,7 +503,11 @@
 
   function syncPredictionExecutionControls(form) {
     if (!form) return;
-    const provider = form.elements.execution?.value || "local";
+    const execution = form.elements.execution;
+    if (execution?.selectedOptions?.[0]?.disabled) {
+      execution.value = execution.querySelector("option:not(:disabled)")?.value || "";
+    }
+    const provider = execution?.value || "local";
     const cloud = provider !== "local";
     form.querySelector("[data-cloud-prediction-settings]")?.toggleAttribute("hidden", !cloud);
     form.querySelector("[data-local-prediction-settings]")?.toggleAttribute("hidden", cloud);
@@ -521,6 +534,7 @@
 
   function renderPredict() {
     if (projectRequired()) return;
+    const localInferenceAvailable = app.doctor?.local_inference_available === true;
     root.innerHTML = `${pageHead("Run detection", "Scan an image folder and create a predictions file with reports.")}
       <div class="form-layout form-layout-single"><section class="surface form-panel"><div class="panel-heading"><div><h2>Choose images and model</h2></div></div>
         <form class="form-stack" data-form="predict">
@@ -530,11 +544,11 @@
           <div id="prediction-hosted-details" class="hosted-model-panel" hidden></div>
           <div id="prediction-class-mapping" class="hosted-class-mapping" hidden></div>
           <details class="advanced-settings"><summary>Image preparation</summary><div class="advanced-body">${modelSettingsFields("prediction")}</div></details>
-          <div class="field"><label for="prediction-execution">Where to run</label><select id="prediction-execution" name="execution"><option value="local">This computer</option><option value="modal">Modal cloud GPU</option><option value="azure_ml">Azure Machine Learning</option><option value="vertex_ai">Google Vertex AI</option></select></div>
+          <div class="field"><label for="prediction-execution">Where to run</label><select id="prediction-execution" name="execution"><option value="local"${localInferenceAvailable ? "" : " disabled"}>This computer${localInferenceAvailable ? "" : " · install a local inference profile"}</option><option value="modal"${localInferenceAvailable ? "" : " selected"}>Modal cloud GPU</option><option value="azure_ml">Azure Machine Learning</option><option value="vertex_ai">Google Vertex AI</option></select></div>
           <details class="advanced-settings"><summary>Detection settings</summary><div class="advanced-body">
             <div class="field"><label for="confidence">Confidence threshold</label><div class="range-field"><input id="confidence" name="confidence" type="range" min="0.05" max="0.95" step="0.01" value="0.25"><output class="range-value" for="confidence">0.25</output></div><span class="field-help">Higher values keep only more confident detections.</span></div>
             <div class="field"><label for="prediction-output">Save results in <span class="optional">optional</span></label>${pathPickerControl("prediction-output", "output_dir", "directory", "Use the project runs folder", { label: "a results folder" })}</div>
-            <div class="field" data-local-prediction-settings><label for="prediction-device">Local device</label><select id="prediction-device" name="device"><option value="auto">Auto</option><option value="cpu">CPU</option>${app.doctor?.cuda_available ? `<option value="cuda">CUDA GPU</option>` : ""}${app.doctor?.mps_available ? `<option value="mps">Apple MPS GPU</option>` : ""}</select></div>
+            <div class="field" data-local-prediction-settings><label for="prediction-device">Local device</label><select id="prediction-device" name="device"${localInferenceAvailable ? "" : " disabled"}>${localDeviceOptionsMarkup(app.doctor?.local_devices)}</select></div>
             <div class="field"><label for="prediction-batch-size">Batch size</label><select id="prediction-batch-size" name="batch_size"><option value="auto" selected>Auto</option>${Array.from({ length: 32 }, (_, index) => `<option value="${index + 1}">${index + 1}</option>`).join("")}</select></div>
             <div class="cloud-prediction-settings" data-cloud-prediction-settings hidden><div class="field"><label for="prediction-gpu">Cloud GPU</label><select id="prediction-gpu" name="gpu">${cloudGpuOptions("modal", "L4")}</select><span class="field-help">The current full VM rate is checked for the selected provider and region before transfer.</span></div><div class="field"><label for="prediction-max-cost">Spending limit (USD)</label><input id="prediction-max-cost" name="max_cost_usd" type="number" min="0.01" step="0.01" value="5.00" required><span class="field-help">AmphiLens stops scheduling batches when its runtime estimate reaches this amount. This is not a billing cap.</span></div></div>
           </div></details>
@@ -733,6 +747,7 @@
 
   function renderTraining() {
     if (projectRequired()) return;
+    const localTrainingAvailable = app.doctor?.local_training_available === true;
     const datasets = app.project.datasets || [];
     const checkpoints = app.project.checkpoints || [];
     const snapshotOptions = datasets.map((item) => `<option value="${escapeHtml(item.path)}">${escapeHtml(item.name || basename(item.path))}${item.task_name ? " · CVAT task" : ""} · ${formatNumber(item.image_count)} images</option>`).join("");
@@ -749,8 +764,8 @@
         <div class="field" data-training-hosted hidden><label for="training-hosted-model">AmphiLens model</label><select id="training-hosted-model" name="hosted_model_id"><option value="">Choose a model</option>${(app.hostedModels || []).map((item) => `<option value="${escapeHtml(item.model_id)}">${escapeHtml(item.name || item.model_id)}</option>`).join("")}</select></div>
         <div class="hosted-model-panel" data-training-hosted-details hidden></div>
         <div class="field" data-training-checkpoint hidden><label for="training-checkpoint">Project checkpoint</label><select id="training-checkpoint" name="checkpoint"><option value="">Choose a saved checkpoint</option>${checkpoints.map((item) => `<option value="${escapeHtml(item.path)}">${escapeHtml(item.name || item.model_id || basename(item.path))}</option>`).join("")}</select></div>
-        <div class="field"><label for="training-execution">Where should it run?</label><select id="training-execution" name="execution"><option value="local">On this computer</option><option value="cloud">Cloud GPU</option></select></div>
-        <details class="advanced-settings"><summary>Training settings</summary><div class="advanced-body">${modelSettingsFields("training")}<div class="field-row"><div class="field"><label for="training-epochs">Maximum epochs per phase</label><input id="training-epochs" name="epochs" type="number" min="1" max="1000" value="100"></div><div class="field"><label for="training-patience">Patience</label><input id="training-patience" name="patience" type="number" min="0" max="1000" value="25"></div></div><div class="field-row"><div class="field"><label for="training-batch">Batch size</label><input id="training-batch" name="batch_size" type="number" min="1" max="256" value="16"></div><div class="field"><label for="training-output">Save run in <span class="optional">optional</span></label>${pathPickerControl("training-output", "output_dir", "directory", "Use the project runs folder", { label: "a run folder" })}</div></div><div class="field"><label for="training-device">Local device</label><select id="training-device" name="device"><option value="auto">Choose automatically</option><option value="cpu">CPU</option><option value="cuda">CUDA GPU</option>${app.doctor?.mps_available ? `<option value="mps">Apple MPS GPU</option>` : ""}</select></div></div></details>
+        <div class="field"><label for="training-execution">Where should it run?</label><select id="training-execution" name="execution"><option value="local"${localTrainingAvailable ? "" : " disabled"}>On this computer${localTrainingAvailable ? "" : " · install a local training profile"}</option><option value="cloud"${localTrainingAvailable ? "" : " selected"}>Cloud GPU</option></select></div>
+        <details class="advanced-settings"><summary>Training settings</summary><div class="advanced-body">${modelSettingsFields("training")}<div class="field-row"><div class="field"><label for="training-epochs">Maximum epochs per phase</label><input id="training-epochs" name="epochs" type="number" min="1" max="1000" value="100"></div><div class="field"><label for="training-patience">Patience</label><input id="training-patience" name="patience" type="number" min="0" max="1000" value="25"></div></div><div class="field-row"><div class="field"><label for="training-batch">Batch size</label><input id="training-batch" name="batch_size" type="number" min="1" max="256" value="16"></div><div class="field"><label for="training-output">Save run in <span class="optional">optional</span></label>${pathPickerControl("training-output", "output_dir", "directory", "Use the project runs folder", { label: "a run folder" })}</div></div><div class="field"><label for="training-device">Local device</label><select id="training-device" name="device"${localTrainingAvailable ? "" : " disabled"}>${localDeviceOptionsMarkup(app.doctor?.local_training_devices)}</select></div></div></details>
         <div class="cloud-settings hidden" data-cloud-settings>
           <div class="notice warning"><span class="notice-mark" aria-hidden="true">!</span><p>Cloud training uploads a prepared copy of the selected dataset and checkpoint. Review the estimate and approve both the upload and cost before submitting.</p></div>
           <div class="field" style="margin-top:15px"><label for="training-provider">Cloud provider</label><select id="training-provider" name="provider"><option value="modal">Modal</option><option value="azure_ml">Azure Machine Learning</option><option value="vertex_ai">Google Vertex AI</option></select><span class="field-help">Configure cloud identity and an existing workspace or project in Check your setup.</span></div>
@@ -774,7 +789,9 @@
 
   function syncTrainingExecutionControls(form) {
     if (!form) return;
-    const cloud = form.elements.execution?.value === "cloud";
+    const execution = form.elements.execution;
+    if (execution?.selectedOptions?.[0]?.disabled) execution.value = "cloud";
+    const cloud = execution?.value === "cloud";
     form.querySelector("[data-cloud-settings]")?.classList.toggle("hidden", !cloud);
     form.querySelector("#training-device")?.closest(".field")?.classList.toggle("hidden", cloud);
     const provider = form.elements.provider?.value || "modal";

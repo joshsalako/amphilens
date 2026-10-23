@@ -32,7 +32,26 @@ class DoctorReport:
     modal_connectivity: str = "not checked"
 
     def to_dict(self):
-        return asdict(self)
+        report = asdict(self)
+        local_inference_available = self.torch_installed and self.ultralytics_installed
+        local_training_available = local_inference_available and self.yaml_installed
+        report.update(
+            local_inference_available=local_inference_available,
+            local_training_available=local_training_available,
+            local_devices=self._local_devices(local_inference_available),
+            local_training_devices=self._local_devices(local_training_available),
+        )
+        return report
+
+    def _local_devices(self, available: bool) -> list[str]:
+        if not available:
+            return []
+        devices = ["auto", "cpu"]
+        if self.cuda_available:
+            devices.append("cuda")
+        if self.mps_available:
+            devices.append("mps")
+        return devices
 
 
 def run_doctor(path: str | Path = ".", *, check_cloud: bool = False) -> DoctorReport:

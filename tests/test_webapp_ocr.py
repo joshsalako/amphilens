@@ -100,7 +100,7 @@ def test_ocr_job_updates_prediction_csv_and_returns_fresh_download(
     assert missing_extra.status_code == 200
     dependency_job = _wait_for_job(client, missing_extra.json()["job_id"])
     assert dependency_job["state"] == "failed"
-    assert "uv sync --extra web --extra inference --extra ocr" in dependency_job["error"]
+    assert "--extra inference --extra ocr" in dependency_job["error"]
     assert predictions_csv.read_bytes() == updated_csv
 
 

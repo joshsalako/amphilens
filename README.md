@@ -35,7 +35,7 @@ Choose one setup:
 # Local CPU inference
 uv sync --locked --python 3.11 --extra cli --extra web --extra inference
 
-# No local GPU; use Modal for cloud jobs
+# Cloud-only; no local model runtime, use Modal for remote jobs
 uv sync --locked --python 3.11 --extra cli --extra web --extra cloud
 
 # Local NVIDIA GPU
@@ -45,7 +45,17 @@ uv sync --locked --python 3.11 --extra cli --extra web --extra local-cuda
 uv sync --locked --python 3.11 --extra cli --extra web --extra local-mps
 ```
 
-For Azure or Google Cloud, use `cloud-azure` or `cloud-gcp` instead of `cloud`.
+`inference` installs the CPU PyTorch build. For local training, add
+`--extra training` to your chosen local profile; for example, add it to the
+CPU command above. Use only one of `inference`, `local-cuda`, or `local-mps`.
+The CUDA and MPS options appear in the app only when the installed PyTorch
+build reports them available. Cloud-only installs keep local inference and
+training disabled while offering remote cloud execution.
+
+The MPS profile is for Apple Silicon Macs running macOS 14 or newer. On other
+platforms its local inference dependencies are omitted, and the app keeps local
+execution disabled. For Azure or Google Cloud, use `cloud-azure` or
+`cloud-gcp` instead of `cloud`.
 
 Linux file picker: install Zenity (`sudo apt install zenity` on Ubuntu/Debian, `sudo dnf install zenity` on Fedora, `sudo pacman -S zenity` on Arch, or `sudo zypper install zenity` on openSUSE).
 

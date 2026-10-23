@@ -212,8 +212,10 @@ collected and reports source images that can no longer be found.
 The output also includes reports and optional visual evidence. Detection boxes
 are mapped back to the original image dimensions.
 
-Timestamp OCR is optional. Install it with `uv sync --extra web --extra inference --extra ocr`
-(or `pip install 'amphilens[ocr]'`), then restart AmphiLens. After
+Timestamp OCR is optional. Add `--extra ocr` to your existing `uv sync`
+command, then restart AmphiLens. For a new CPU setup, use
+`uv sync --locked --python 3.11 --extra cli --extra web --extra inference --extra ocr`;
+for a CUDA or MPS setup, use that device profile in place of `inference`. After
 detection, press **Run OCR to extract date and time** to read each unique detected
 image locally from its bottom timestamp area. This also works for Modal runs;
 the images are read from the selected local image folder and are not uploaded a

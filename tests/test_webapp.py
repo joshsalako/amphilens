@@ -71,8 +71,12 @@ def test_bootstrap_and_project_create_open_close_persist(client, tmp_path):
     assert bootstrap["doctor"] == {"ok": True}
     assert bootstrap["default_project_root"].endswith("AmphiLens/projects")
     assert {model["model_id"] for model in bootstrap["models"]} == {
+        "yolo26-n",
+        "yolo26-s",
+        "yolo26-m",
         "yolo26-l",
         "rtdetr-l",
+        "rtdetr-x",
         "faster-rcnn-resnet50",
     }
     assert bootstrap["default_model_id"] == "yolo26-l"

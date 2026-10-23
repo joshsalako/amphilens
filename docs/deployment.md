@@ -22,8 +22,16 @@ uv run --locked amphilens app
 ```
 
 The committed `uv.lock` keeps the tested dependency resolution reproducible.
-The core package does not install CUDA automatically because PyTorch wheels and
-drivers depend on the host operating system.
+The `inference` extra selects the CPU PyTorch wheel. It does not install CUDA
+runtime packages or NVIDIA system drivers. Ultralytics also brings its small
+`nvidia-ml-py` monitoring helper; it does not provide or install a driver.
+
+For local CUDA inference or training, replace `inference` with `local-cuda`.
+For Apple Silicon on macOS 14 or newer, replace it with `local-mps`. Add
+`--extra training` to any one of those local profiles when training locally.
+Do not combine the CPU, CUDA, and MPS profiles. The app offers Auto and CPU for
+local inference, and lists CUDA or MPS only when the installed PyTorch build
+reports that device available.
 
 ## 3. Store projects outside the source checkout
 

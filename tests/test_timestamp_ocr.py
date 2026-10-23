@@ -100,7 +100,7 @@ def test_malformed_exif_timestamp_falls_back_to_ocr(tmp_path):
 
 def test_missing_optional_runtime_has_install_guidance(monkeypatch):
     monkeypatch.setitem(sys.modules, "rapidocr", None)
-    message = "uv sync --extra web --extra inference --extra ocr"
+    message = "--extra inference --extra ocr"
     with pytest.raises(OCRDependencyError, match=message):
         create_rapidocr_engine()
 

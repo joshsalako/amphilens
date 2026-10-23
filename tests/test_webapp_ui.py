@@ -50,7 +50,14 @@ def test_static_frontend_and_assets_are_served(client):
     assert 'app.cvatServerUrl = data.cvat_server_url || app.cvatServerUrl || "";' in script
     assert 'value="${escapeHtml(app.cvatServerUrl)}"' in script
     assert "__ignore__" in script
-    assert 'app.doctor?.mps_available ? `<option value="mps">Apple MPS GPU</option>` : ""' in script
+    assert 'localDeviceOptionsMarkup(app.doctor?.local_devices)' in script
+    assert 'localDeviceOptionsMarkup(app.doctor?.local_training_devices)' in script
+    assert 'app.doctor?.local_inference_available === true' in script
+    assert 'app.doctor?.local_training_available === true' in script
+    assert 'localInferenceAvailable ? "" : " disabled"' in script
+    assert 'localInferenceAvailable ? "" : " selected"' in script
+    assert 'localTrainingAvailable ? "" : " selected"' in script
+    assert 'execution.value = "cloud"' in script
     assert "model card revision recorded by AmphiLens" not in script
     assert "CVAT credentials are not stored in your project." not in script
     assert "Credentials must be configured locally before connecting." not in script

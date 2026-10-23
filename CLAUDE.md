@@ -27,7 +27,7 @@ ruff check src tests
 ```
 
 ```bash
-# Install all extras, then build a wheel + sdist
+# Install the CPU inference profile plus local training, then build a wheel + sdist
 uv sync --locked --python 3.11 --extra cli --extra web --extra inference --extra training
 python -m build
 ```

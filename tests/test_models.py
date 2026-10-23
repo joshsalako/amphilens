@@ -549,6 +549,16 @@ def test_torch_device_selection_fails_closed_for_unavailable_cuda():
         _select_torch_device(fake_torch, "cuda")
 
 
+def test_torch_device_auto_prefers_cuda_when_cuda_and_mps_are_available():
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(is_available=lambda: True),
+        backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: True)),
+        device=lambda value: value,
+    )
+
+    assert _select_torch_device(fake_torch, "auto") == "cuda"
+
+
 def test_torch_device_auto_uses_mps_when_cuda_is_unavailable():
     fake_torch = SimpleNamespace(
         cuda=SimpleNamespace(is_available=lambda: False),

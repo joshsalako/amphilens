@@ -22,27 +22,31 @@ web = [
   "starlette>=1.0",
   "uvicorn>=0.30",
 ]
-inference = [
+inference-base = [
   "numpy>=1.24",
   "opencv-python-headless>=4.10",
   "pillow>=10.0",
+  "huggingface-hub>=0.30",
+]
+inference = [
+  "amphilens[inference-base]",
   "torch>=2.2",
   "torchvision>=0.17",
   "ultralytics>=8.2",
-  "huggingface-hub>=0.30",
 ]
 local-cuda = [
-  "amphilens[inference]",
+  "amphilens[inference-base]",
   "torch>=2.2",
   "torchvision>=0.17",
+  "ultralytics>=8.2",
 ]
 local-mps = [
-  "amphilens[inference]",
+  "amphilens[inference-base]; sys_platform == 'darwin' and platform_machine == 'arm64'",
+  "torch>=2.2; sys_platform == 'darwin' and platform_machine == 'arm64'",
+  "torchvision>=0.17; sys_platform == 'darwin' and platform_machine == 'arm64'",
+  "ultralytics>=8.2; sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
-training = [
-  "amphilens[inference]",
-  "pyyaml>=6.0",
-]
+training = ["pyyaml>=6.0"]
 cvat = [
   "cvat-cli==2.76.0",
   "cvat-sdk==2.76.0",
@@ -73,7 +77,7 @@ cloud-ocr = [
   "pillow>=10.0",
 ]
 dev = [
-  "amphilens[cli,web,inference]",
+  "amphilens[cli,web,inference-base,training]",
   "python-dotenv>=1.0",
   "httpx2",
   "pytest>=8.0",
@@ -115,14 +119,33 @@ select = ["E", "F", "I", "UP"]
 [tool.uv]
 conflicts = [
   [
+    { extra = "inference" },
+    { extra = "local-cuda" },
+  ],
+  [
+    { extra = "inference" },
+    { extra = "local-mps" },
+  ],
+  [
     { extra = "local-cuda" },
     { extra = "local-mps" },
   ],
 ]
 
 [tool.uv.sources]
-torch = [{ index = "pytorch-cu130", extra = "local-cuda" }]
-torchvision = [{ index = "pytorch-cu130", extra = "local-cuda" }]
+torch = [
+  { index = "pytorch-cpu", extra = "inference" },
+  { index = "pytorch-cu130", extra = "local-cuda" },
+]
+torchvision = [
+  { index = "pytorch-cpu", extra = "inference" },
+  { index = "pytorch-cu130", extra = "local-cuda" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [[tool.uv.index]]
 name = "pytorch-cu130"
