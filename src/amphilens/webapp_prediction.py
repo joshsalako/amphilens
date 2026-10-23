@@ -200,7 +200,14 @@ def run_prediction_job(
         raise ValueError("Class mappings are only used with an AmphiLens pretrained model")
     hosted_model = get_hosted_model(request.hosted_model_id) if request.hosted_model_id else None
     checkpoint_manifest = discover_checkpoint_manifest(checkpoint) if checkpoint else None
-    if request.runtime == "ncnn":
+    runtime = request.runtime
+    runtime_fallback_reason = None
+    if runtime == "ncnn" and (hosted_model is None or hosted_model.architecture != "yolo"):
+        runtime = "pytorch"
+        runtime_fallback_reason = (
+            "NCNN is only available for verified hosted YOLO models; using PyTorch on CPU."
+        )
+    if runtime == "ncnn":
         import importlib.util
 
         from .doctor import is_arm_linux
@@ -223,7 +230,7 @@ def run_prediction_job(
     if request.execution != "local":
         actual_device = "cuda"
         requested_batch_size = request.batch_size or 8
-    elif request.runtime == "ncnn":
+    elif runtime == "ncnn":
         actual_device = "cpu"
         requested_batch_size = 1
     else:
@@ -253,7 +260,7 @@ def run_prediction_job(
             overrides=overrides,
         )
         if request.execution == "local":
-            if request.runtime == "ncnn":
+            if runtime == "ncnn":
                 from .models.ncnn_backend import load_ncnn_detector
 
                 artifact = download_hosted_ncnn_artifact(
@@ -320,7 +327,7 @@ def run_prediction_job(
         "effective_configuration": effective.to_dict(),
         "class_mapping": class_mapping,
         "execution": request.execution,
-        "runtime": request.runtime,
+        "runtime": runtime,
         "runtime_artifact": (
             {
                 "format": "ncnn",
@@ -329,7 +336,7 @@ def run_prediction_job(
                 "precision": artifact.manifest.precision,
                 "files": [item.to_dict() for item in artifact.manifest.files],
             }
-            if request.runtime == "ncnn"
+            if runtime == "ncnn"
             else (
                 {
                     "format": "pytorch",
@@ -347,6 +354,9 @@ def run_prediction_job(
         "gpu": request.gpu if request.execution != "local" else None,
         "requested_batch_size": request.batch_size or "auto",
     }
+    if runtime_fallback_reason is not None:
+        run_metadata["requested_runtime"] = request.runtime
+        run_metadata["runtime_fallback_reason"] = runtime_fallback_reason
     import hashlib
     import json
 

@@ -500,11 +500,15 @@
     const model = kind === "hosted" ? hostedModelById(selected) : null;
     const hasArtifact = model?.ncnn_available === true;
     const runtimeAvailable = app.doctor?.local_ncnn_available === true;
-    checkbox.disabled = !runtimeAvailable || !hasArtifact || device !== "cpu";
+    const canChooseNcnn = runtimeAvailable && hasArtifact && device === "cpu";
+    checkbox.disabled = !canChooseNcnn;
+    if (!canChooseNcnn) checkbox.checked = false;
     if (device !== "cpu") {
       help.textContent = "Choose CPU as the local device to use NCNN.";
     } else if (!model) {
       help.textContent = "NCNN is available only for AmphiLens hosted models with a verified NCNN package.";
+    } else if (model.architecture !== "yolo") {
+      help.textContent = "NCNN supports YOLO models only; this model will use PyTorch on CPU.";
     } else if (!hasArtifact) {
       help.textContent = model.ncnn_unavailable_reason || "No verified NCNN package is available for this model.";
     } else if (!runtimeAvailable) {

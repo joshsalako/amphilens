@@ -60,6 +60,7 @@ def test_static_frontend_and_assets_are_served(client):
     assert (
         "NCNN is available only for AmphiLens hosted models with a verified NCNN package." in script
     )
+    assert "NCNN supports YOLO models only; this model will use PyTorch on CPU." in script
     assert "app.doctor?.local_training_available === true" in script
     assert 'localInferenceAvailable ? "" : " disabled"' in script
     assert 'localInferenceAvailable ? "" : " selected"' in script
