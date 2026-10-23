@@ -24,7 +24,7 @@ def _model_summaries() -> list[dict[str, Any]]:
     return [
         {
             "model_id": item.model_id,
-            "name": str(item.metadata.get("family", item.model_id)),
+            "name": item.display_name,
             "architecture": item.architecture,
             "inference_image_size": item.inference_image_size,
             "preprocessing": item.metadata.get("preprocessing"),

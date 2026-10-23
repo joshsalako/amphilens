@@ -70,6 +70,13 @@ class ModelPreset:
             license=self.license,
         )
 
+    @property
+    def display_name(self) -> str:
+        family = str(self.metadata.get("family", self.model_id))
+        if family in {"YOLO26", "RT-DETR"}:
+            return f"{family} {self.size.replace('-', ' ').title()}"
+        return family
+
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data["supported_preprocessing"] = list(self.supported_preprocessing)
@@ -81,6 +88,30 @@ class ModelCatalog:
 
     def __init__(self, presets: list[ModelPreset] | None = None):
         values = presets or [
+            ModelPreset(
+                model_id="yolo26-n",
+                architecture="yolo",
+                size="nano",
+                checkpoint_reference="yolo26n.pt",
+                license="Ultralytics license; verify for deployment",
+                metadata={"family": "YOLO26", "paper_equivalent": False},
+            ),
+            ModelPreset(
+                model_id="yolo26-s",
+                architecture="yolo",
+                size="small",
+                checkpoint_reference="yolo26s.pt",
+                license="Ultralytics license; verify for deployment",
+                metadata={"family": "YOLO26", "paper_equivalent": False},
+            ),
+            ModelPreset(
+                model_id="yolo26-m",
+                architecture="yolo",
+                size="medium",
+                checkpoint_reference="yolo26m.pt",
+                license="Ultralytics license; verify for deployment",
+                metadata={"family": "YOLO26", "paper_equivalent": False},
+            ),
             ModelPreset(
                 model_id="yolo26-l",
                 architecture="yolo",
@@ -94,6 +125,14 @@ class ModelCatalog:
                 architecture="rtdetr",
                 size="large",
                 checkpoint_reference="rtdetr-l.pt",
+                license="Ultralytics license; verify for deployment",
+                metadata={"family": "RT-DETR", "paper_equivalent": False},
+            ),
+            ModelPreset(
+                model_id="rtdetr-x",
+                architecture="rtdetr",
+                size="extra-large",
+                checkpoint_reference="rtdetr-x.pt",
                 license="Ultralytics license; verify for deployment",
                 metadata={"family": "RT-DETR", "paper_equivalent": False},
             ),
@@ -121,4 +160,13 @@ class ModelCatalog:
             raise ValidationError(f"Unknown model preset: {model_id}") from exc
 
     def list(self) -> list[ModelPreset]:
-        return [self._presets[key] for key in sorted(self._presets)]
+        family_order = {"yolo": 0, "rtdetr": 1, "faster_rcnn": 2}
+        size_order = {"nano": 0, "small": 1, "medium": 2, "large": 3, "extra-large": 4}
+        return sorted(
+            self._presets.values(),
+            key=lambda preset: (
+                family_order.get(preset.architecture, len(family_order)),
+                size_order.get(preset.size, len(size_order)),
+                preset.model_id,
+            ),
+        )
