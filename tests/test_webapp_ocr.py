@@ -97,10 +97,8 @@ def test_ocr_job_updates_prediction_csv_and_returns_fresh_download(
     monkeypatch.setattr(timestamp_ocr, "create_rapidocr_engine", rapidocr_factory)
     monkeypatch.setitem(sys.modules, "rapidocr", None)
     missing_extra = client.post(f"/api/jobs/{prediction_job}/ocr-timestamps", json={})
-    assert missing_extra.status_code == 200
-    dependency_job = _wait_for_job(client, missing_extra.json()["job_id"])
-    assert dependency_job["state"] == "failed"
-    assert "--extra inference --extra ocr" in dependency_job["error"]
+    assert missing_extra.status_code == 400
+    assert "already been extracted" in missing_extra.json()["detail"]
     assert predictions_csv.read_bytes() == updated_csv
 
 

@@ -37,8 +37,11 @@ def test_static_frontend_and_assets_are_served(client):
     assert "Extract date and time" in script
     assert "/ocr-timestamps" in script
     assert 'data-ocr-timestamps="' in script
-    assert 'detectionCount <= 0 || timestampActive ? "disabled" : ""' in script
-    assert 'detectionCount <= 0 ? "disabled" : ""' in script
+    assert (
+        "detectionCount <= 0 || timestampActive || timestampsExtracted || imageRootMissing"
+        in script
+    )
+    assert 'detectionCount <= 0 || imageRootMissing ? "disabled" : ""' in script
     assert "There are no detected images to collect or process." in script
     assert 'name="training_source"' in script
     assert "data-required-when-cloud" in script

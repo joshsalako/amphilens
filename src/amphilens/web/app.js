@@ -52,7 +52,7 @@
       return ["http:", "https:"].includes(parsed.protocol) ? parsed.href : "#";
     } catch { return "#"; }
   };
-  const formatNumber = (value) => Number.isFinite(Number(value)) ? new Intl.NumberFormat().format(Number(value)) : "—";
+  const formatNumber = (value) => value != null && Number.isFinite(Number(value)) ? new Intl.NumberFormat().format(Number(value)) : "—";
   const basename = (value) => String(value || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || value || "Unnamed project";
   const currentProject = () => app.project;
 
@@ -293,6 +293,7 @@
     const project = app.project;
     const datasets = project.datasets || [];
     const checkpoints = project.checkpoints || [];
+    const predictionRuns = project.prediction_runs || [];
     const images = project.counts?.images ?? project.image_count;
     const imageRoot = project.image_roots?.[0] || "";
     root.innerHTML = `${pageHead("Good to have you back", `${project.name || basename(project.path)} is ready. Start with a scan, or continue improving the project with labeled examples.`, `<button class="button" type="button" data-open-project>Switch project</button>`)}
@@ -308,7 +309,8 @@
         </div></section>
         <aside class="surface panel"><div class="panel-heading"><div><h2>This project</h2><p>Saved locally on this computer</p></div></div><div class="current-project-line"><span class="project-glyph" aria-hidden="true">▤</span><div><strong>${escapeHtml(project.name || basename(project.path))}</strong><span class="project-path">${escapeHtml(project.path)}</span></div></div><div class="small-stat-list"><div class="small-stat"><span>Images indexed</span><strong>${formatNumber(images)}</strong></div><div class="small-stat"><span>Dataset snapshots</span><strong>${formatNumber(project.counts?.datasets ?? datasets.length)}</strong></div><div class="small-stat"><span>Model runs</span><strong>${formatNumber(project.counts?.runs)}</strong></div></div>${imageRoot ? `<p class="project-path">Image folder: ${escapeHtml(imageRoot)}</p>` : ""}<button class="button panel-action" type="button" data-open-project>Manage project</button></aside>
       </div>
-      <p class="section-title">Recent work</p><section class="surface panel"><div class="panel-heading"><div><h2>Datasets &amp; models</h2><p>Choose one when you are ready to train a project-specific model.</p></div></div>${datasets.length || checkpoints.length ? `<div class="small-stat-list">${datasets.slice(0, 3).map((item) => `<div class="small-stat"><span>${escapeHtml(item.name || basename(item.path))} · ${formatNumber(item.image_count)} images</span><strong>Dataset</strong></div>`).join("")}${checkpoints.slice(0, 3).map((item) => `<div class="small-stat"><span>${escapeHtml(item.name || item.model_id || basename(item.path))}</span><strong>${escapeHtml(item.architecture || "Model")}</strong></div>`).join("")}</div>` : `<p class="empty-inline">No labeled dataset or project checkpoint yet. You can still run predictions with a pretrained model.</p>`}</section>`;
+      <p class="section-title">Recent work</p><section class="surface panel"><div class="panel-heading"><div><h2>Prediction runs</h2><p>Open saved results to download files or work with detected images.</p></div></div>${predictionRuns.length ? `<div class="quick-list">${predictionRuns.map((run) => `<button class="quick-row" type="button" data-open-prediction="${escapeHtml(run.path)}"><span class="quick-text"><strong>${escapeHtml(run.name)}</strong><span>${escapeHtml(run.finished_at ? new Date(run.finished_at).toLocaleString() : "Date unavailable")} · ${formatNumber(run.image_count)} images · ${formatNumber(run.detection_count)} detections${run.failed_count ? ` · ${formatNumber(run.failed_count)} failed` : ""}${run.skipped_count ? ` · ${formatNumber(run.skipped_count)} skipped` : ""}${run.error ? ` · ${escapeHtml(run.error)}` : ""}</span></span><span class="quick-chevron" aria-hidden="true">›</span></button>`).join("")}</div>` : `<p class="empty-inline">No saved prediction runs yet.</p>`}<details class="advanced-settings"><summary>Find an older run saved elsewhere</summary><div class="advanced-body"><div class="field"><label for="saved-prediction-folder">Prediction run folder</label>${pathPickerControl("saved-prediction-folder", "saved_prediction_folder", "directory", "/path/to/prediction-run", { label: "a prediction run folder" })}</div><button class="button small" type="button" data-add-prediction>Add and open run</button></div></details></section>
+      <section class="surface panel"><div class="panel-heading"><div><h2>Datasets &amp; models</h2><p>Choose one when you are ready to train a project-specific model.</p></div></div>${datasets.length || checkpoints.length ? `<div class="small-stat-list">${datasets.slice(0, 3).map((item) => `<div class="small-stat"><span>${escapeHtml(item.name || basename(item.path))} · ${formatNumber(item.image_count)} images</span><strong>Dataset</strong></div>`).join("")}${checkpoints.slice(0, 3).map((item) => `<div class="small-stat"><span>${escapeHtml(item.name || item.model_id || basename(item.path))}</span><strong>${escapeHtml(item.architecture || "Model")}</strong></div>`).join("")}</div>` : `<p class="empty-inline">No labeled dataset or project checkpoint yet. You can still run predictions with a pretrained model.</p>`}</section>`;
   }
 
   function modelOptions() {
@@ -1495,6 +1497,8 @@
     const timestampJob = timestampJobId ? app.jobs.get(timestampJobId) : null;
     const timestampState = String(timestampJob?.state || "").toLowerCase();
     const timestampActive = timestampJob && !["completed", "failed", "canceled"].includes(timestampState);
+    const timestampsExtracted = Boolean(prediction?.timestamps_extracted || timestampState === "completed");
+    const imageRootMissing = prediction?.image_root_available === false;
     const timestampProgress = timestampJob?.progress || {};
     const timestampDownloads = Array.isArray(timestampJob?.result?.downloads) ? timestampJob.result.downloads : [];
     const timestampProgressText = timestampActive
@@ -1510,6 +1514,7 @@
     return `<section class="job-card" aria-label="Job status"><div class="job-head"><div class="job-title"><span class="status-dot" aria-hidden="true"></span>${failed ? "This run needs attention" : canceled ? "Run canceled" : completed ? "Run complete" : "Working on your request"}</div><span class="job-state ${completed ? "is-completed" : failed ? "is-failed" : ""}"><span class="status-dot" aria-hidden="true"></span>${escapeHtml(state)}</span></div>
       ${result.message ? `<p class="job-description">${escapeHtml(result.message)}</p>` : progressText ? `<p class="job-description">${escapeHtml(progressText)}</p>` : `<p class="job-description">${failed ? "The job could not be completed." : canceled ? "Cancellation completed." : completed ? "Your files are ready in the project." : "You can continue using AmphiLens while this runs."}</p>`}
       ${prediction?.run_name ? `<p class="job-description">Prediction run: <strong>${escapeHtml(prediction.run_name)}</strong></p>` : ""}
+      ${prediction?.missing_reports ? `<p class="job-detail">One or more saved report files are missing; available downloads are shown below.</p>` : ""}
       ${progressContext ? `<p class="job-description">${escapeHtml(progressContext)}</p>` : ""}
       ${!completed && !failed && !canceled ? `<div class="progress-track" role="progressbar" aria-label="Job progress" aria-valuemin="0" aria-valuemax="100"${hasProgress ? ` aria-valuenow="${Math.round(progress)}"` : ""}><div class="progress-fill${hasProgress ? "" : " indeterminate"}" ${hasProgress ? `style="width:${progress}%"` : ""}></div></div>` : ""}
       ${!completed && !failed && !canceled && app.jobMeta.get(job.job_id || "")?.cancelable ? `<button class="button small" type="button" data-cancel-job="${escapeHtml(job.job_id || "")}" ${job.cancel_requested ? "disabled" : ""}>${job.cancel_requested ? "Canceling…" : "Cancel run"}</button>` : ""}
@@ -1521,11 +1526,13 @@
           <section class="prediction-action-group prediction-tools" aria-label="Image actions">
             <h3 class="prediction-action-heading">Image actions</h3>
             <div class="prediction-tool-buttons">
-              <button class="button small" type="button" data-collect-images="${escapeHtml(job.job_id || "")}" ${detectionCount <= 0 ? "disabled" : ""}>Collect detected images</button>
-              <button class="button small" type="button" data-ocr-timestamps="${escapeHtml(job.job_id || "")}" ${detectionCount <= 0 || timestampActive ? "disabled" : ""}>${timestampActive ? "Reading timestamps…" : "Extract date and time"}</button>
+              <button class="button small" type="button" data-collect-images="${escapeHtml(job.job_id || "")}" ${detectionCount <= 0 || imageRootMissing ? "disabled" : ""}>Collect detected images</button>
+              <button class="button small" type="button" data-ocr-timestamps="${escapeHtml(job.job_id || "")}" ${detectionCount <= 0 || timestampActive || timestampsExtracted || imageRootMissing ? "disabled" : ""}>${timestampActive ? "Reading timestamps…" : timestampsExtracted ? "Date and time extracted" : "Extract date and time"}</button>
               ${timestampActive ? timestampJob?.cancel_requested ? `<button class="button small" type="button" disabled>Canceling OCR…</button>` : `<button class="button small" type="button" data-cancel-job="${escapeHtml(timestampJobId || "")}">Cancel OCR</button>` : ""}
             </div>
             ${detectionCount <= 0 ? `<p class="prediction-tool-status">There are no detected images to collect or process.</p>` : ""}
+            ${imageRootMissing ? `<p class="prediction-tool-status" role="alert">The original image folder is missing: ${escapeHtml(prediction.image_root || "not recorded")}. Restore it to use image actions.</p>` : ""}
+            ${timestampsExtracted && timestampState !== "completed" ? `<p class="prediction-tool-status">Date and time were extracted.${prediction.timestamp_unresolved_rows ? ` ${formatNumber(prediction.timestamp_unresolved_rows)} detection rows have unresolved timestamps.` : ""}</p>` : ""}
             ${collection ? `<p class="prediction-tool-status" role="status">Copied ${formatNumber(collection.copied_count)} image${Number(collection.copied_count) === 1 ? "" : "s"} to <code>${escapeHtml(collection.folder || "")}</code>. ${formatNumber(collection.already_present_count)} already collected; ${formatNumber(collection.missing_count)} source image${Number(collection.missing_count) === 1 ? " was" : "s were"} missing.</p>` : ""}
             ${timestampActive ? `<p class="prediction-tool-status" role="status">${escapeHtml(timestampProgressText)}</p><div class="progress-track" role="progressbar" aria-label="Timestamp OCR progress" aria-valuemin="0" aria-valuemax="100"${timestampProgress.total ? ` aria-valuenow="${Math.round((timestampProgress.completed || 0) * 100 / timestampProgress.total)}"` : ""}><div class="progress-fill${timestampProgress.total ? "" : " indeterminate"}"${timestampProgress.total ? ` style="width:${Math.round((timestampProgress.completed || 0) * 100 / timestampProgress.total)}%"` : ""}></div></div>` : ""}
             ${timestampJob?.error ? `<p class="job-detail" role="alert">${escapeHtml(timestampJob.error)}</p>` : ""}
@@ -1683,6 +1690,24 @@
     if (pathButton) {
       event.preventDefault();
       await chooseLocalPath(pathButton);
+      return;
+    }
+    const openPrediction = event.target.closest("[data-open-prediction], [data-add-prediction]");
+    if (openPrediction) {
+      const add = openPrediction.hasAttribute("data-add-prediction");
+      const path = add ? document.getElementById("saved-prediction-folder")?.value.trim() : openPrediction.dataset.openPrediction;
+      if (!path) { toast("Choose a prediction run folder.", true); return; }
+      openPrediction.disabled = true;
+      try {
+        const result = await api("/api/prediction-runs/open", { method: "POST", body: JSON.stringify({ path, add }) });
+        const job = result.job;
+        app.jobs.set(job.job_id, job);
+        app.jobMeta.set(job.job_id, { kind: "predict", title: "Wildlife prediction" });
+        app.activeJob = { id: job.job_id, kind: "predict", execution: job.result?.prediction?.execution };
+        await refreshProjectDetails();
+        setPage("predict");
+      } catch (error) { toast(error.message, true); }
+      finally { openPrediction.disabled = false; }
       return;
     }
     const collectButton = event.target.closest("[data-collect-images]");

@@ -101,6 +101,7 @@ def _project_summary(store: ProjectStore) -> dict[str, Any]:
     from .core import iter_images
     from .dataset import DatasetSnapshot
     from .training import load_checkpoint_manifest
+    from .webapp_saved_predictions import saved_predictions
 
     manifest = store.load_manifest()
     models = _model_summaries()
@@ -150,6 +151,7 @@ def _project_summary(store: ProjectStore) -> dict[str, Any]:
         "counts": {"images": image_count, "datasets": len(datasets), "runs": run_count},
         "datasets": datasets,
         "checkpoints": checkpoints,
+        "prediction_runs": saved_predictions(store),
         "models": models,
         "hosted_models": _hosted_model_summaries(),
     }
