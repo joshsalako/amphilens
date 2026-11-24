@@ -535,6 +535,16 @@ def run_prediction_job(
             }
         )
     report = write_report(summary.predictions_csv, Path(output_dir) / "report")
+    index_warning = ""
+    if request.output_dir and not summary.interruption_reason:
+        from .webapp_saved_predictions import remember_prediction
+
+        try:
+            remember_prediction(store, output_path)
+        except OSError:
+            index_warning = (
+                " The run could not be added to Recent work; locate its results folder to add it."
+            )
     markdown = Path(report["markdown"])
     json_report = Path(report["summary_json"])
     skipped_count = len(summary.skipped_images)
@@ -575,7 +585,7 @@ def run_prediction_job(
         )
     return JobOutput(
         result={
-            "message": message,
+            "message": message + index_warning,
             "completed_images": summary.completed_images,
             "image_count": summary.image_count,
             "skipped_image_count": skipped_count,

@@ -247,7 +247,14 @@ def _prediction_run_name_key(value: str) -> str:
 
 def _ensure_prediction_run_name_is_unique(store: ProjectStore, run_name: str) -> None:
     """Reject prediction names already used in this project's run history."""
+    from .webapp_saved_predictions import saved_predictions
+
     key = _prediction_run_name_key(_prediction_run_name(run_name))
+    if any(_prediction_run_name_key(item["name"]) == key for item in saved_predictions(store)):
+        raise ValueError(
+            f"Prediction run name '{run_name}' has already been used in this project. "
+            "Choose a unique name."
+        )
     runs_root = store.root / "runs"
     if not runs_root.is_dir():
         return

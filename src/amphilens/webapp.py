@@ -310,6 +310,10 @@ def create_app(
     app.state.project_restored = False
     app.state.restore_warning = None
     app.state.project_lock = threading.RLock()
+    app.state.timestamp_lock = threading.Lock()
+    app.state.timestamp_active = {}
+    app.state.prediction_lock = threading.Lock()
+    app.state.prediction_active = {}
 
     def restore_project() -> None:
         with app.state.project_lock:
@@ -348,6 +352,18 @@ def create_app(
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=safe_error(exc)) from exc
         return {"job_id": job_id, "state": "queued"}
+
+    def submit_prediction(store, body, operation):
+        key = (str(store.root), _prediction_run_name_key(body.run_name))
+        with app.state.prediction_lock:
+            previous = app.state.prediction_active.get(key)
+            job = app.state.jobs.snapshot(previous) if previous else None
+            if job and job["state"] not in {"completed", "failed", "canceled"}:
+                raise ValueError("A prediction with this run name is already running")
+            _ensure_prediction_run_name_is_unique(store, body.run_name)
+            result = submit(operation, with_progress=True)
+            app.state.prediction_active[key] = result["job_id"]
+            return result
 
     async def path_picker(request: Request) -> Response:
         if request.client is None:
@@ -516,24 +532,26 @@ def create_app(
                     )
                 transport = service.transport
                 return _json(
-                    submit(
+                    submit_prediction(
+                        store,
+                        body,
                         lambda report: run_prediction_job(
                             store,
                             body,
                             progress_callback=report,
                             cloud_transport=transport,
                         ),
-                        with_progress=True,
                     )
                 )
             return _json(
-                submit(
+                submit_prediction(
+                    store,
+                    body,
                     lambda report: run_prediction_job(
                         store,
                         body,
                         progress_callback=report,
                     ),
-                    with_progress=True,
                 )
             )
         except Exception as exc:
@@ -670,6 +688,28 @@ def create_app(
             return _json({"detail": "Workflow job was not found"}, 404)
         return _json(job)
 
+    async def saved_prediction_open(request: Request) -> Response:
+        try:
+            from .webapp_saved_predictions import (
+                remember_prediction,
+                restore_prediction,
+                saved_predictions,
+            )
+
+            store = active_store()
+            body = await _read_body(request)
+            folder = Path(_string(body, "path")).expanduser().resolve()
+            if body.get("add") is True:
+                output = restore_prediction(store, folder)
+                remember_prediction(store, folder)
+            else:
+                if str(folder) not in {item["path"] for item in saved_predictions(store)}:
+                    raise ValueError("Prediction run is not in this project")
+                output = restore_prediction(store, folder)
+            return _json({"job": app.state.jobs.register_result(output)})
+        except Exception as exc:
+            return _failure(exc)
+
     async def job_cancel(request: Request) -> Response:
         job_id = request.path_params["job_id"]
         if not app.state.jobs.cancel(job_id):
@@ -713,6 +753,21 @@ def create_app(
             run_folder_name = _prediction_run_name(run_name)
             store = ProjectStore(project_root)
             store.load_manifest()
+            from .webapp_saved_predictions import saved_predictions
+
+            matching = [
+                item
+                for item in saved_predictions(store)
+                if _prediction_run_name_key(item["name"]) == _prediction_run_name_key(run_name)
+            ]
+            if any(
+                Path(item["path"]) != Path(prediction.get("csv", "")).resolve().parent
+                for item in matching
+            ):
+                raise ValueError(
+                    "Multiple prediction runs have this name. Images cannot be collected safely "
+                    "into the same folder."
+                )
             destination = store.root / "runs" / run_folder_name / "images"
             if not destination.is_relative_to(store.root):
                 raise ValueError("Prediction run folder is outside the project")
@@ -804,7 +859,7 @@ def create_app(
             if execution != "local" and (not isinstance(gpu, str) or not gpu.strip()):
                 raise ValueError("Prediction GPU information is missing")
 
-            def run_ocr(progress_callback):
+            def run_ocr_inner(progress_callback):
                 if execution == "local":
                     from .timestamp_ocr import process_prediction_csv
 
@@ -872,7 +927,25 @@ def create_app(
                     ],
                 )
 
-            job_id = app.state.jobs.submit(run_ocr, with_progress=True)
+            with app.state.timestamp_lock:
+                previous = app.state.timestamp_active.get(csv_path)
+                previous_job = app.state.jobs.snapshot(previous) if previous else None
+                if previous_job and previous_job["state"] not in {
+                    "completed",
+                    "failed",
+                    "canceled",
+                }:
+                    raise ValueError("Timestamp extraction is already running for this prediction")
+                import csv
+
+                with csv_path.open(newline="", encoding="utf-8") as handle:
+                    columns = csv.DictReader(handle).fieldnames or []
+                if {"date", "time"}.issubset(columns):
+                    raise ValueError(
+                        "Date and time have already been extracted for this prediction"
+                    )
+                job_id = app.state.jobs.submit(run_ocr_inner, with_progress=True)
+                app.state.timestamp_active[csv_path] = job_id
             return _json({"job_id": job_id, "message": "Timestamp OCR started."})
         except Exception as exc:
             return _failure(exc)
@@ -1057,6 +1130,7 @@ def create_app(
     app.add_route("/api/active-learning/select", active_learning, methods=["POST"])
     app.add_route("/api/cvat/cycle", cvat_cycle, methods=["POST"])
     app.add_route("/api/jobs/{job_id:str}", job_status, methods=["GET"])
+    app.add_route("/api/prediction-runs/open", saved_prediction_open, methods=["POST"])
     app.add_route("/api/jobs/{job_id:str}/cancel", job_cancel, methods=["POST"])
     app.add_route("/api/jobs/{job_id:str}/collect-images", job_collect_images, methods=["POST"])
     app.add_route("/api/jobs/{job_id:str}/ocr-timestamps", job_ocr_timestamps, methods=["POST"])

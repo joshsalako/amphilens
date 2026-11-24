@@ -442,8 +442,10 @@ def test_hosted_prediction_maps_labels_and_records_revision(client, tmp_path, mo
     other_image_root = tmp_path / "other-images"
     other_image_root.mkdir()
     Image.new("RGB", (100, 80), color="gray").save(other_image_root / "sample.jpg")
+    other_store = webapp.ProjectStore(tmp_path / "other-project")
+    other_store.create(store.load_manifest())
     other_output = run_prediction_job(
-        store,
+        other_store,
         PredictionsRequest(
             run_name="Hosted model traceability",
             image_root=str(other_image_root),
